@@ -50,6 +50,7 @@ import { FlagSideBySide } from "./GatesSideBySide.tsx";
 import { LdPanel } from "./LdPanel.tsx";
 import { LdSourceSideBySide, type LdSourceResource } from "./LdSourceSideBySide.tsx";
 import { MappingView } from "./MappingView.tsx";
+import { GuideView } from "./GuideView.tsx";
 import { MigrateModal } from "./MigrateModal.tsx";
 import { MonitoringView } from "./MonitoringView.tsx";
 import { RunsView } from "./RunsView.tsx";
@@ -57,6 +58,7 @@ import { SnapshotsView } from "./SnapshotsView.tsx";
 import { WarningsView } from "./WarningsView.tsx";
 
 export type View =
+  | { kind: "guide" }
   | { kind: "resource"; resource: EntityKind }
   /** Flags or segments of an LD project attached as a source (PLAN §20). */
   | { kind: "ld-source"; resource: LdSourceResource }
@@ -132,10 +134,7 @@ export function WorkspaceScreen({
         `${s.label} as of ${snapshots?.[s.id] ? new Date(snapshots[s.id]!.takenAt).toLocaleString() : "…"}`,
     )
     .join("; ");
-  const [view, setView] = useState<View>({
-    kind: "resource",
-    resource: "gate",
-  });
+  const [view, setView] = useState<View>({ kind: "guide" });
   const [env, setEnv] = useState<string>("");
   const [sync, setSync] = useState<Record<string, SyncState>>({});
   const [hidden, setHidden] = useState<Set<string>>(new Set());
@@ -197,15 +196,6 @@ export function WorkspaceScreen({
     setViewing(({ [s.id]: _p, ...rest }) => rest);
   };
 
-  // A workspace with no sources yet (just created) opens on Connections: one place to connect
-  // StatSig and one to connect LaunchDarkly. Decided once, when the source list first loads.
-  const landed = useRef(false);
-  useEffect(() => {
-    if (landed.current || !sources) return;
-    landed.current = true;
-    if (sources.length === 0) setView({ kind: "connections" });
-  }, [sources]);
-
   // First open of a demo workspace: sync every live demo source that has no snapshot yet.
   useEffect(() => {
     if (!sources || !snapshots) return;
@@ -262,14 +252,13 @@ export function WorkspaceScreen({
   );
   const hasLdSource = visibleSnaps.some((s) => s.neutral);
   const m = useMigration(workspaceId, visibleSnaps);
-  const openDecisions = useMemo(
-    () =>
-      m
-        ? collectDecisions(visibleSnaps, m.profile, m.connected, m).filter(
-            (d) => !d.resolvedWith,
-          )
-        : [],
+  const allDecisions = useMemo(
+    () => (m ? collectDecisions(visibleSnaps, m.profile, m.connected, m) : []),
     [m, visibleSnaps],
+  );
+  const openDecisions = useMemo(
+    () => allDecisions.filter((d) => !d.resolvedWith),
+    [allDecisions],
   );
   const blockingCount = openDecisions.filter(
     (d) => d.decision.severity === "blocking",
@@ -564,6 +553,13 @@ export function WorkspaceScreen({
 
           <SectionTitle>Migration</SectionTitle>
           <NavItem
+            active={view.kind === "guide"}
+            onClick={() => setView({ kind: "guide" })}
+          >
+            <span>Guide</span>
+            <Badge tone="blue">start here</Badge>
+          </NavItem>
+          <NavItem
             active={view.kind === "decisions"}
             onClick={() => setView({ kind: "decisions" })}
           >
@@ -690,6 +686,31 @@ export function WorkspaceScreen({
                 )}
               </Callout>
             )}
+          {view.kind === "guide" && (
+            <GuideView
+              workspaceId={workspaceId}
+              workspace={workspace}
+              m={m}
+              input={{
+                sources: visible,
+                snapshots: visibleSnaps,
+                m,
+                env,
+                decisions: allDecisions,
+                monitoring: { attention: monitoring.attention, rows: monitoring.rows.length, loaded: monitoring.loaded },
+                interruptedRuns: interrupted.length,
+              }}
+              onEnvChange={setEnv}
+              onMigrate={(selection, ldEnvs) => setMigrate({ selection, ldEnvs })}
+              nav={{
+                ...explorerNav,
+                resource: (resource) => setView({ kind: "resource", resource }),
+                runs: () => setView({ kind: "runs" }),
+                monitoring: () => setView({ kind: "monitoring" }),
+                coverage: () => setView({ kind: "coverage" }),
+              }}
+            />
+          )}
           {view.kind === "resource" &&
             visible.length > 0 &&
             (view.resource === "gate" || view.resource === "config" ? (

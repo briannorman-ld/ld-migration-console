@@ -460,6 +460,11 @@ map(canonicalEntity, mappingProfile, resolutions, ldCapabilities, targetEnv)
 
 ## 9. UI
 
+**Guide (the workspace's landing page, added 2026-11-02)**
+- One environment at a time, in dependency order: **Connect → Choose an environment → Context kinds → Segments → Flags → Experiments and bandits → Cut over**. Context kinds first because every rule, rollout and target refers to them; segments before the flags that reference them; experiments and bandits after the flags they wrap.
+- Each step shows where it stands for the chosen environment (in sync / changed / not migrated / waiting for decisions, from the mapping results and LD provenance) and carries its own action: the environment mapping, the `unit_type_kind` decisions inline, and a **Migrate N …** button that opens the plan for everything in that step not yet in sync. The first unfinished step is expanded; all stay open to revisit. Cut over links to Monitoring and Runs and says when to switch SDKs and archive in StatSig.
+- Model in `apps/web/src/lib/guide.ts` (pure), view in `screens/GuideView.tsx`. The resource explorers remain for item-level work.
+
 **Top bar**
 - Workspace, LD instance and project, sources (Console API or spec, with last sync and refresh / "upload newer spec").
 - **Environment selector** (also drives the grid's per-environment status), environment mapping, capability badge, and the Decisions count.
