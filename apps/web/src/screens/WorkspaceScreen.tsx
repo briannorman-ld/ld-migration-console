@@ -141,6 +141,8 @@ export function WorkspaceScreen({
     .join("; ");
   const [view, setView] = useState<View>({ kind: "guide" });
   const [env, setEnv] = useState<string>("");
+  /** Set while the environment select is being changed with the pointer, so the change handler can blur it. */
+  const pointerPick = useRef(false);
   const [sync, setSync] = useState<Record<string, SyncState>>({});
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   const ld = useLdSession(workspaceId);
@@ -361,9 +363,17 @@ export function WorkspaceScreen({
               Environment
               <Select
                 value={env}
-                onChange={(e) => setEnv(e.target.value)}
+                onChange={(e) => {
+                  setEnv(e.target.value);
+                  // A <select> keeps focus after a mouse pick and Chrome then shows its focus ring until the
+                  // user clicks elsewhere; drop it. Keyboard changes (arrow keys) keep focus so the user can go on.
+                  if (pointerPick.current) e.currentTarget.blur();
+                }}
+                onPointerDown={() => (pointerPick.current = true)}
+                onKeyDown={() => (pointerPick.current = false)}
+                onBlur={() => (pointerPick.current = false)}
                 aria-label="Environment"
-                className="py-1"
+                className="h-8 py-0"
               >
                 {envs.map((e) => (
                   <option key={e} value={e}>

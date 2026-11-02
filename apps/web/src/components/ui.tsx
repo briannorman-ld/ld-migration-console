@@ -54,15 +54,33 @@ export function Dot({ tone = 'slate', className }: { tone?: Tone; className?: st
   return <span aria-hidden className={cx('inline-block h-2 w-2 shrink-0 rounded-full', fill, className)} />;
 }
 
+/**
+ * Form fields. Focus shows as the focus-colour border with a soft 2px halo, on `focus-visible`
+ * only, so a pointer pick on a <select> (which keeps focus) does not leave a glow behind in
+ * browsers that distinguish the two; keyboard focus is always shown.
+ */
 const FIELD =
-  'rounded-md border border-line bg-surface text-sm text-fg placeholder:text-fg-subtle shadow-card transition-[border-color,box-shadow] duration-150 hover:border-line-strong focus:border-focus focus:outline-none focus:ring-2 focus:ring-focus/25 disabled:cursor-not-allowed disabled:bg-surface-2 disabled:text-fg-subtle';
+  'rounded-md border border-line bg-surface text-sm text-fg placeholder:text-fg-subtle shadow-card transition-[border-color,box-shadow] duration-150 hover:border-line-strong focus:outline-none focus-visible:border-focus focus-visible:ring-2 focus-visible:ring-focus/20 disabled:cursor-not-allowed disabled:bg-surface-2 disabled:text-fg-subtle';
+
+/**
+ * Tailwind orders same-property utilities by value, not by position in the class string, so a
+ * caller's `py-1` would lose to a default `py-2`. The defaults therefore step aside whenever the
+ * caller sizes the field itself (any `p-`, `px-`, `py-` or `h-` class).
+ */
+function sizing(defaults: string, className: string | undefined): string {
+  const own = className ?? '';
+  const has = (re: RegExp) => re.test(own);
+  const vertical = has(/(^|\s)(p|py|h)-/) ? '' : defaults.split(' ').filter((c) => c.startsWith('py-')).join(' ');
+  const horizontal = has(/(^|\s)(p|px)-/) ? '' : defaults.split(' ').filter((c) => c.startsWith('px-')).join(' ');
+  return cx(vertical, horizontal);
+}
 
 export function Input(p: InputHTMLAttributes<HTMLInputElement>) {
-  return <input {...p} className={cx('w-full px-3 py-2', FIELD, p.className)} />;
+  return <input {...p} className={cx('w-full', sizing('px-3 py-2', p.className), FIELD, p.className)} />;
 }
 
 export function Select(p: SelectHTMLAttributes<HTMLSelectElement>) {
-  return <select {...p} className={cx('px-2.5 py-1.5', FIELD, p.className)} />;
+  return <select {...p} className={cx(sizing('px-2.5 py-1.5', p.className), FIELD, p.className)} />;
 }
 
 export function Label({ children, htmlFor }: { children: ReactNode; htmlFor?: string }) {
