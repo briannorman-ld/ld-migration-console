@@ -136,7 +136,7 @@ export function LdPanel({ workspaceId, workspace }: { workspaceId: string; works
               <div className="min-w-0 flex-1">
                 <div className="font-medium">Danger zone</div>
                 <p className="text-xs text-fg-muted">
-                  Reset <code>{ld.projectKey}</code> to day 0: delete every flag, segment and metric, archive experiments and custom context kinds, and remove the environments this console created.
+                  Reset <code>{ld.projectKey}</code> to day 0: delete every flag, segment and metric, archive experiments and custom context kinds, and remove the environments this console created. You see the full list of what will go before anything is touched.
                   Three typed confirmations stand between you and it. StatSig is never touched.
                 </p>
               </div>
