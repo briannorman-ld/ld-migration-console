@@ -2,9 +2,11 @@
  * The guided migration (the workspace's landing page). One environment at a time, in the order
  * the pieces depend on each other:
  *
- *   connect → environment → contexts → segments → flags → experiments → cut over
+ *   connect → environment → teams → people → contexts → segments → flags → experiments → cut over
  *
- * Context kinds come first because every rule, rollout and target refers to them; segments before
+ * Teams and people come before anything is written because a maintainer must be an LD member
+ * (and a team must exist to be one); they are separate steps so teams can be created without
+ * inviting anyone yet. Context kinds come next because every rule, rollout and target refers to them; segments before
  * flags because flags reference segments; experiments and bandits after the flags they wrap. The
  * model here is pure: it tallies what each step still needs from the mapping results and LD
  * state, and the view renders it. Nothing is written.
@@ -16,13 +18,14 @@ import type { SourceRecord } from '@sslm/store';
 import { ldConnecting, type LdSession } from './ld.ts';
 import { ldFlagState, mapAutotuneFor, mapConfigFor, mapGateFor, mapPromptFor, mapSegmentFor, type DecisionInstance, type MappingInputs } from './migration.ts';
 
-export type StepKey = 'connect' | 'environment' | 'people' | 'contexts' | 'segments' | 'flags' | 'experiments' | 'cutover';
-export const STEP_ORDER: StepKey[] = ['connect', 'environment', 'people', 'contexts', 'segments', 'flags', 'experiments', 'cutover'];
+export type StepKey = 'connect' | 'environment' | 'teams' | 'people' | 'contexts' | 'segments' | 'flags' | 'experiments' | 'cutover';
+export const STEP_ORDER: StepKey[] = ['connect', 'environment', 'teams', 'people', 'contexts', 'segments', 'flags', 'experiments', 'cutover'];
 
 export const STEP_TITLE: Record<StepKey, string> = {
   connect: 'Connect',
   environment: 'Choose an environment',
-  people: 'People and teams',
+  teams: 'Teams',
+  people: 'People',
   contexts: 'Context kinds',
   segments: 'Segments',
   flags: 'Flags and AI Configs',
@@ -303,7 +306,8 @@ export function computeGuide(input: GuideInput): GuideModel {
   const done: Record<StepKey, boolean> = {
     connect: snapshots.length > 0 && connected,
     environment: ldEnvs.length > 0,
-    people: connected && people.owners.every((o) => o.status !== 'missing') && people.teams.every((t) => t.status !== 'missing'),
+    teams: connected && people.teams.every((t) => t.status !== 'missing'),
+    people: connected && people.owners.every((o) => o.status !== 'missing'),
     contexts: ldEnvs.length > 0 && contexts.open.length === 0 && contexts.toCreate.length === 0,
     segments: ldEnvs.length > 0 && tallyDone(segments),
     flags: ldEnvs.length > 0 && tallyDone(gates) && tallyDone(configs) && (tallyDone(prompts) || !aiConfigsAvailable),

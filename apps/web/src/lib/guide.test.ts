@@ -27,12 +27,13 @@ describe('guide: the current step', () => {
     const none = Object.fromEntries(STEP_ORDER.map((k) => [k, false])) as Record<(typeof STEP_ORDER)[number], boolean>;
     expect(currentStep(none)).toBe('connect');
     expect(currentStep({ ...none, connect: true })).toBe('environment');
-    expect(currentStep({ ...none, connect: true, environment: true })).toBe('people');
-    expect(currentStep({ ...none, connect: true, environment: true, people: true })).toBe('contexts');
-    expect(currentStep({ ...none, connect: true, environment: true, people: true, contexts: true })).toBe('segments');
-    expect(currentStep({ ...none, connect: true, environment: true, people: true, contexts: true, segments: true })).toBe('flags');
-    expect(currentStep({ ...none, connect: true, environment: true, people: true, contexts: true, segments: true, flags: true })).toBe('experiments');
-    expect(currentStep({ ...none, connect: true, environment: true, people: true, contexts: true, segments: true, flags: true, experiments: true })).toBe('cutover');
+    expect(currentStep({ ...none, connect: true, environment: true })).toBe('teams');
+    expect(currentStep({ ...none, connect: true, environment: true, teams: true })).toBe('people');
+    expect(currentStep({ ...none, connect: true, environment: true, teams: true, people: true })).toBe('contexts');
+    expect(currentStep({ ...none, connect: true, environment: true, teams: true, people: true, contexts: true })).toBe('segments');
+    expect(currentStep({ ...none, connect: true, environment: true, teams: true, people: true, contexts: true, segments: true })).toBe('flags');
+    expect(currentStep({ ...none, connect: true, environment: true, teams: true, people: true, contexts: true, segments: true, flags: true })).toBe('experiments');
+    expect(currentStep({ ...none, connect: true, environment: true, teams: true, people: true, contexts: true, segments: true, flags: true, experiments: true })).toBe('cutover');
   });
 
   it('reports LaunchDarkly as connecting (not "not connected") while the saved token reconnects', () => {
@@ -121,10 +122,16 @@ describe('guide: people and teams (PLAN §8.3)', () => {
     expect(p.canInvite).toBe(false);
   });
 
-  it('the People step is done only when every owner and team has an answer', () => {
+  it('the Teams step is done when every team has an answer, the People step when every owner has one; each on its own', () => {
     const base: GuideInput = { sources: [], snapshots: [snapshot], m: m(), env: '', decisions: [], monitoring: { attention: 0, rows: 0, loaded: false }, interruptedRuns: 0 };
+    expect(computeGuide(base).done.teams).toBe(false);
     expect(computeGuide(base).done.people).toBe(false);
+    // Teams created (or skipped), nobody invited yet: the Teams step is done and People is current.
+    const teamsOnly = m({ profile: { version: 1, sources: {}, attributes: {}, policies: {}, teams: { Checkout: null, Search: null } } });
+    expect(computeGuide({ ...base, m: teamsOnly }).done.teams).toBe(true);
+    expect(computeGuide({ ...base, m: teamsOnly }).done.people).toBe(false);
     const decided = m({ profile: { version: 1, sources: {}, attributes: {}, policies: {}, maintainers: { 'gone@acme.example': 'unassigned', 'priya@acme.example': 'unassigned' }, teams: { Checkout: null, Search: null } } });
+    expect(computeGuide({ ...base, m: decided }).done.teams).toBe(true);
     expect(computeGuide({ ...base, m: decided }).done.people).toBe(true);
   });
 });
