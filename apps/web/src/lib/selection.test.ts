@@ -8,9 +8,9 @@ describe('migration selection', () => {
     expect(kindOfUid('src-web/gate/checkout')).toBe('gate');
     expect(kindOfUid('src-legacy/flag/new-nav')).toBe('flag');
     expect(kindOfUid('src-web/experiment/x')).toBeUndefined();
-    const uids = ['src-web/gate/a', 'src-web/gate/b', 'src-web/config/c', 'src-web/autotune/d', 'src-legacy/flag/e', 'src-web/segment/f', 'src-web/experiment/x'];
-    expect(toSelection(uids)).toEqual({ gates: ['src-web/gate/a', 'src-web/gate/b'], configs: ['src-web/config/c'], autotunes: ['src-web/autotune/d'], flags: ['src-legacy/flag/e'], segments: ['src-web/segment/f'] });
-    expect(describeUids(uids)).toBe('1 segment, 2 gates, 1 dynamic config, 1 flag and 1 autotune');
+    const uids = ['src-web/gate/a', 'src-web/gate/b', 'src-web/config/c', 'src-web/autotune/d', 'src-legacy/flag/e', 'src-web/segment/f', 'src-web/prompt/p', 'src-web/experiment/x'];
+    expect(toSelection(uids)).toEqual({ gates: ['src-web/gate/a', 'src-web/gate/b'], configs: ['src-web/config/c'], autotunes: ['src-web/autotune/d'], flags: ['src-legacy/flag/e'], segments: ['src-web/segment/f'], prompts: ['src-web/prompt/p'] });
+    expect(describeUids(uids)).toBe('1 segment, 2 gates, 1 dynamic config, 1 flag, 1 autotune and 1 AI Config');
     expect(describeUids(['src-web/gate/a'])).toBe('1 gate');
     expect(describeUids([])).toBe('nothing');
   });

@@ -1657,10 +1657,13 @@
     {
       "gate": "legacy_partner_allowlist",
       "flagKey": "legacy_partner_allowlist",
-      "fidelity": "full",
-      "notes": [],
+      "fidelity": "partial",
+      "notes": [
+        "partial: Owner jordan.former@acmeretail.example is not an LD member: no maintainer (kept in migration.owner). [flag settings]"
+      ],
       "decisions": [
         "choice client_side_availability (flag settings) → both",
+        "choice maintainer_unknown (flag settings) → unassigned",
         "blocking unsupported_condition (rule “Encoded partners” › condition 1) → no default"
       ],
       "dependencies": [],
@@ -2090,12 +2093,14 @@
     {
       "gate": "old_cart_drawer",
       "flagKey": "old_cart_drawer",
-      "fidelity": "full",
+      "fidelity": "partial",
       "notes": [
+        "partial: Owner jordan.former@acmeretail.example is not an LD member: no maintainer (kept in migration.owner). [flag settings]",
         "full: Disabled in StatSig: the flag is off in test and serves false."
       ],
       "decisions": [
-        "choice client_side_availability (flag settings) → both"
+        "choice client_side_availability (flag settings) → both",
+        "choice maintainer_unknown (flag settings) → unassigned"
       ],
       "dependencies": [],
       "env": {
@@ -2117,10 +2122,12 @@
       "skipped": "archived in StatSig",
       "fidelity": "skipped",
       "notes": [
+        "partial: Owner jordan.former@acmeretail.example is not an LD member: no maintainer (kept in migration.owner). [flag settings]",
         "skipped: Not migrated: archived in StatSig."
       ],
       "decisions": [
-        "choice client_side_availability (flag settings) → both"
+        "choice client_side_availability (flag settings) → both",
+        "choice maintainer_unknown (flag settings) → unassigned"
       ],
       "dependencies": []
     },
@@ -2200,12 +2207,14 @@
     {
       "gate": "stale_reviews_widget",
       "flagKey": "stale_reviews_widget",
-      "fidelity": "full",
+      "fidelity": "partial",
       "notes": [
+        "partial: Owner jordan.former@acmeretail.example is not an LD member: no maintainer (kept in migration.owner). [flag settings]",
         "full: StatSig marks this gate stale (STALE_PROBABLY_DEAD_CHECK). Consider hard-coding it instead of migrating."
       ],
       "decisions": [
         "choice client_side_availability (flag settings) → both",
+        "choice maintainer_unknown (flag settings) → unassigned",
         "choice case_insensitive_match (rule “Staff” › condition 1) → regex"
       ],
       "dependencies": [],
@@ -2762,12 +2771,14 @@
     {
       "config": "legacy_pricing_rules",
       "flagKey": "legacy_pricing_rules",
-      "fidelity": "full",
+      "fidelity": "partial",
       "notes": [
+        "partial: Owner jordan.former@acmeretail.example is not an LD member: no maintainer (kept in migration.owner). [flag settings]",
         "full: Disabled in StatSig: the flag is off in test and serves the default value."
       ],
       "decisions": [
         "choice client_side_availability (flag settings) → both",
+        "choice maintainer_unknown (flag settings) → unassigned",
         "choice case_insensitive_match (rule “Same as default” › condition 1) → regex"
       ],
       "dependencies": [],
@@ -3285,6 +3296,55 @@
         ],
         "metricKey": "quote_requested",
         "randomizationUnit": "company"
+      }
+    }
+  ],
+  "prompts": [
+    {
+      "prompt": "support_reply_assistant",
+      "key": "support_reply_assistant",
+      "fidelity": "manual",
+      "notes": [
+        "full: Tag “★ Core” renamed to fit LD's tag format.",
+        "manual: StatSig's Console API does not expose prompt versions (messages, model, parameters); this prompt is at version 4. The AI Config is created with its name, description, tags and maintainer: add the variations in LD and choose the default one. [variations]"
+      ],
+      "decisions": [],
+      "desired": {
+        "key": "support_reply_assistant",
+        "name": "support_reply_assistant",
+        "description": "Drafts first replies to support tickets from the order history.",
+        "tags": [
+          "migrated-from-statsig",
+          "migration-src-web",
+          "search",
+          "core"
+        ],
+        "mode": "completion",
+        "maintainerId": "mem-priya"
+      }
+    },
+    {
+      "prompt": "product_description_writer",
+      "key": "product_description_writer",
+      "fidelity": "manual",
+      "notes": [
+        "partial: Owner jordan.former@acmeretail.example is not an LD member: no maintainer (kept in migration.owner). [flag settings]",
+        "manual: StatSig's Console API does not expose prompt versions (messages, model, parameters); this prompt is at version 2. The AI Config is created with its name, description, tags and maintainer: add the variations in LD and choose the default one. [variations]",
+        "partial: In 1 StatSig holdout (checkout_holdout); LD holdouts are recreated separately (PLAN §11). [holdouts]"
+      ],
+      "decisions": [
+        "choice maintainer_unknown (flag settings) → unassigned"
+      ],
+      "desired": {
+        "key": "product_description_writer",
+        "name": "product_description_writer",
+        "description": "Generates product descriptions for new catalog items.",
+        "tags": [
+          "migrated-from-statsig",
+          "migration-src-web",
+          "growth"
+        ],
+        "mode": "completion"
       }
     }
   ]

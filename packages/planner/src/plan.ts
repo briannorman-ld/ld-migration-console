@@ -4,7 +4,7 @@
  * metrics, randomization units), collision checks against what's already in LD, and an ordered
  * list of idempotent steps. Pure: LD state is an input.
  */
-import { hasMigratedTag, hasSourceTag, migrationKindOf, readFlagProvenance, readSync, stableStringify, syncedEnvsOf, syncPropertyKey, type Autotune, type CanonicalSnapshot, type Config, type Gate, type MigrationSourceKind, type NeutralFlag } from '@sslm/canonical';
+import { hasMigratedTag, hasSourceTag, migrationKindOf, readFlagProvenance, readSync, stableStringify, syncedEnvsOf, syncPropertyKey, type Autotune, type CanonicalSnapshot, type Config, type Gate, type MigrationSourceKind, type NeutralFlag, type Prompt } from '@sslm/canonical';
 import {
   decisionPoint,
   lookupResolution,
@@ -13,10 +13,12 @@ import {
   mapGate,
   mapNeutralFlag,
   mapNeutralSegment,
+  mapPrompt,
   mapSegment,
   type AutotuneMapResult,
   type ConfigMapResult,
   type DecisionPoint,
+  type DesiredAiConfig,
   type DesiredBandit,
   type DesiredFlagEnv,
   type DesiredFlagShell,
@@ -26,6 +28,7 @@ import {
   type GateMapResult,
   type IdListCoverages,
   type IdLists,
+  type LdDirectory,
   type MapperCapabilities,
   type MappingProfile,
   type NeutralFlagMapResult,
@@ -80,6 +83,8 @@ export interface LdProjectState {
   experiments?: Readonly<Record<string, ReadonlyMap<string, LdExperimentState>>>;
   /** Context kinds enabled as experiment randomization units. Absent = unknown (`user` assumed). */
   randomizationUnits?: string[];
+  /** AI Configs in the project; absent when the plan has none or they weren't read. Ownership is the pair of tags, like segments. */
+  aiConfigs?: ReadonlyMap<string, LdSegmentState>;
 }
 
 export interface PlanRequest {
@@ -91,6 +96,8 @@ export interface PlanRequest {
   autotunes?: string[];
   /** Neutral flag uids (an LD-source project, PLAN §20). */
   flags?: string[];
+  /** Prompt uids → LD AI Configs (project-level; `ldEnvs` is not consulted). */
+  prompts?: string[];
   /** Segment uids to migrate on their own (neutral or StatSig); segments a flag needs are pulled in regardless. */
   segments?: string[];
   /** Context kinds to create on their own (the guide's "create the kinds first"); kinds an item needs are pulled in regardless. */
@@ -103,6 +110,8 @@ export interface PlanRequest {
   profile: MappingProfile;
   resolutions: ReadonlyMap<string, Resolution>;
   capabilities: MapperCapabilities;
+  /** LD members and teams for owner → maintainer matching (PLAN §8.3). */
+  directory?: LdDirectory;
   ld: LdProjectState;
   now: string;
 }
@@ -114,7 +123,7 @@ export interface PlanRequest {
 export interface Provenance {
   sourceKind: MigrationSourceKind;
   sourceAlias: string;
-  statsigType: 'gate' | 'config' | 'autotune' | 'flag';
+  statsigType: 'gate' | 'config' | 'autotune' | 'flag' | 'prompt';
   statsigId: string;
   statsigVersion?: number;
   statsigFingerprint: string;
@@ -128,6 +137,7 @@ export type PlanStep =
   | { id: string; deps: string[]; op: 'ensure_randomization_unit'; key: string }
   | { id: string; deps: string[]; op: 'upsert_metric'; key: string; exists: boolean; adopt: boolean; desired: DesiredMetric; provenance: Omit<Provenance, 'statsigType'> & { statsigType: 'metric' } }
   | { id: string; deps: string[]; op: 'create_bandit'; key: string; ldEnv: string; statsigEnv: string; flagKey: string; exists: boolean; adopt: boolean; desired: DesiredBandit; provenance: Provenance }
+  | { id: string; deps: string[]; op: 'upsert_ai_config'; key: string; exists: boolean; adopt: boolean; desired: DesiredAiConfig; provenance: Omit<Provenance, 'statsigType'> & { statsigType: 'prompt' } }
   | {
       id: string;
       deps: string[];
@@ -145,8 +155,8 @@ export type ItemStatus = 'ready' | 'blocked' | 'skipped' | 'error';
 
 export interface PlanItem {
   uid: string;
-  /** `flag`: a neutral (LD-source) flag, PLAN §20. */
-  kind: 'gate' | 'config' | 'segment' | 'autotune' | 'metric' | 'flag';
+  /** `flag`: a neutral (LD-source) flag, PLAN §20. `prompt`: a StatSig prompt → LD AI Config (project-level, `ldEnv` empty). */
+  kind: 'gate' | 'config' | 'segment' | 'autotune' | 'metric' | 'flag' | 'prompt';
   entityId: string;
   sourceId: string;
   ldKey: string;
@@ -231,6 +241,7 @@ export function planMigration(req: PlanRequest): Plan {
   const snapshotOf = new Map(req.snapshots.map((s) => [s.source.sourceId, s]));
   const gatesByUid = new Map(req.snapshots.flatMap((s) => s.gates.map((g) => [g.uid, g] as const)));
   const shellOwner = new Map<string, string>();
+  const dir = req.directory ? { directory: req.directory } : {};
 
   const addDecisions = (item: PlanItem, ds: DecisionPoint[], st: StaleDecision[]) => {
     for (const d of ds) {
@@ -240,8 +251,8 @@ export function planMigration(req: PlanRequest): Plan {
     for (const s of st) stale.set(s.decision.id, s);
   };
 
-  const collision = (item: PlanItem, subject: DecisionPoint['subject'], ldKey: string, what: 'flag' | 'segment' | 'metric' | 'bandit', where: string): 'adopt' | 'skip' | 'open' => {
-    const overwrites = what === 'flag' ? 'targeting in the migrated environments' : what === 'segment' ? 'rules and targets' : what === 'metric' ? 'event key, success criteria and tags' : 'draft iteration';
+  const collision = (item: PlanItem, subject: DecisionPoint['subject'], ldKey: string, what: 'flag' | 'segment' | 'metric' | 'bandit' | 'AI Config', where: string): 'adopt' | 'skip' | 'open' => {
+    const overwrites = what === 'flag' ? 'targeting in the migrated environments' : what === 'segment' ? 'rules and targets' : what === 'metric' ? 'event key, success criteria and tags' : what === 'AI Config' ? 'name, description, tags and maintainer (its variations are left alone)' : 'draft iteration';
     const dp = decisionPoint({
       type: 'key_collision',
       severity: 'blocking',
@@ -252,7 +263,7 @@ export function planMigration(req: PlanRequest): Plan {
         what === 'bandit'
           ? `An experiment with this key exists in ${where} and wasn't created by this app. Adopting it replaces its draft iteration with the bandit's; an iteration that already ran is left alone.`
           : `A ${what} with this key exists in LD and wasn't created by this app. Adopting it overwrites its ${overwrites} on every sync; the current state is saved first so the run can be undone.`,
-      sourceFragment: { key: ldKey, kind: what },
+      sourceFragment: { key: ldKey, kind: what === 'AI Config' ? 'ai_config' : what },
       options: [
         { key: 'adopt', label: 'Adopt it (link and overwrite on sync)', explanation: 'The existing LD resource becomes the migration target. A pre-image is kept for undo.', resultingFidelity: 'full' },
         { key: 'skip', label: 'Skip this item', explanation: 'Leave the LD resource alone and keep the item in StatSig.', resultingFidelity: 'skipped' },
@@ -297,7 +308,7 @@ export function planMigration(req: PlanRequest): Plan {
       else existing.dependency = false;
       return existing.status === 'ready' ? { ok: true, stepId: `segment:${ldEnv}:${existing.ldKey}` } : { ok: false, reason: `segment “${segmentId}” is ${existing.status}` };
     }
-    const r: SegmentMapResult = mapSegment({ canonical: { snapshot, idLists: req.idLists, ...(req.coverage ? { coverage: req.coverage } : {}) }, entity: seg, profile: req.profile, resolutions: req.resolutions, capabilities: req.capabilities, env: { statsig: statsigEnv, ld: ldEnv }, now: req.now });
+    const r: SegmentMapResult = mapSegment({ canonical: { snapshot, idLists: req.idLists, ...(req.coverage ? { coverage: req.coverage } : {}) }, entity: seg, profile: req.profile, resolutions: req.resolutions, capabilities: req.capabilities, env: { statsig: statsigEnv, ld: ldEnv }, now: req.now, ...dir });
     const ldSeg = req.ld.segments[ldEnv]?.get(r.segmentKey);
     const item: PlanItem = { uid: seg.uid, kind: 'segment', entityId: seg.id, sourceId: seg.source.sourceId, ldKey: r.segmentKey, ldEnv, statsigEnv, status: 'ready', dependency: requiredBy !== null, requiredBy: requiredBy ? [requiredBy] : [], fidelity: r.fidelity, decisions: [], exists: !!ldSeg };
     items.set(itemKey, item);
@@ -359,7 +370,7 @@ export function planMigration(req: PlanRequest): Plan {
     if (!statsigEnv) return finishItem(item, 'error', `no StatSig environment of ${snapshot.source.alias} is mapped to LD “${ldEnv}”`);
     item.statsigEnv = statsigEnv;
 
-    const r: GateMapResult = mapGate({ canonical: { snapshot, idLists: req.idLists, ...(req.coverage ? { coverage: req.coverage } : {}) }, entity: gate, profile: req.profile, resolutions: req.resolutions, capabilities: req.capabilities, env: { statsig: statsigEnv, ld: ldEnv }, now: req.now });
+    const r: GateMapResult = mapGate({ canonical: { snapshot, idLists: req.idLists, ...(req.coverage ? { coverage: req.coverage } : {}) }, entity: gate, profile: req.profile, resolutions: req.resolutions, capabilities: req.capabilities, env: { statsig: statsigEnv, ld: ldEnv }, now: req.now, ...dir });
     item.ldKey = r.flagKey;
     item.fidelity = r.fidelity;
     addDecisions(item, r.unresolved, r.stale);
@@ -469,7 +480,7 @@ export function planMigration(req: PlanRequest): Plan {
     if (!statsigEnv) return void finishItem(item, 'error', `no StatSig environment of ${snapshot.source.alias} is mapped to LD “${ldEnv}”`);
     item.statsigEnv = statsigEnv;
 
-    const r: ConfigMapResult = mapConfig({ canonical: { snapshot, idLists: req.idLists, ...(req.coverage ? { coverage: req.coverage } : {}) }, entity: config, profile: req.profile, resolutions: req.resolutions, capabilities: req.capabilities, env: { statsig: statsigEnv, ld: ldEnv }, now: req.now });
+    const r: ConfigMapResult = mapConfig({ canonical: { snapshot, idLists: req.idLists, ...(req.coverage ? { coverage: req.coverage } : {}) }, entity: config, profile: req.profile, resolutions: req.resolutions, capabilities: req.capabilities, env: { statsig: statsigEnv, ld: ldEnv }, now: req.now, ...dir });
     item.ldKey = r.flagKey;
     item.fidelity = r.fidelity;
     addDecisions(item, r.unresolved, r.stale);
@@ -598,7 +609,7 @@ export function planMigration(req: PlanRequest): Plan {
       return;
     }
     item.statsigEnv = statsigEnv;
-    const r = mapAutotune({ canonical: { snapshot, idLists: req.idLists, ...(req.coverage ? { coverage: req.coverage } : {}) }, entity: a, profile: req.profile, resolutions: req.resolutions, capabilities: req.capabilities, env: { statsig: statsigEnv, ld: ldEnv }, now: req.now });
+    const r = mapAutotune({ canonical: { snapshot, idLists: req.idLists, ...(req.coverage ? { coverage: req.coverage } : {}) }, entity: a, profile: req.profile, resolutions: req.resolutions, capabilities: req.capabilities, env: { statsig: statsigEnv, ld: ldEnv }, now: req.now, ...dir });
     item.ldKey = r.flagKey;
     item.fidelity = r.fidelity;
     addDecisions(item, r.unresolved, r.stale);
@@ -697,7 +708,7 @@ export function planMigration(req: PlanRequest): Plan {
       else existing.dependency = false;
       return existing.status === 'ready' ? { ok: true, stepId: `segment:${ldEnv}:${existing.ldKey}` } : { ok: false, reason: `segment “${key}” is ${existing.status}` };
     }
-    const r: NeutralSegmentMapResult = mapNeutralSegment({ canonical: { snapshot }, entity: seg, profile: req.profile, resolutions: req.resolutions, capabilities: req.capabilities, env: { statsig: sourceEnv, ld: ldEnv }, now: req.now });
+    const r: NeutralSegmentMapResult = mapNeutralSegment({ canonical: { snapshot }, entity: seg, profile: req.profile, resolutions: req.resolutions, capabilities: req.capabilities, env: { statsig: sourceEnv, ld: ldEnv }, now: req.now, ...dir });
     const ldSeg = req.ld.segments[ldEnv]?.get(r.segmentKey);
     const item: PlanItem = { uid: seg.uid, kind: 'segment', entityId: seg.key, sourceId: snapshot.source.sourceId, ldKey: r.segmentKey, ldEnv, statsigEnv: sourceEnv, status: 'ready', dependency: requiredBy !== null, requiredBy: requiredBy ? [requiredBy] : [], fidelity: r.fidelity, decisions: [], exists: !!ldSeg };
     items.set(itemKey, item);
@@ -754,7 +765,7 @@ export function planMigration(req: PlanRequest): Plan {
     if (!sourceEnv) return finishItem(item, 'error', `no environment of ${snapshot.source.alias} is mapped to LD “${ldEnv}”`);
     item.statsigEnv = sourceEnv;
 
-    const r: NeutralFlagMapResult = mapNeutralFlag({ canonical: { snapshot }, entity: flag, profile: req.profile, resolutions: req.resolutions, capabilities: req.capabilities, env: { statsig: sourceEnv, ld: ldEnv }, now: req.now });
+    const r: NeutralFlagMapResult = mapNeutralFlag({ canonical: { snapshot }, entity: flag, profile: req.profile, resolutions: req.resolutions, capabilities: req.capabilities, env: { statsig: sourceEnv, ld: ldEnv }, now: req.now, ...dir });
     item.ldKey = r.flagKey;
     item.fidelity = r.fidelity;
     addDecisions(item, r.unresolved, r.stale);
@@ -823,8 +834,52 @@ export function planMigration(req: PlanRequest): Plan {
     return { ok: true, stepId };
   };
 
+  // Prompts are project-level, like flag shells: one AI Config per key, no environment part (PLAN §6).
+  const planPrompt = (prompt: Prompt): void => {
+    const itemKey = `${prompt.uid}|`;
+    if (items.has(itemKey)) return;
+    const snapshot = snapshotOf.get(prompt.source.sourceId)!;
+    const item: PlanItem = { uid: prompt.uid, kind: 'prompt', entityId: prompt.id, sourceId: prompt.source.sourceId, ldKey: prompt.id, ldEnv: '', status: 'ready', dependency: false, requiredBy: [], decisions: [], exists: false };
+    items.set(itemKey, item);
+    const r = mapPrompt({ canonical: { snapshot }, entity: prompt, profile: req.profile, resolutions: req.resolutions, capabilities: req.capabilities, env: { statsig: '', ld: '' }, now: req.now, ...dir });
+    item.ldKey = r.key;
+    item.fidelity = r.fidelity;
+    addDecisions(item, r.unresolved, r.stale);
+    if (r.skipped) return void finishItem(item, 'skipped', r.skipped);
+    const existing = req.ld.aiConfigs?.get(r.key);
+    item.exists = !!existing;
+    let adopt = false;
+    if (existing && !ownsSegment(existing, snapshot.source.alias)) {
+      const c = collision(item, { sourceId: prompt.source.sourceId, kind: 'prompt', uid: prompt.uid, id: prompt.id }, r.key, 'AI Config', 'AI Config key');
+      if (c === 'skip') return void finishItem(item, 'skipped', `LD AI Config “${r.key}” exists and was not adopted`);
+      if (c === 'open') return void finishItem(item, 'blocked', `LD AI Config “${r.key}” already exists`);
+      adopt = true;
+    }
+    if (r.unresolved.length) return void finishItem(item, 'blocked', `${r.unresolved.length} open decision${r.unresolved.length === 1 ? '' : 's'}`);
+    const stepId = `ai_config:${r.key}`;
+    steps.set(stepId, {
+      id: stepId,
+      deps: [],
+      op: 'upsert_ai_config',
+      key: r.key,
+      exists: !!existing,
+      adopt,
+      desired: r.desired,
+      provenance: { sourceKind: 'statsig', sourceAlias: snapshot.source.alias, statsigType: 'prompt', statsigId: prompt.id, ...(prompt.version !== undefined ? { statsigVersion: prompt.version } : {}), statsigFingerprint: r.statsigFingerprint, decisionSetHash: r.decisionSetHash },
+    });
+  };
+
   const configsByUid = new Map(req.snapshots.flatMap((s) => s.configs.map((c) => [c.uid, c] as const)));
   const autotunesByUid = new Map(req.snapshots.flatMap((s) => s.autotunes.map((a) => [a.uid, a] as const)));
+  const promptsByUid = new Map(req.snapshots.flatMap((s) => (s.prompts ?? []).map((p) => [p.uid, p] as const)));
+  for (const uid of req.prompts ?? []) {
+    const p = promptsByUid.get(uid);
+    if (!p) {
+      errors.push(`Prompt ${uid} is not in the current snapshots.`);
+      continue;
+    }
+    planPrompt(p);
+  }
   /** "gate new_checkout_flow" for an error about the other item owning a key: uids are `<sourceId>/<kind>/<id>`. */
   const describeOwner = (uid: string): string => {
     const [, kind, ...rest] = uid.split('/');
@@ -901,7 +956,7 @@ export function planMigration(req: PlanRequest): Plan {
   while (changed) {
     changed = false;
     for (const [id, s] of steps) {
-      if (s.op === 'update_flag_env' || s.op === 'create_bandit' || requestedSegmentSteps.has(id) || requestedKindSteps.has(id) || [...steps.values()].some((x) => x.deps.includes(id))) continue;
+      if (s.op === 'update_flag_env' || s.op === 'create_bandit' || s.op === 'upsert_ai_config' || requestedSegmentSteps.has(id) || requestedKindSteps.has(id) || [...steps.values()].some((x) => x.deps.includes(id))) continue;
       steps.delete(id);
       changed = true;
     }
@@ -961,7 +1016,7 @@ function rollUpFlags(items: PlanItem[], steps: PlanStep[], envOrder: string[]): 
 }
 
 /** Writes per step, including the reads that capture pre-images. */
-const REQUESTS: Record<PlanStep['op'], number> = { ensure_context_kind: 1, upsert_segment: 3, upsert_flag_shell: 2, update_flag_env: 2, ensure_randomization_unit: 2, upsert_metric: 2, create_bandit: 3 };
+const REQUESTS: Record<PlanStep['op'], number> = { ensure_context_kind: 1, upsert_segment: 3, upsert_flag_shell: 2, update_flag_env: 2, ensure_randomization_unit: 2, upsert_metric: 2, create_bandit: 3, upsert_ai_config: 2 };
 
 /** A big segment adds the CSV import and its status polls; scheduled changes add a list, a delete each and a create each. */
 export function requestsFor(s: PlanStep): number {
@@ -973,7 +1028,7 @@ export function requestsFor(s: PlanStep): number {
 
 /**
  * Kahn's algorithm, stable by step id. Project-level steps come first (context kinds,
- * randomization units, metrics, every flag shell): a flag is created once and exists
+ * randomization units, metrics, every flag shell, AI Configs): a flag is created once and exists
  * in every environment. Then each environment in `envOrder` with its segments, targeting and
  * bandits, so a run reads "create the flags, then configure development, then staging". Steps in
  * a cycle are reported and left out.
@@ -981,7 +1036,7 @@ export function requestsFor(s: PlanStep): number {
 export function topoSort(steps: PlanStep[], errors: string[], envOrder: string[] = []): PlanStep[] {
   const byId = new Map(steps.map((s) => [s.id, s]));
   const indegree = new Map(steps.map((s) => [s.id, s.deps.filter((d) => byId.has(d)).length]));
-  const PROJECT = ['context_kind', 'randomization_unit', 'metric', 'shell'];
+  const PROJECT = ['context_kind', 'randomization_unit', 'metric', 'shell', 'ai_config'];
   const PER_ENV = ['segment', 'env', 'bandit'];
   const order = (id: string) => {
     const [op, env] = id.split(':') as [string, string?];

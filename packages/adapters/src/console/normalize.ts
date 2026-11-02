@@ -50,7 +50,7 @@ export function normalizeConsoleSnapshot(raw: RawConsoleSnapshot, opts: Normaliz
   }
   for (const s of raw.skipped) warn({ code: 'fetch_skipped', path: s.endpoint, message: s.reason });
 
-  snap.environments = (raw.environments?.environments ?? []).map((e) => ({ name: e.name, id: e.id ?? undefined, isProduction: e.isProduction ?? undefined, inferred: false }));
+  snap.environments = (raw.environments?.environments ?? []).map((e) => ({ name: e.name, id: e.id ?? undefined, isProduction: e.isProduction ?? undefined, requiresReview: e.requiresReview ?? undefined, inferred: false }));
   snap.unitTypes = raw.unitIdTypes.map((u) => ({ name: u.name, description: u.description ?? undefined }));
   snap.tags = raw.tags.map((t) => ({ name: t.name, description: t.description ?? undefined }));
   snap.targetApps = raw.targetApps.map((t) => ({ id: t.id ?? t.name, name: t.name }));
@@ -248,8 +248,53 @@ export function normalizeConsoleSnapshot(raw: RawConsoleSnapshot, opts: Normaliz
     });
   }
 
+  // --- Prompts / AI Configs: shell only (versions have no read endpoint, PLAN §6) ---------------
+  snap.prompts = raw.prompts.map((p) => ({
+    kind: 'prompt' as const,
+    ...base('prompt', p.id),
+    name: p.name ?? p.id,
+    ...meta({ ...p, owner: p.creatorEmail || p.creatorName ? { ownerID: p.creatorID, ownerType: 'USER', ownerName: p.creatorName, ownerEmail: p.creatorEmail } : null }),
+    completeness: { missing: [] },
+    archived: false,
+    idType: p.idType ?? 'userID',
+    holdoutIds: p.holdoutIDs ?? [],
+  }));
+
+  // --- Teams, alerts and project-wide settings --------------------------------------------------
+  snap.teams = raw.teams.map((t) => ({
+    id: t.id,
+    name: t.name,
+    description: t.description ?? undefined,
+    ...(t.members ? { memberEmails: unique([...t.members, ...(t.admins ?? [])].map((m) => m.email.toLowerCase())) } : {}),
+  }));
+  snap.alerts = raw.alerts.map((a) => ({
+    id: a.id,
+    name: a.name,
+    alertType: a.alertType ?? undefined,
+    message: a.message ?? undefined,
+    metrics: alertMetricNames(a.metrics),
+    condition: a.condition ?? undefined,
+    threshold: a.alertThreshold ?? undefined,
+    windowMs: a.windowMs ?? undefined,
+    team: a.team ?? undefined,
+    owner: owner(a.owner),
+    tags: a.tags ?? [],
+    subscribers: a.subscribers?.length ?? 0,
+  }));
+  if (raw.reviewSettings) snap.reviews = { configReviewRequired: raw.reviewSettings.is_config_review_required ?? undefined, metricReviewRequired: raw.reviewSettings.is_metric_review_required ?? undefined };
+  if (raw.projectSettings) snap.settings = { defaultUnitType: raw.projectSettings.default_unit_type ?? undefined, visibility: raw.projectSettings.visibility ?? undefined };
+
   snap.sourceTime = Math.max(0, ...[...snap.gates, ...snap.configs, ...snap.segments, ...snap.experiments].map((e) => e.lastModifiedTime ?? 0));
   return snap;
+}
+
+const unique = <T,>(xs: T[]): T[] => [...new Set(xs)];
+
+/** `AlertSchemaDto.metrics` is an object with no declared properties; take its keys, or `name`s if it turns out to be a list. */
+function alertMetricNames(metrics: unknown): string[] {
+  if (Array.isArray(metrics)) return metrics.map((m) => (typeof m === 'string' ? m : typeof m === 'object' && m && typeof (m as { name?: unknown }).name === 'string' ? (m as { name: string }).name : JSON.stringify(m)));
+  if (metrics && typeof metrics === 'object') return Object.keys(metrics);
+  return [];
 }
 
 /** Console API rule → canonical rule. */

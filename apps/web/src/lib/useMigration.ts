@@ -4,7 +4,7 @@ import type { CanonicalSnapshot } from '@sslm/canonical';
 import { type DecisionPoint, type DecisionType, type MappingProfile, type Resolution, acceptsOption } from '@sslm/mapper';
 import { DEMO_ENV_HINTS, DEMO_WORKSPACE_ID } from './demo.ts';
 import { useLdSession, type LdSession } from './ld.ts';
-import { ensureProfile, mapperCapabilities, type MappingInputs } from './migration.ts';
+import { ensureProfile, ldDirectory, mapperCapabilities, type MappingInputs } from './migration.ts';
 import { store } from './store.ts';
 
 export interface MigrationContext extends MappingInputs {
@@ -47,6 +47,7 @@ export function useMigration(workspaceId: string, snapshots: CanonicalSnapshot[]
       resolutions,
       resolutionList,
       capabilities: mapperCapabilities(ld.matrix, ld.contextKinds),
+      directory: ldDirectory(ld),
       idLists: Object.fromEntries(idListRecs.map((r) => [r.uid, r.ids])),
       coverage: Object.fromEntries(idListRecs.flatMap((r) => (r.coverage ? [[r.uid, r.coverage] as const] : []))),
       now,

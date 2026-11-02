@@ -15,3 +15,5 @@ export { mapConfig, DEFAULT as CONFIG_DEFAULT, type ConfigMapResult } from './co
 export { mapSegment, type SegmentMapResult } from './segment.ts';
 export { mapAutotune, percent as banditPercent, BANDIT_REALLOCATION_MS, type AutotuneMapResult, type AutotuneState } from './autotune.ts';
 export { mapNeutralFlag, mapNeutralSegment, resolveSourceKind, LD_OPERATORS, type NeutralFlagMapResult, type NeutralSegmentMapResult } from './neutral.ts';
+export { mapPrompt, type PromptMapResult } from './prompt.ts';
+export { chooseMaintainer, memberIdForEmail, memberOption, teamKeyFor, teamKeyForName, teamOption, type MaintainerAssignment } from './maintainer.ts';

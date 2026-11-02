@@ -526,6 +526,85 @@ export function metric(ctx: BuildContext, s: MetricSeed): JsonObject {
   return out;
 }
 
+/** A StatSig prompt / AI Config (`/prompts`): the shell only, as the Console API lists it. */
+export interface PromptSeed {
+  id: string;
+  description: string;
+  owner: Person;
+  team?: string;
+  tags?: string[];
+  targetApps?: string[];
+  holdoutIDs?: string[];
+  /** StatSig's version counter (how many versions exist). */
+  version?: number;
+}
+
+/** A topline alert (`/alerts`). */
+export interface AlertSeed {
+  id: string;
+  name: string;
+  alertType: 'threshold' | 'change' | 'pct_change';
+  metrics: string[];
+  message: string;
+  condition: 'greater' | 'greater_or_equal' | 'less' | 'less_or_equal' | 'equal' | 'not_equal';
+  threshold: number;
+  windowMs: number;
+  owner: Person;
+  team?: string;
+  tags?: string[];
+  /** Subscriber emails (users). */
+  subscribers?: string[];
+}
+
+/** ExternalPromptDto (`/prompts`): the prompt shell. Versions have no read endpoint in the 20240601 spec. */
+export function prompt(ctx: BuildContext, s: PromptSeed): JsonObject {
+  return {
+    id: s.id,
+    name: s.id,
+    idType: 'userID',
+    description: s.description,
+    lastModifierID: s.owner.id,
+    lastModifiedTime: ctx.now - 9 * 86_400_000,
+    lastModifierEmail: s.owner.email,
+    lastModifierName: s.owner.name,
+    creatorID: s.owner.id,
+    createdTime: ctx.now - 120 * 86_400_000,
+    creatorName: s.owner.name,
+    creatorEmail: s.owner.email,
+    tags: s.tags ?? [],
+    targetApps: s.targetApps ?? [],
+    holdoutIDs: s.holdoutIDs ?? [],
+    team: s.team ?? null,
+    teamID: s.team ? pseudoId(`${ctx.project}/team/${s.team}`) : null,
+    version: s.version ?? 1,
+  };
+}
+
+/** AlertSchemaDto (`/alerts`): a topline alert on one or more metrics. */
+export function alert(ctx: BuildContext, s: AlertSeed): JsonObject {
+  return {
+    id: s.id,
+    name: s.name,
+    alertType: s.alertType,
+    metrics: Object.fromEntries(s.metrics.map((m) => [m, { type: 'event_count_custom' }])),
+    metricGroupBys: {},
+    message: s.message,
+    creatorID: s.owner.id,
+    companyID: pseudoId(`company/${ctx.project}`),
+    priority: 'P2',
+    alertThreshold: s.threshold,
+    windowMs: s.windowMs,
+    evaluationDelayMs: 0,
+    condition: s.condition,
+    renotificationConditions: [],
+    renotificationWindowMs: 0,
+    team: s.team ?? null,
+    owner: owner(s.owner),
+    tags: s.tags ?? [],
+    subscribers: (s.subscribers ?? [s.owner.email]).map((email) => ({ type: 'user', id: pseudoId(`person/${email}`) })),
+  };
+}
+
 export function pseudoUuid(seed: string): string {
   const h = pseudoId(seed, 32).toLowerCase().replace(/[^0-9a-z]/g, '0');
   const hex = [...h].map((c) => (parseInt(c, 36) % 16).toString(16)).join('');

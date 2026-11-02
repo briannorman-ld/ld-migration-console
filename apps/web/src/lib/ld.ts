@@ -1,7 +1,8 @@
 import { useSyncExternalStore } from 'react';
 import type { CapabilityUpdate } from '@sslm/executor';
 import { migratedFromTag } from '@sslm/canonical';
-import { LdAuthError, LdClient, LdWriteError, probeCapabilities, type CapabilityMatrix, type LdCallerIdentity, type LdExperiment, type LdFlagSummary, type LdInstanceId, type LdMetric, type LdProject, type LdSegment } from '@sslm/ld-client';
+import { LdAuthError, LdClient, LdWriteError, probeCapabilities, type CapabilityMatrix, type LdAiConfig, type LdCallerIdentity, type LdExperiment, type LdFlag, type LdFlagSummary, type LdInstanceId, type LdMember, type LdMetric, type LdProject, type LdSegment, type LdTeam } from '@sslm/ld-client';
+import { mergeByKey } from './reconcile.ts';
 import { secrets } from './secrets.ts';
 import { store } from './store.ts';
 
@@ -29,6 +30,14 @@ export interface LdSession {
   experiments?: Record<string, LdExperiment[]>;
   /** Context kinds enabled as randomization units; undefined when unreadable. */
   randomizationUnits?: string[];
+  /** The randomization unit experiments default to, when the settings were readable and one is marked default. */
+  defaultRandomizationUnit?: string;
+  /** Account members (owner → maintainer matching, guide step "People"); undefined when not readable. */
+  members?: LdMember[];
+  /** Account teams (Enterprise); undefined when not readable. */
+  teams?: LdTeam[];
+  /** AI Configs in the project (StatSig prompts); undefined when not readable or not on the plan. */
+  aiConfigs?: LdAiConfig[];
   error?: string;
 }
 
@@ -191,6 +200,44 @@ export async function reprobe(workspaceId: string): Promise<void> {
 }
 
 /**
+ * Refreshes and merges are ordered: a listing that started earlier than the newest applied state is
+ * discarded when it finishes, so slow pages never overwrite what a run just wrote.
+ */
+let refreshSeq = 0;
+let appliedSeq = 0;
+
+/**
+ * Put flags read one by one (GET /flags/{p}/{key}, authoritative) into the session's listing, in
+ * place of the listed entry or appended; `null` removes a flag undo deleted. Used after a run for the
+ * flags whose listed state disagrees with what the run did (see reconcile.ts).
+ */
+export function mergeLdFlags(workspaceId: string, updates: { key: string; flag: LdFlag | null }[]): void {
+  const s = sessions.get(workspaceId);
+  if (!s || !updates.length) return;
+  appliedSeq = ++refreshSeq;
+  const items = mergeByKey<LdFlagSummary>(
+    s.flags?.items ?? [],
+    updates.map((u) => ({ key: u.key, item: u.flag })),
+  );
+  set(workspaceId, { flags: { items, loadedAt: new Date().toISOString() } });
+}
+
+/** Same for segments, per LD environment. */
+export function mergeLdSegments(workspaceId: string, updates: { ldEnv: string; key: string; segment: LdSegment | null }[]): void {
+  const s = sessions.get(workspaceId);
+  if (!s || !updates.length) return;
+  appliedSeq = ++refreshSeq;
+  const segments = { ...(s.segments ?? {}) };
+  for (const env of new Set(updates.map((u) => u.ldEnv))) {
+    segments[env] = mergeByKey(
+      segments[env] ?? [],
+      updates.filter((u) => u.ldEnv === env).map((u) => ({ key: u.key, item: u.segment })),
+    );
+  }
+  set(workspaceId, { segments });
+}
+
+/**
  * Re-read flags (all environments) and context kinds: after connecting and after every run.
  * `segmentEnvs` also loads segments and experiments in those environments (what a plan needs).
  * Experimentation reads (metrics, experiments, randomization units) are optional: plans without
@@ -199,6 +246,7 @@ export async function reprobe(workspaceId: string): Promise<void> {
 export async function refreshLdState(workspaceId: string, opts: { segmentEnvs?: string[] } = {}): Promise<void> {
   const s = sessions.get(workspaceId);
   if (!s?.projectKey) return;
+  const seq = ++refreshSeq;
   const c = client(workspaceId);
   const p = s.projectKey;
   const optional = async <T,>(fn: () => Promise<T>): Promise<T | undefined> => {
@@ -209,7 +257,15 @@ export async function refreshLdState(workspaceId: string, opts: { segmentEnvs?: 
     }
   };
   try {
-    const [items, kinds, metrics, settings] = await Promise.all([c.listFlags(p), c.listContextKinds(p), optional(() => c.listMetrics(p)), optional(() => c.getExperimentationSettings(p))]);
+    const [items, kinds, metrics, settings, members, teams, aiConfigs] = await Promise.all([
+      c.listFlags(p),
+      c.listContextKinds(p),
+      optional(() => c.listMetrics(p)),
+      optional(() => c.getExperimentationSettings(p)),
+      optional(() => c.listMembers()),
+      optional(() => c.listTeams()),
+      optional(() => c.listAiConfigs(p)),
+    ]);
     const segments = { ...(sessions.get(workspaceId)?.segments ?? {}) };
     const experiments = { ...(sessions.get(workspaceId)?.experiments ?? {}) };
     for (const env of opts.segmentEnvs ?? Object.keys(segments)) {
@@ -217,6 +273,10 @@ export async function refreshLdState(workspaceId: string, opts: { segmentEnvs?: 
       const ex = await optional(() => c.listExperiments(p, env));
       if (ex) experiments[env] = ex;
     }
+    const defaultUnit = settings?.randomizationUnits?.find((u) => u.default)?.randomizationUnit;
+    // A refresh that started before a later one (or a run's merge) finished would put older flags back.
+    if (seq < appliedSeq) return;
+    appliedSeq = seq;
     set(workspaceId, {
       flags: { items, loadedAt: new Date().toISOString() },
       contextKinds: kinds.items.filter((k) => !k.archived).map((k) => k.key),
@@ -224,10 +284,95 @@ export async function refreshLdState(workspaceId: string, opts: { segmentEnvs?: 
       experiments,
       ...(metrics ? { metrics } : {}),
       ...(settings ? { randomizationUnits: (settings.randomizationUnits ?? []).map((u) => u.randomizationUnit) } : {}),
+      ...(defaultUnit ? { defaultRandomizationUnit: defaultUnit } : {}),
+      ...(members ? { members } : {}),
+      ...(teams ? { teams } : {}),
+      ...(aiConfigs ? { aiConfigs } : {}),
     });
   } catch (e) {
     set(workspaceId, { error: `Could not read the LD project: ${(e as Error).message}` });
   }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Guide actions outside the executor: account-level, user-triggered, idempotent (PLAN §8.3, §6)
+// ---------------------------------------------------------------------------------------------
+
+export type LdInviteRole = 'reader' | 'writer' | 'admin' | 'no_access';
+
+/**
+ * Invite StatSig owners who are not LD members yet (People step). LD emails each one an invitation;
+ * the member exists (as `_pendingInvite`) at once, so the next mapping finds them as maintainers.
+ * A member who already exists makes LD reject the whole request, so those are left out here.
+ */
+export async function inviteLdMembers(workspaceId: string, people: { email: string; name?: string }[], role: LdInviteRole): Promise<void> {
+  const s = sessions.get(workspaceId);
+  const c = client(workspaceId);
+  const have = new Set((s?.members ?? []).map((m) => m.email.toLowerCase()));
+  const members = people
+    .filter((p) => !have.has(p.email.toLowerCase()))
+    .map((p) => {
+      const [firstName, ...rest] = (p.name ?? '').trim().split(/\s+/).filter(Boolean);
+      return { email: p.email, role, ...(firstName ? { firstName } : {}), ...(rest.length ? { lastName: rest.join(' ') } : {}) };
+    });
+  if (!members.length) return;
+  try {
+    await c.invite(members);
+    await learnCapability(workspaceId, { key: 'invite_members', status: 'available', evidence: `invited ${members.length} member${members.length === 1 ? '' : 's'}` });
+  } catch (e) {
+    if (e instanceof LdWriteError && e.status === 403) await learnCapability(workspaceId, { key: 'invite_members', status: 'not_permitted', evidence: 'POST /members → 403' });
+    throw e;
+  }
+  await refreshLdPeople(workspaceId);
+}
+
+/** Create an LD team for a StatSig team, with the members that already exist in LD (People step). Idempotent on 409. */
+export async function createLdTeam(workspaceId: string, team: { key: string; name: string; description?: string; memberIDs: string[] }): Promise<void> {
+  const c = client(workspaceId);
+  try {
+    await c.createTeam({ key: team.key, name: team.name, ...(team.description ? { description: team.description } : {}), ...(team.memberIDs.length ? { memberIDs: team.memberIDs } : {}) });
+  } catch (e) {
+    if (!(e instanceof LdWriteError && e.status === 409)) throw e;
+    if (team.memberIDs.length) await c.patchTeamSemantic(team.key, { instructions: [{ kind: 'addMembers', values: team.memberIDs }] });
+  }
+  await refreshLdPeople(workspaceId);
+}
+
+/** Re-read members and teams (after an invite or a team creation). */
+export async function refreshLdPeople(workspaceId: string): Promise<void> {
+  const c = client(workspaceId);
+  const [members, teams] = await Promise.all([c.listMembers().catch(() => undefined), c.listTeams().catch(() => undefined)]);
+  set(workspaceId, { ...(members ? { members } : {}), ...(teams ? { teams } : {}) });
+}
+
+/**
+ * Turn on required approvals in an LD environment whose StatSig counterpart requires reviews (cut
+ * over). Only `approvalSettings.required` changes; reviewers and the rest are set up in LD.
+ */
+export async function requireLdApprovals(workspaceId: string, envKey: string): Promise<void> {
+  const s = sessions.get(workspaceId);
+  if (!s?.projectKey) throw new Error('Choose an LD project first.');
+  const c = client(workspaceId);
+  try {
+    await c.patchEnvironmentJson(s.projectKey, envKey, [{ op: 'replace', path: '/approvalSettings/required', value: true }]);
+    await learnCapability(workspaceId, { key: 'approval_settings', status: 'available', evidence: `required approvals turned on in ${envKey}` });
+  } catch (e) {
+    if (e instanceof LdWriteError && (e.status === 403 || e.status === 404 || e.status === 405)) await learnCapability(workspaceId, { key: 'approval_settings', status: e.status === 403 ? 'not_permitted' : 'unavailable', evidence: `PATCH environment ${envKey} approvalSettings → ${e.status}` });
+    throw e;
+  }
+  await chooseProject(workspaceId, s.projectKey);
+}
+
+/** Make `kind` the project's default randomization unit (StatSig's default unit type), enabling it first if needed. */
+export async function setDefaultRandomizationUnit(workspaceId: string, kind: string): Promise<void> {
+  const s = sessions.get(workspaceId);
+  if (!s?.projectKey) throw new Error('Choose an LD project first.');
+  const c = client(workspaceId);
+  const settings = await c.getExperimentationSettings(s.projectKey);
+  const units = (settings.randomizationUnits ?? []).map((u) => ({ randomizationUnit: u.randomizationUnit, default: u.randomizationUnit === kind }));
+  if (!units.some((u) => u.randomizationUnit === kind)) units.push({ randomizationUnit: kind, default: true });
+  await c.putExperimentationSettings(s.projectKey, { randomizationUnits: units });
+  set(workspaceId, { randomizationUnits: units.map((u) => u.randomizationUnit), defaultRandomizationUnit: kind });
 }
 
 export function disconnectLd(workspaceId: string): void {

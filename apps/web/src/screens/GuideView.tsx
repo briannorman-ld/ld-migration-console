@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { EntityKind } from '@sslm/canonical';
-import { optionLabel, sanitizeKey, type MappingProfile } from '@sslm/mapper';
+import { optionLabel, sanitizeKey, teamKeyFor, type MappingProfile } from '@sslm/mapper';
 import type { SourceRecord, WorkspaceRecord } from '@sslm/store';
 import { DecisionCard } from '../components/DecisionCard.tsx';
 import { Badge, Button, Callout, Card, cx, Select, Spinner } from '../components/ui.tsx';
-import { computeGuide, describeTally, STEP_ORDER, STEP_TITLE, type GuideInput, type GuideModel, type StepKey, type Tally } from '../lib/guide.ts';
+import { computeGuide, describeTally, STEP_ORDER, STEP_TITLE, type GuideInput, type GuideModel, type OwnerRow, type StepKey, type Tally, type TeamRow } from '../lib/guide.ts';
 import { KIND_LABEL } from '../lib/kinds.ts';
-import { createLdEnvironment, refreshLdState, reprobe } from '../lib/ld.ts';
+import { createLdEnvironment, createLdTeam, inviteLdMembers, refreshLdState, reprobe, requireLdApprovals, setDefaultRandomizationUnit, type LdInviteRole } from '../lib/ld.ts';
 import type { MigrationSelection } from '../lib/migration.ts';
 import type { MigrationContext } from '../lib/useMigration.ts';
 
@@ -73,11 +73,21 @@ export function GuideView({
           <Step key={k} n={i + 1} title={STEP_TITLE[k]} done={g.done[k]} current={g.current === k} open={isOpen(k)} onToggle={() => setOpened((o) => ({ ...o, [k]: !isOpen(k) }))} summary={summaryFor(k, g, input)}>
             {k === 'connect' && <Connect g={g} input={input} nav={nav} />}
             {k === 'environment' && <Environment workspaceId={workspaceId} g={g} m={m} onEnvChange={onEnvChange} nav={nav} />}
+            {k === 'people' && <People workspaceId={workspaceId} g={g} m={m} nav={nav} />}
             {k === 'contexts' && <Contexts workspaceId={workspaceId} g={g} m={m} nav={nav} onMigrate={onMigrate} />}
             {k === 'segments' && <Items g={g} tallies={[g.segments]} noun="segment" nav={nav} onMigrate={onMigrate} toSelection={(uids) => ({ gates: [], autotunes: [], segments: uids })} />}
-            {k === 'flags' && <Items g={g} tallies={[g.gates, g.configs]} noun="flag" nav={nav} onMigrate={onMigrate} toSelection={(uids) => ({ gates: uids.filter((u) => g.gates.toMigrate.includes(u)), configs: uids.filter((u) => g.configs.toMigrate.includes(u)), autotunes: [] })} />}
+            {k === 'flags' && (
+              <Items
+                g={g}
+                tallies={g.aiConfigsAvailable ? [g.gates, g.configs, g.prompts] : [g.gates, g.configs]}
+                noun="flag"
+                nav={nav}
+                onMigrate={onMigrate}
+                toSelection={(uids) => ({ gates: uids.filter((u) => g.gates.toMigrate.includes(u)), configs: uids.filter((u) => g.configs.toMigrate.includes(u)), prompts: uids.filter((u) => g.prompts.toMigrate.includes(u)), autotunes: [] })}
+              />
+            )}
             {k === 'experiments' && <Experiments g={g} nav={nav} onMigrate={onMigrate} />}
-            {k === 'cutover' && <CutOver g={g} input={input} workspace={workspace} nav={nav} doneCount={doneCount} />}
+            {k === 'cutover' && <CutOver workspaceId={workspaceId} g={g} input={input} workspace={workspace} nav={nav} doneCount={doneCount} />}
           </Step>
         ))}
       </ol>
@@ -91,12 +101,18 @@ function summaryFor(k: StepKey, g: GuideModel, input: GuideInput): string {
       return `${g.synced} source${g.synced === 1 ? '' : 's'} synced · LaunchDarkly ${g.connected ? `project “${input.m?.ld.projectKey ?? ''}”` : g.connecting ? 'connecting…' : 'not connected'}`;
     case 'environment':
       return g.env ? (g.ldEnvs.length ? `${g.env} → LD ${g.ldEnvs.join(', ')}` : `${g.env} is not mapped to an LD environment yet`) : 'No environment chosen';
+    case 'people': {
+      const missing = g.people.owners.filter((o) => o.status === 'missing').length;
+      const teams = g.people.teams.filter((t) => t.status === 'missing').length;
+      if (!g.people.owners.length && !g.people.teams.length) return 'No owners or teams in the sources';
+      return [`${g.people.owners.length} owner${g.people.owners.length === 1 ? '' : 's'}${missing ? ` (${missing} not in LD)` : ''}`, g.people.teams.length ? `${g.people.teams.length} team${g.people.teams.length === 1 ? '' : 's'}${teams ? ` (${teams} not in LD)` : ''}` : ''].filter(Boolean).join(' · ');
+    }
     case 'contexts':
       return g.contexts.unitTypes.length === 0 ? 'No unit types in this environment' : g.contexts.open.length ? `${g.contexts.open.length} unit type${g.contexts.open.length === 1 ? '' : 's'} need${g.contexts.open.length === 1 ? 's' : ''} a context kind` : `${g.contexts.unitTypes.length} unit type${g.contexts.unitTypes.length === 1 ? '' : 's'} mapped`;
     case 'segments':
       return describeTally(g.segments, 'segment');
     case 'flags':
-      return `Gates: ${describeTally(g.gates, 'gate')} Dynamic configs: ${describeTally(g.configs, 'dynamic config')}`;
+      return `Gates: ${describeTally(g.gates, 'gate')} Dynamic configs: ${describeTally(g.configs, 'dynamic config')}${g.prompts.total ? ` AI Configs: ${describeTally(g.prompts, 'AI Config')}` : ''}`;
     case 'experiments':
       return `Autotunes: ${describeTally(g.autotunes, 'autotune')}${g.endInSource.length ? ` · ${g.endInSource.map((x) => `${x.count} ${KIND_LABEL[x.kind].toLowerCase()}`).join(', ')} end in StatSig` : ''}`;
     case 'cutover':
@@ -253,15 +269,288 @@ function Environment({ workspaceId, g, m, onEnvChange, nav }: { workspaceId: str
   );
 }
 
+/**
+ * Owners → maintainers and teams → LD teams, once per person (PLAN §8.3, edge cases 1.5 / 1.11).
+ * Everything here is an account-level write the user triggers by hand: inviting sends emails.
+ */
+function People({ workspaceId, g, m, nav }: { workspaceId: string; g: GuideModel; m: MigrationContext | null; nav: GuideNav }) {
+  const [busy, setBusy] = useState<string>();
+  const [error, setError] = useState<string>();
+  const [role, setRole] = useState<LdInviteRole>('reader');
+  const p = g.people;
+  const missing = p.owners.filter((o) => o.status === 'missing');
+  const run = async (key: string, fn: () => Promise<void>) => {
+    setBusy(key);
+    setError(undefined);
+    try {
+      await fn();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(undefined);
+    }
+  };
+  const saveProfile = (fn: (prof: MappingProfile) => void) => {
+    if (!m) return;
+    const next: MappingProfile = structuredClone(m.profile);
+    fn(next);
+    void m.saveProfile(next);
+  };
+  const choose = (email: string, choice: MappingProfile['maintainers'] extends Record<string, infer C> | undefined ? C | null : never) =>
+    saveProfile((prof) => {
+      prof.maintainers ??= {};
+      if (choice === null) delete prof.maintainers[email];
+      else prof.maintainers[email] = choice;
+    });
+  const members = m?.ld.members ?? [];
+  return (
+    <>
+      <p className="text-fg-muted">
+        A LaunchDarkly maintainer must be a member of the account, so each StatSig owner is matched by email before any flag is written. Owners without an LD member can be invited (LD
+        emails them; they become maintainers on the next sync), handed to their team, or left unassigned. StatSig teams become LD teams with the members that exist.
+      </p>
+      {!g.connected && <Callout tone="blue">Connect LaunchDarkly (step 1) to match owners against its members.</Callout>}
+      {g.connected && !p.membersReadable && (
+        <Callout tone="amber">
+          This token cannot list the account's members, so owners cannot be matched: flags are created without a maintainer (the owner email stays in a custom property). Connect with a token that may read
+          members, or leave every owner unassigned below.
+        </Callout>
+      )}
+      {g.connected && p.owners.length > 0 && (
+        <table className="w-full text-sm">
+          <thead className="text-left text-xs text-fg-muted">
+            <tr>
+              <th className="py-1 pr-3 font-medium">StatSig owner</th>
+              <th className="py-1 pr-3 font-medium">Items</th>
+              <th className="py-1 pr-3 font-medium">Team</th>
+              <th className="py-1 font-medium">In LaunchDarkly</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-line-soft">
+            {p.owners.map((o) => (
+              <OwnerLine key={o.email} o={o} teams={p.teams} members={members} busy={busy === `invite:${o.email}`} canInvite={p.canInvite} onInvite={() => void run(`invite:${o.email}`, () => inviteLdMembers(workspaceId, [{ email: o.email, ...(o.name ? { name: o.name } : {}) }], role))} onChoose={(c) => choose(o.email, c)} />
+            ))}
+          </tbody>
+        </table>
+      )}
+      {g.connected && missing.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 rounded-md border border-line p-3 text-xs">
+          <span className="font-medium">{missing.length} owner{missing.length === 1 ? ' is' : 's are'} not in LaunchDarkly.</span>
+          {p.canInvite && (
+            <>
+              <label className="flex items-center gap-1">
+                Invite as
+                <Select value={role} onChange={(e) => setRole(e.target.value as LdInviteRole)} aria-label="Role for invited members" className="py-0.5 text-xs">
+                  <option value="reader">reader</option>
+                  <option value="writer">writer</option>
+                </Select>
+              </label>
+              <Button className="py-1 text-xs" disabled={!!busy} onClick={() => void run('invite:all', () => inviteLdMembers(workspaceId, missing.map((o) => ({ email: o.email, ...(o.name ? { name: o.name } : {}) })), role))}>
+                {busy === 'invite:all' ? <Spinner /> : null} Invite all {missing.length}
+              </Button>
+            </>
+          )}
+          <Button variant="secondary" className="py-1 text-xs" disabled={!!busy} onClick={() => saveProfile((prof) => void (prof.maintainers = { ...(prof.maintainers ?? {}), ...Object.fromEntries(missing.map((o) => [o.email, 'unassigned' as const])) }))}>
+            Leave all {missing.length} unassigned
+          </Button>
+          <span className="text-fg-muted">Inviting sends each person an email from LaunchDarkly{p.canInvite ? '' : '; this token may not invite (Admin or createMember needed), so ask an LD admin'}.</span>
+        </div>
+      )}
+      {g.connected && p.teams.length > 0 && (
+        <div className="space-y-1">
+          <div className="text-xs font-semibold tracking-wide text-fg-muted uppercase">Teams</div>
+          <ul className="divide-y divide-line-soft">
+            {p.teams.map((t) => (
+              <TeamLine
+                key={t.name}
+                t={t}
+                canCreate={p.canCreateTeams}
+                busy={busy === `team:${t.name}`}
+                onCreate={() => void run(`team:${t.name}`, () => createLdTeam(workspaceId, { key: teamKeyFor(t.name), name: t.name, ...(t.description ? { description: t.description } : {}), memberIDs: t.ldMemberIds }))}
+                onSkip={(skip) => saveProfile((prof) => void (prof.teams = { ...(prof.teams ?? {}), [t.name]: skip ? null : teamKeyFor(t.name) }))}
+                onUnskip={() =>
+                  saveProfile((prof) => {
+                    if (prof.teams) delete prof.teams[t.name];
+                  })
+                }
+              />
+            ))}
+          </ul>
+          {!p.canCreateTeams && p.teams.some((t) => t.status === 'missing') && <p className="text-xs text-fg-muted">Teams are an LD Enterprise feature{p.teamsReadable ? '' : ' and this token cannot read them'}: create them in LaunchDarkly by hand, or skip them here.</p>}
+        </div>
+      )}
+      {g.connected && p.owners.length === 0 && p.teams.length === 0 && <p className="text-xs text-fg-muted">The sources carry no owners or teams: nothing to match.</p>}
+      {error && <Callout tone="red">{error}</Callout>}
+      <p className="text-xs text-fg-muted">
+        Per-item answers to “owner is not an LD member” live on the{' '}
+        <button type="button" className="text-link hover:underline" onClick={nav.decisions}>
+          Decisions
+        </button>{' '}
+        page; a choice made here answers them for every item of that owner.
+      </p>
+    </>
+  );
+}
+
+function OwnerLine({ o, teams, members, busy, canInvite, onInvite, onChoose }: { o: OwnerRow; teams: TeamRow[]; members: { _id: string; email: string; firstName?: string | null; lastName?: string | null }[]; busy: boolean; canInvite: boolean; onInvite: () => void; onChoose: (c: { memberId: string } | { teamKey: string } | 'unassigned' | null) => void }) {
+  const team = o.team ? teams.find((t) => t.name === o.team) : undefined;
+  const label = (m: { _id: string; email: string; firstName?: string | null; lastName?: string | null }) => [m.firstName, m.lastName].filter(Boolean).join(' ') || m.email;
+  return (
+    <tr>
+      <td className="py-1.5 pr-3">
+        <span className="font-mono text-xs">{o.email}</span>
+        {o.name && <span className="ml-2 text-xs text-fg-muted">{o.name}</span>}
+      </td>
+      <td className="py-1.5 pr-3 text-xs text-fg-muted">{o.items}</td>
+      <td className="py-1.5 pr-3 text-xs text-fg-muted">{o.team ?? '—'}</td>
+      <td className="py-1.5">
+        {o.status === 'member' && (
+          <span className="flex items-center gap-2 text-xs">
+            <Mark ok /> LD member{o.pendingInvite ? <Badge tone="amber">invite pending</Badge> : null}
+          </span>
+        )}
+        {o.status === 'chosen_member' && (
+          <span className="flex items-center gap-2 text-xs">
+            <Mark ok /> Maintainer: {label(members.find((m) => m._id === o.memberId) ?? { _id: o.memberId!, email: o.memberId! })}
+            <button type="button" className="text-link hover:underline" onClick={() => onChoose(null)}>
+              change
+            </button>
+          </span>
+        )}
+        {o.status === 'chosen_team' && (
+          <span className="flex items-center gap-2 text-xs">
+            <Mark ok /> Team “{o.teamKey}” is the maintainer
+            <button type="button" className="text-link hover:underline" onClick={() => onChoose(null)}>
+              change
+            </button>
+          </span>
+        )}
+        {o.status === 'unassigned' && (
+          <span className="flex items-center gap-2 text-xs text-fg-muted">
+            <Mark ok /> No maintainer (owner kept in a custom property)
+            <button type="button" className="text-link hover:underline" onClick={() => onChoose(null)}>
+              change
+            </button>
+          </span>
+        )}
+        {o.status === 'missing' && (
+          <span className="flex flex-wrap items-center gap-1.5 text-xs">
+            <Badge tone="amber">not in LD</Badge>
+            {canInvite && (
+              <Button variant="secondary" className="py-0.5 text-xs" disabled={busy} onClick={onInvite}>
+                {busy ? <Spinner /> : null} Invite
+              </Button>
+            )}
+            {team?.ldKey && (
+              <Button variant="ghost" className="py-0.5 text-xs" onClick={() => onChoose({ teamKey: team.ldKey! })}>
+                Assign team “{team.ldKey}”
+              </Button>
+            )}
+            {members.length > 0 && (
+              <Select aria-label={`LD member for ${o.email}`} className="py-0.5 text-xs" value="" onChange={(e) => e.target.value && onChoose({ memberId: e.target.value })}>
+                <option value="">Pick a member…</option>
+                {members.map((m) => (
+                  <option key={m._id} value={m._id}>
+                    {label(m)}
+                  </option>
+                ))}
+              </Select>
+            )}
+            <Button variant="ghost" className="py-0.5 text-xs" onClick={() => onChoose('unassigned')}>
+              Leave unassigned
+            </Button>
+          </span>
+        )}
+      </td>
+    </tr>
+  );
+}
+
+function TeamLine({ t, canCreate, busy, onCreate, onSkip, onUnskip }: { t: TeamRow; canCreate: boolean; busy: boolean; onCreate: () => void; onSkip: (skip: boolean) => void; onUnskip: () => void }) {
+  return (
+    <li className="flex flex-wrap items-center gap-2 py-1.5 text-xs">
+      <span className="font-medium">{t.name}</span>
+      <span className="text-fg-muted">
+        {t.items} item{t.items === 1 ? '' : 's'}
+        {t.memberEmails.length ? ` · ${t.memberEmails.length} member${t.memberEmails.length === 1 ? '' : 's'} in StatSig, ${t.ldMemberIds.length} in LD` : ''}
+      </span>
+      <span className="ml-auto flex items-center gap-2">
+        {t.status === 'exists' && (
+          <>
+            <Mark ok /> LD team <code className="font-mono">{t.ldKey}</code>
+          </>
+        )}
+        {t.status === 'skipped' && (
+          <>
+            <span className="text-fg-muted">No LD team</span>
+            <button type="button" className="text-link hover:underline" onClick={onUnskip}>
+              change
+            </button>
+          </>
+        )}
+        {t.status === 'missing' && (
+          <>
+            <Badge tone="amber">not in LD</Badge>
+            {canCreate && (
+              <Button variant="secondary" className="py-0.5 text-xs" disabled={busy} onClick={onCreate}>
+                {busy ? <Spinner /> : null} Create “{teamKeyFor(t.name)}” in LD
+              </Button>
+            )}
+            <Button variant="ghost" className="py-0.5 text-xs" onClick={() => onSkip(true)}>
+              Skip
+            </Button>
+          </>
+        )}
+      </span>
+    </li>
+  );
+}
+
 function Contexts({ workspaceId, g, m, nav, onMigrate }: { workspaceId: string; g: GuideModel; m: MigrationContext | null; nav: GuideNav; onMigrate: (selection: MigrationSelection, ldEnvs: string[]) => void }) {
   const [probing, setProbing] = useState(false);
+  const [settingDefault, setSettingDefault] = useState(false);
+  const [defaultError, setDefaultError] = useState<string>();
   const kinds = g.contexts.toCreate;
+  const du = g.contexts.defaultUnit;
   return (
     <>
       <p className="text-fg-muted">
         StatSig buckets and targets by unit types; LaunchDarkly by context kinds. Decide where each unit type goes before anything else, because every rule, rollout and target refers
         to it: a new context kind (created on the first migration), an attribute of the user context, or a kind another unit type already uses.
       </p>
+      {du && g.connected && (
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <Mark ok={du.isDefault} /> StatSig's default unit type is <code className="font-mono">{du.unitType}</code>
+          {du.isDefault ? (
+            <span className="text-fg-muted">
+              and <code className="font-mono">{du.kind}</code> is the default randomization unit in LD.
+            </span>
+          ) : (
+            <>
+              <span className="text-fg-muted">
+                → make <code className="font-mono">{du.kind}</code> the default randomization unit for LD experiments{du.readable ? '' : ' (experimentation settings not readable: needs the Experimentation add-on)'}.
+              </span>
+              {du.readable && (
+                <Button
+                  variant="secondary"
+                  className="py-0.5 text-xs"
+                  disabled={settingDefault}
+                  onClick={() => {
+                    setSettingDefault(true);
+                    setDefaultError(undefined);
+                    void setDefaultRandomizationUnit(workspaceId, du.kind)
+                      .catch((e: Error) => setDefaultError(e.message))
+                      .finally(() => setSettingDefault(false));
+                  }}
+                >
+                  {settingDefault ? <Spinner /> : null} Set as default
+                </Button>
+              )}
+            </>
+          )}
+          {defaultError && <span className="text-error">{defaultError}</span>}
+        </div>
+      )}
       {g.contexts.unitTypes.length === 0 && <Callout tone="blue">{g.ldEnvs.length ? 'The sources in this environment declare no unit types; userID maps to the user context.' : 'Map the environment first (step 2).'}</Callout>}
       {g.contexts.open.length > 0 && (
         <p className="text-xs text-fg-muted">
@@ -343,8 +632,9 @@ function Items({ g, tallies, noun, nav, onMigrate, toSelection }: { g: GuideMode
       <p className="text-fg-muted">
         {noun === 'segment'
           ? 'Segments go first: flags reference them, so a flag migrated later finds its segments already in place. Big ID lists import as big segments where the plan allows.'
-          : 'Gates become boolean flags and dynamic configs become JSON flags, with rules, rollouts and overrides translated. A gate used as a prerequisite migrates before the flags that depend on it.'}
+          : 'Gates become boolean flags and dynamic configs become JSON flags, with rules, rollouts and overrides translated. A gate used as a prerequisite migrates before the flags that depend on it. StatSig prompts become AI Configs: the shell only, because the Console API does not expose prompt versions.'}
       </p>
+      {noun === 'flag' && !g.aiConfigsAvailable && g.prompts.total > 0 && <Callout tone="amber">{g.prompts.total} StatSig prompt{g.prompts.total === 1 ? '' : 's'} cannot be written: AI Configs are not available to this LD project or token. Recreate them in LD by hand.</Callout>}
       {!g.ldEnvs.length && <Callout tone="blue">Map the environment first (step 2).</Callout>}
       {g.ldEnvs.length > 0 && (
         <>
@@ -418,8 +708,11 @@ function Experiments({ g, nav, onMigrate }: { g: GuideModel; nav: GuideNav; onMi
   );
 }
 
-function CutOver({ g, input, workspace, nav, doneCount }: { g: GuideModel; input: GuideInput; workspace: WorkspaceRecord; nav: GuideNav; doneCount: number }) {
+function CutOver({ workspaceId, g, input, workspace, nav, doneCount }: { workspaceId: string; g: GuideModel; input: GuideInput; workspace: WorkspaceRecord; nav: GuideNav; doneCount: number }) {
   void workspace;
+  const [busy, setBusy] = useState<string>();
+  const [error, setError] = useState<string>();
+  const approvals = g.cutover.approvals.filter((a) => a.sourceRequires);
   return (
     <>
       <p className="text-fg-muted">Once {g.env || 'an environment'} is migrated, point that environment's SDKs at LaunchDarkly, keep StatSig running until its checks go quiet, then repeat from step 2 for the next environment.</p>
@@ -429,6 +722,62 @@ function CutOver({ g, input, workspace, nav, doneCount }: { g: GuideModel; input
         <li>When StatSig checks have been at zero for a while, archive the gates there, and stop syncing this environment.</li>
         <li>Then the next environment, production last.</li>
       </ol>
+      {approvals.length > 0 && (
+        <div className="space-y-1 rounded-md border border-line p-3">
+          <div className="text-xs font-semibold tracking-wide text-fg-muted uppercase">Reviews → approvals</div>
+          <p className="text-xs text-fg-muted">StatSig requires reviews for changes in {g.env}. Turn on required approvals in the LD environment after the migration writes are done, or every sync files an approval request.</p>
+          <ul className="space-y-1 text-xs">
+            {approvals.map((a) => (
+              <li key={a.ldEnv} className="flex flex-wrap items-center gap-2">
+                <Mark ok={a.ldRequires === true} /> LD <code className="font-mono">{a.ldEnv}</code>
+                {a.ldRequires === true ? (
+                  <span className="text-fg-muted">requires approvals.</span>
+                ) : (
+                  <>
+                    <span className="text-fg-muted">{a.ldRequires === false ? 'does not require approvals yet.' : 'approval settings not reported (Enterprise feature off, or not probed).'}</span>
+                    {g.cutover.canSetApprovals && (
+                      <Button
+                        variant="secondary"
+                        className="py-0.5 text-xs"
+                        disabled={!!busy}
+                        onClick={() => {
+                          setBusy(a.ldEnv);
+                          setError(undefined);
+                          void requireLdApprovals(workspaceId, a.ldEnv)
+                            .catch((e: Error) => setError(e.message))
+                            .finally(() => setBusy(undefined));
+                        }}
+                      >
+                        {busy === a.ldEnv ? <Spinner /> : null} Require approvals in {a.ldEnv}
+                      </Button>
+                    )}
+                  </>
+                )}
+              </li>
+            ))}
+          </ul>
+          {error && <Callout tone="red">{error}</Callout>}
+        </div>
+      )}
+      {g.cutover.alerts.length > 0 && (
+        <div className="space-y-1 rounded-md border border-line p-3">
+          <div className="text-xs font-semibold tracking-wide text-fg-muted uppercase">Topline alerts to recreate</div>
+          <p className="text-xs text-fg-muted">StatSig topline alerts have no LaunchDarkly equivalent. Recreate the ones that matter as LD Observability alerts or as experiment guardrails once the metrics exist in LD.</p>
+          <ul className="space-y-0.5 text-xs">
+            {g.cutover.alerts.map(({ alias, alert }) => (
+              <li key={`${alias}/${alert.id}`} className="flex flex-wrap items-center gap-2">
+                <span className="font-medium">{alert.name}</span>
+                <span className="text-fg-muted">
+                  {alert.alertType ?? 'alert'} on {alert.metrics.length ? alert.metrics.join(', ') : 'a metric'}
+                  {alert.condition && alert.threshold !== undefined ? ` (${alert.condition.replace(/_/g, ' ')} ${alert.threshold})` : ''}
+                  {alert.subscribers ? ` · ${alert.subscribers} subscriber${alert.subscribers === 1 ? '' : 's'}` : ''}
+                  {alias ? ` · ${alias}` : ''}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       <div className="flex flex-wrap items-center gap-2">
         <Button variant="secondary" className="py-1 text-xs" onClick={nav.monitoring}>
           Monitoring{input.monitoring.attention ? ` (${input.monitoring.attention} need attention)` : ''}

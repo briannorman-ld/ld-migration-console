@@ -61,7 +61,7 @@ export function SelectionBar({
   );
 }
 
-const LABEL: Record<SelectionKind, string> = { gate: 'Gates', config: 'Dynamic configs', autotune: 'Autotunes', flag: 'LD flags', segment: 'Segments' };
+const LABEL: Record<SelectionKind, string> = { gate: 'Gates', config: 'Dynamic configs', autotune: 'Autotunes', flag: 'LD flags', segment: 'Segments', prompt: 'AI Configs' };
 
 /** Where a selection kind is viewed: a StatSig resource list, or the LD-source list. */
 export function viewFor(kind: SelectionKind): { kind: 'resource'; resource: EntityKind } | { kind: 'ld-source'; resource: 'flag' | 'segment' } {

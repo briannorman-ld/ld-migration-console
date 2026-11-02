@@ -16,6 +16,7 @@ import { fingerprint, overridesForEnvironment, resolveRulesForEnvironment, stabl
 import { andDnf, resolveKind, SkipItem, translateCondition, unique, type ConditionContext, resolveUnit, rolloutFor, splitOverrides, type OverrideGroup } from './conditions.ts';
 import { DecisionCollector } from './decisions.ts';
 import { chooseClientSideAvailability, commonPassesGate, expansion, gateReference, PASS, provenanceProperties, report, sourceTag, TAG_MIGRATED, type MapArgs, type MapOutcome } from './gate.ts';
+import { chooseMaintainer } from './maintainer.ts';
 import { sanitizeKey, sanitizeTag } from './profile.ts';
 import type { InlineState } from './refs.ts';
 import { scheduledChanges } from './schedule.ts';
@@ -72,6 +73,7 @@ export function mapConfig(args: MapArgs<Config>): ConfigMapResult {
     sourceId,
     idLists: canonical.idLists ?? {},
     ...(canonical.coverage ? { coverage: canonical.coverage } : {}),
+    ...(args.directory ? { directory: args.directory } : {}),
     nowMs: Date.parse(args.now),
     scheduleFlips: new Set(),
     decisions,
@@ -318,6 +320,7 @@ function flagShell(ctx: ConditionContext, config: Config, alias: string, key: st
     tags,
     clientSideAvailability: chooseClientSideAvailability(ctx, config.targetApps),
     customProperties: provenanceProperties(config, alias, 'config'),
+    ...chooseMaintainer(ctx, config),
   };
 }
 

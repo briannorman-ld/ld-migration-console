@@ -133,6 +133,8 @@ export const FlagSchema = z.looseObject({
   temporary: optBool,
   archived: optBool,
   tags: z.array(z.string()).nullish(),
+  maintainerId: optStr,
+  maintainerTeamKey: optStr,
   variations: z.array(z.looseObject({ _id: z.string(), value: z.unknown(), name: optStr, description: optStr })),
   customProperties: z.record(z.string(), z.looseObject({ name: optStr, value: z.array(z.string()).nullish() })).nullish(),
   clientSideAvailability: z.looseObject({ usingEnvironmentId: optBool, usingMobileKey: optBool }).nullish(),
@@ -292,6 +294,45 @@ export type LdScheduledChange = z.infer<typeof ScheduledChangeSchema>;
 
 /** Any `{items: [...]}` collection, for probes where we only care that the route answers. */
 export const CollectionSchema = z.looseObject({ items: z.array(z.unknown()).nullish(), totalCount: optNum });
+
+/** Account member (GET /members). `_pendingInvite` members exist as IDs and can already be maintainers. */
+export const MemberSchema = z.looseObject({
+  _id: z.string(),
+  email: z.string(),
+  firstName: optStr,
+  lastName: optStr,
+  role: optStr,
+  _pendingInvite: optBool,
+  teams: z.array(z.looseObject({ key: z.string(), name: optStr })).nullish(),
+});
+export const MembersSchema = z.looseObject({ items: z.array(MemberSchema), totalCount: optNum });
+export type LdMember = z.infer<typeof MemberSchema>;
+
+/** Team (GET /teams; Enterprise). */
+export const TeamSchema = z.looseObject({
+  key: z.string(),
+  name: optStr,
+  description: optStr,
+  members: z.looseObject({ totalCount: optNum }).nullish(),
+});
+export const TeamsSchema = z.looseObject({ items: z.array(TeamSchema), totalCount: optNum });
+export type LdTeam = z.infer<typeof TeamSchema>;
+
+/** AI Config (GET /projects/{p}/ai-configs). The description carries the migration footer, like segments. */
+export const AiConfigSchema = z.looseObject({
+  key: z.string(),
+  name: z.string(),
+  description: optStr,
+  mode: optStr,
+  tags: z.array(z.string()).nullish(),
+  version: optNum,
+  variations: z.array(z.looseObject({ key: z.string(), name: optStr, _id: optStr })).nullish(),
+  _maintainer: z.looseObject({ kind: optStr, member: z.looseObject({ _id: optStr, email: optStr }).nullish(), team: z.looseObject({ key: optStr, name: optStr }).nullish() }).nullish(),
+  createdAt: optNum,
+  updatedAt: optNum,
+});
+export const AiConfigsSchema = z.looseObject({ items: z.array(AiConfigSchema), totalCount: optNum });
+export type LdAiConfig = z.infer<typeof AiConfigSchema>;
 
 export type LdCallerIdentity = z.infer<typeof CallerIdentitySchema>;
 export type LdToken = z.infer<typeof TokenSchema>;

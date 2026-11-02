@@ -9,25 +9,70 @@
  * model here is pure: it tallies what each step still needs from the mapping results and LD
  * state, and the view renders it. Nothing is written.
  */
-import { parseFooter, type CanonicalSnapshot, type EntityKind } from '@sslm/canonical';
-import type { DecisionPoint } from '@sslm/mapper';
+import { parseFooter, type Alert, type CanonicalSnapshot, type EntityKind } from '@sslm/canonical';
+import { kindFor, teamKeyForName, type DecisionPoint } from '@sslm/mapper';
 import { migrationStatus, ownsSegment } from '@sslm/planner';
 import type { SourceRecord } from '@sslm/store';
 import { ldConnecting, type LdSession } from './ld.ts';
-import { ldFlagState, mapAutotuneFor, mapConfigFor, mapGateFor, mapSegmentFor, type DecisionInstance, type MappingInputs } from './migration.ts';
+import { ldFlagState, mapAutotuneFor, mapConfigFor, mapGateFor, mapPromptFor, mapSegmentFor, type DecisionInstance, type MappingInputs } from './migration.ts';
 
-export type StepKey = 'connect' | 'environment' | 'contexts' | 'segments' | 'flags' | 'experiments' | 'cutover';
-export const STEP_ORDER: StepKey[] = ['connect', 'environment', 'contexts', 'segments', 'flags', 'experiments', 'cutover'];
+export type StepKey = 'connect' | 'environment' | 'people' | 'contexts' | 'segments' | 'flags' | 'experiments' | 'cutover';
+export const STEP_ORDER: StepKey[] = ['connect', 'environment', 'people', 'contexts', 'segments', 'flags', 'experiments', 'cutover'];
 
 export const STEP_TITLE: Record<StepKey, string> = {
   connect: 'Connect',
   environment: 'Choose an environment',
+  people: 'People and teams',
   contexts: 'Context kinds',
   segments: 'Segments',
-  flags: 'Flags',
+  flags: 'Flags and AI Configs',
   experiments: 'Experiments and bandits',
   cutover: 'Cut over',
 };
+
+/** A StatSig owner across the workspace's sources, and how they become an LD maintainer (PLAN §8.3). */
+export interface OwnerRow {
+  /** Lower-cased email. */
+  email: string;
+  name?: string;
+  /** The StatSig team their items most often belong to. */
+  team?: string;
+  /** Gates, configs, autotunes and prompts they own. */
+  items: number;
+  /**
+   * - member: matched an LD member by email (maintainer set automatically)
+   * - chosen_member / chosen_team / unassigned: decided on this step (profile.maintainers)
+   * - missing: no LD member, nothing decided: their items raise `maintainer_unknown`
+   */
+  status: 'member' | 'chosen_member' | 'chosen_team' | 'unassigned' | 'missing';
+  memberId?: string;
+  teamKey?: string;
+  pendingInvite?: boolean;
+}
+
+/** A StatSig team and its LD counterpart. */
+export interface TeamRow {
+  name: string;
+  description?: string;
+  memberEmails: string[];
+  /** Items (gates, configs, autotunes, prompts) in the team. */
+  items: number;
+  /** exists: an LD team is matched or mapped; skipped: the user chose no team; missing: nothing in LD yet. */
+  status: 'exists' | 'skipped' | 'missing';
+  ldKey?: string;
+  /** LD member IDs of the StatSig members that exist in LD (what "Create in LD" adds). */
+  ldMemberIds: string[];
+}
+
+/** One LD environment at cut over: does StatSig require reviews there, and does LD require approvals? */
+export interface ApprovalRow {
+  ldEnv: string;
+  /** Source labels whose chosen environment maps here. */
+  sources: string[];
+  sourceRequires: boolean;
+  /** Undefined when LD did not report approval settings (feature off, or not probed). */
+  ldRequires?: boolean;
+}
 
 /** One kind of item in the chosen environment: how many, and where each stands against LD. */
 export interface Tally {
@@ -72,6 +117,18 @@ export interface GuideModel {
   /** LaunchDarkly is being reached (token check or first probe): show a spinner, not "not connected". */
   connecting: boolean;
   synced: number;
+  /** Owners and teams across every source (account-level, not per environment). */
+  people: {
+    owners: OwnerRow[];
+    teams: TeamRow[];
+    /** The LD member list was read (capability `members`). False: owners cannot be matched. */
+    membersReadable: boolean;
+    teamsReadable: boolean;
+    /** Capability `invite_members` is not known to be denied. */
+    canInvite: boolean;
+    /** Capability `teams` is available. */
+    canCreateTeams: boolean;
+  };
   contexts: {
     /** Unit types seen in sources that take part in this environment. */
     unitTypes: string[];
@@ -81,13 +138,26 @@ export interface GuideModel {
     toCreate: { key: string; unitType: string }[];
     /** Whether this token may create them (capability matrix); false shows the admin instructions instead. */
     canCreate: boolean;
+    /** StatSig's default unit type (project settings) and the LD context kind that should be the default randomization unit. */
+    defaultUnit?: { unitType: string; kind: string; isDefault: boolean; readable: boolean };
   };
   segments: Tally;
   gates: Tally;
   configs: Tally;
   autotunes: Tally;
+  /** StatSig prompts → LD AI Configs (project-level; counted once, not per environment). */
+  prompts: Tally;
+  /** False when the LD plan or token has no AI Configs: prompts are listed, not written. */
+  aiConfigsAvailable: boolean;
   /** StatSig constructs that end in StatSig and start new in LD (nothing to run here). */
   endInSource: { kind: EntityKind; count: number }[];
+  cutover: {
+    approvals: ApprovalRow[];
+    /** Capability `approval_settings` is not known to be denied. */
+    canSetApprovals: boolean;
+    /** Topline alerts in the sources taking part: no LD equivalent, recreated by hand. */
+    alerts: { alias: string; alert: Alert }[];
+  };
   done: Record<StepKey, boolean>;
   current: StepKey;
 }
@@ -147,23 +217,47 @@ export function computeGuide(input: GuideInput): GuideModel {
   const noteDeps = (deps: { kind: string; key: string; entityId?: string }[]) => {
     for (const d of deps) if (d.kind === 'context_kind' && !toCreate.has(d.key) && !(m?.ld.contextKinds ?? []).includes(d.key)) toCreate.set(d.key, d.entityId ?? d.key);
   };
-  const contexts = {
+  const cap = (k: string) => m?.ld.matrix?.capabilities.find((c) => c.key === k)?.status;
+  const denied = (k: string) => cap(k) === 'not_permitted' || cap(k) === 'unavailable';
+  const contexts: GuideModel['contexts'] = {
     unitTypes,
     open: kindDecisions.filter((d) => !d.resolvedWith),
     decided: kindDecisions.filter((d) => d.resolvedWith),
     toCreate: [] as { key: string; unitType: string }[],
     canCreate: !!m && m.capabilities.contextKinds !== 'not_permitted' && m.capabilities.contextKinds !== 'unavailable',
   };
+  // StatSig's default unit type → LD's default randomization unit (project settings; coverage `structure.project_settings`).
+  const withDefault = taking.find((x) => x.snapshot.settings?.defaultUnitType);
+  if (m && withDefault) {
+    const unitType = withDefault.snapshot.settings!.defaultUnitType!;
+    const kind = unitType === 'userID' ? 'user' : kindFor(m.profile, withDefault.source.id, unitType);
+    contexts.defaultUnit = { unitType, kind, isDefault: m.ld.defaultRandomizationUnit === kind || (!m.ld.defaultRandomizationUnit && kind === 'user'), readable: !!m.ld.randomizationUnits };
+  }
+
+  const people = computePeople(snapshots, m, { membersReadable: !!m?.directory?.membersReadable, teamsReadable: !!m?.directory?.teamsReadable, canInvite: !!m && !denied('invite_members'), canCreateTeams: cap('teams') === 'available' });
 
   const segments = emptyTally('segment');
   const gates = emptyTally('gate');
   const configs = emptyTally('config');
   const autotunes = emptyTally('autotune');
+  const prompts = emptyTally('prompt');
+  const aiConfigsAvailable = !denied('ai_configs');
   const endInSource = new Map<EntityKind, number>();
+  const alerts: GuideModel['cutover']['alerts'] = [];
 
   if (m && connected) {
     const ldFlags = new Map((m.ld.flags?.items ?? []).map((f) => [f.key, f]));
+    const ldAiConfigs = m.ld.aiConfigs;
+    if (!ldAiConfigs && aiConfigsAvailable) prompts.ldUnknown = true;
     for (const { source, snapshot, ldEnv } of taking) {
+      for (const p of snapshot.prompts ?? []) {
+        if (p.archived) continue;
+        const r = mapPromptFor(snapshot, p, m);
+        const existing = ldAiConfigs?.find((a) => a.key === r.key && ownsSegment({ key: a.key, tags: a.tags ?? [] }, snapshot.source.alias));
+        const fp = existing ? parseFooter(existing.description)?.fp : undefined;
+        add(prompts, p.uid, classify(r, { status: !existing ? 'absent' : fp === r.statsigFingerprint ? 'in_sync' : 'changed' }));
+      }
+      for (const alert of snapshot.alerts ?? []) alerts.push({ alias: snapshot.source.alias, alert });
       const target = { statsig: env, ld: ldEnv };
       const ldSegments = m.ld.segments?.[ldEnv];
       if (!ldSegments) segments.ldUnknown = true;
@@ -193,12 +287,26 @@ export function computeGuide(input: GuideInput): GuideModel {
   }
 
   contexts.toCreate = [...toCreate.entries()].map(([key, unitType]) => ({ key, unitType })).sort((a, b) => a.key.localeCompare(b.key));
+
+  // Cut over: StatSig "requires review" (per environment, or project-wide for configs) → LD required approvals.
+  const approvals: ApprovalRow[] = ldEnvs.map((ldEnv) => {
+    const here = taking.filter((x) => x.ldEnv === ldEnv);
+    const ldReq = m?.ld.matrix?.environments.find((e) => e.key === ldEnv)?.flagApprovalsRequired;
+    return {
+      ldEnv,
+      sources: here.map((x) => x.source.label),
+      sourceRequires: here.some((x) => !!x.snapshot.environments.find((e) => e.name === env)?.requiresReview || !!x.snapshot.reviews?.configReviewRequired),
+      ...(ldReq !== undefined ? { ldRequires: ldReq } : {}),
+    };
+  });
+
   const done: Record<StepKey, boolean> = {
     connect: snapshots.length > 0 && connected,
     environment: ldEnvs.length > 0,
+    people: connected && people.owners.every((o) => o.status !== 'missing') && people.teams.every((t) => t.status !== 'missing'),
     contexts: ldEnvs.length > 0 && contexts.open.length === 0 && contexts.toCreate.length === 0,
     segments: ldEnvs.length > 0 && tallyDone(segments),
-    flags: ldEnvs.length > 0 && tallyDone(gates) && tallyDone(configs),
+    flags: ldEnvs.length > 0 && tallyDone(gates) && tallyDone(configs) && (tallyDone(prompts) || !aiConfigsAvailable),
     experiments: ldEnvs.length > 0 && tallyDone(autotunes),
     cutover: false,
   };
@@ -210,15 +318,70 @@ export function computeGuide(input: GuideInput): GuideModel {
     connected,
     connecting,
     synced: snapshots.length,
+    people,
     contexts,
     segments,
     gates,
     configs,
     autotunes,
+    prompts,
+    aiConfigsAvailable,
     endInSource: [...endInSource.entries()].map(([kind, count]) => ({ kind, count })),
+    cutover: { approvals, canSetApprovals: !!m && !denied('approval_settings'), alerts },
     done,
     current: currentStep(done),
   };
+}
+
+/**
+ * Owners and teams across every source. An owner is one email, however many sources and items;
+ * the status comes from the profile's choice first, then from the LD member directory.
+ */
+export function computePeople(snapshots: CanonicalSnapshot[], m: GuideInput['m'], caps: { membersReadable: boolean; teamsReadable: boolean; canInvite: boolean; canCreateTeams: boolean }): GuideModel['people'] {
+  const owners = new Map<string, OwnerRow & { teams: Map<string, number> }>();
+  const teamItems = new Map<string, number>();
+  const teamNames = new Map<string, { description?: string; memberEmails: string[] }>();
+  for (const s of snapshots) {
+    for (const t of s.teams ?? []) if (!teamNames.has(t.name)) teamNames.set(t.name, { ...(t.description ? { description: t.description } : {}), memberEmails: t.memberEmails ?? [] });
+    const entities = [...s.gates, ...s.configs, ...s.autotunes, ...(s.prompts ?? [])].filter((e) => !e.archived);
+    for (const e of entities) {
+      if (e.team) {
+        teamItems.set(e.team, (teamItems.get(e.team) ?? 0) + 1);
+        if (!teamNames.has(e.team)) teamNames.set(e.team, { memberEmails: [] });
+      }
+      const email = e.owner?.email?.trim().toLowerCase();
+      if (!email) continue;
+      const row = owners.get(email) ?? { email, items: 0, status: 'missing' as const, teams: new Map<string, number>() };
+      row.items++;
+      if (!row.name && e.owner?.name) row.name = e.owner.name;
+      if (e.team) row.teams.set(e.team, (row.teams.get(e.team) ?? 0) + 1);
+      owners.set(email, row);
+    }
+  }
+  const members = new Map((m?.ld.members ?? []).map((x) => [x.email.toLowerCase(), x]));
+  const ownerRows: OwnerRow[] = [...owners.values()]
+    .map(({ teams, ...row }) => {
+      const team = [...teams.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+      const out: OwnerRow = { ...row, ...(team ? { team } : {}) };
+      const choice = m?.profile?.maintainers?.[row.email];
+      const member = members.get(row.email);
+      if (choice === 'unassigned') out.status = 'unassigned';
+      else if (choice && 'memberId' in choice) Object.assign(out, { status: 'chosen_member', memberId: choice.memberId });
+      else if (choice && 'teamKey' in choice) Object.assign(out, { status: 'chosen_team', teamKey: choice.teamKey });
+      else if (member) Object.assign(out, { status: 'member', memberId: member._id, ...(member._pendingInvite ? { pendingInvite: true } : {}) });
+      return out;
+    })
+    .sort((a, b) => b.items - a.items || a.email.localeCompare(b.email));
+  const teamRows: TeamRow[] = [...teamNames.entries()]
+    .map(([name, t]) => {
+      const mapped = m?.profile?.teams?.[name];
+      const ldKey = m?.profile ? teamKeyForName(m.profile, m.directory, name) : undefined;
+      const row: TeamRow = { name, ...(t.description ? { description: t.description } : {}), memberEmails: t.memberEmails, items: teamItems.get(name) ?? 0, status: mapped === null ? 'skipped' : ldKey ? 'exists' : 'missing', ldMemberIds: t.memberEmails.flatMap((e) => (members.get(e)?._id ? [members.get(e)!._id] : [])) };
+      if (ldKey) row.ldKey = ldKey;
+      return row;
+    })
+    .sort((a, b) => b.items - a.items || a.name.localeCompare(b.name));
+  return { owners: ownerRows, teams: teamRows, ...caps };
 }
 
 /** "3 of 12 in sync · 7 to migrate · 2 wait for decisions", for a step summary. */

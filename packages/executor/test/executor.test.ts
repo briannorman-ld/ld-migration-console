@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { LdAuthError, LdWriteError, type LdExperiment, type LdFlag, type LdMetric } from '@sslm/ld-client';
+import { LdAuthError, LdWriteError, type LdAiConfig, type LdExperiment, type LdFlag, type LdMetric } from '@sslm/ld-client';
 import type { PlanStep } from '@sslm/planner';
 import { Executor, footer, newRun, parseFooter, scheduledIdsFrom, segmentInstructions, withFooter, type LdWriter, type RunRecord } from '../src/index.ts';
 
@@ -8,6 +8,7 @@ function fakeLd(over: Partial<Record<keyof LdWriter, (...a: never[]) => unknown>
   const flags = new Map<string, LdFlag>();
   const metrics = new Map<string, LdMetric>();
   const experiments = new Map<string, LdExperiment & { iteration?: unknown }>();
+  const aiConfigs = new Map<string, LdAiConfig>();
   const units: string[] = ['user'];
   const calls: string[] = [];
   const approvals = new Map<string, { status: string; reviewStatus: string; executionDate?: number }>();
@@ -43,6 +44,15 @@ function fakeLd(over: Partial<Record<keyof LdWriter, (...a: never[]) => unknown>
     patchSegmentSemantic: async (_p, _e, key, patch) => (calls.push(`semantic segment ${key} ${patch.instructions.map((i) => `${i.kind}:${Array.isArray(i.values) ? i.values.length : ''}`).join(',')}`), { key, name: key }),
     deleteSegment: async () => undefined,
     putContextKind: async () => undefined,
+    getAiConfig: async (_p, key) => (calls.push(`get ai ${key}`), aiConfigs.get(key) ?? null),
+    createAiConfig: async (_p, body) => {
+      calls.push(`create ai ${body.key}`);
+      const a = { key: body.key, name: body.name, description: body.description ?? '', tags: body.tags ?? [], ...(body.maintainerId ? { _maintainer: { kind: 'member', member: { _id: body.maintainerId } } } : {}) };
+      aiConfigs.set(a.key, a);
+      return a;
+    },
+    patchAiConfig: async (_p, key, body) => (calls.push(`patch ai ${key} ${Object.keys(body).join(',')}`), { ...aiConfigs.get(key)!, ...body }),
+    deleteAiConfig: async (_p, key) => void (calls.push(`delete ai ${key}`), aiConfigs.delete(key)),
     getMetric: async (_p, key) => (calls.push(`get metric ${key}`), metrics.get(key) ?? null),
     createMetric: async (_p, body) => {
       calls.push(`create metric ${body.key}`);
@@ -97,7 +107,7 @@ function fakeLd(over: Partial<Record<keyof LdWriter, (...a: never[]) => unknown>
       if (!scheduled.delete(id)) throw new LdWriteError(404, '/scheduled-changes', null);
     },
   };
-  return { client: { ...base, ...over } as LdWriter, flags, metrics, experiments, units, calls, flag, approvals, scheduled, imports };
+  return { client: { ...base, ...over } as LdWriter, flags, metrics, experiments, aiConfigs, units, calls, flag, approvals, scheduled, imports };
 }
 
 const desiredEnv = { ldEnv: 'test', statsigEnv: 'staging', on: true, offVariation: 1, fallthrough: { variation: 0 }, rules: [], targets: [], prerequisites: [] };
@@ -757,5 +767,67 @@ describe('segment provenance footer', () => {
     const f = footer({ sourceKind: 'launchdarkly', sourceAlias: 'legacy', statsigId: 'legacy-beta-orgs', statsigFingerprint: 'abc', decisionSetHash: 'd' }, new Date('2026-10-30T00:00:00Z'));
     expect(f).toBe('[ld-migration: from=launchdarkly; src=legacy; id=legacy-beta-orgs; fp=abc; d=d; at=2026-10-30T00:00:00.000Z]');
     expect(parseFooter(withFooter('Beta orgs', f))?.from).toBe('launchdarkly');
+  });
+});
+
+describe('prompts → AI Configs (upsert_ai_config, PLAN §6)', () => {
+  const step = (over: Partial<Extract<PlanStep, { op: 'upsert_ai_config' }>> = {}): PlanStep => ({
+    id: 'ai_config:support_reply_assistant',
+    deps: [],
+    op: 'upsert_ai_config',
+    key: 'support_reply_assistant',
+    exists: false,
+    adopt: false,
+    desired: { key: 'support_reply_assistant', name: 'Support reply assistant', description: 'Drafts replies.', tags: ['migrated-from-statsig', 'migration-src-web', 'search'], mode: 'completion', maintainerId: 'mem-priya' },
+    provenance: { sourceKind: 'statsig', sourceAlias: 'web', statsigType: 'prompt', statsigId: 'support_reply_assistant', statsigVersion: 4, statsigFingerprint: 'fp1', decisionSetHash: 'dh' },
+    ...over,
+  });
+  const exec = (ld: ReturnType<typeof fakeLd>, steps: PlanStep[], dryRun = false) => {
+    const ex = new Executor({ client: ld.client, projectKey: 'p', journal: { save: async () => undefined }, now: () => new Date('2026-11-02T00:00:00Z') });
+    const run = newRun({ id: 'run-aiconfig', workspaceId: 'w', projectKey: 'p', label: 't', dryRun, steps, now: new Date('2026-11-02T00:00:00Z') });
+    return { ex, run };
+  };
+
+  it('creates the shell with the provenance footer and maintainer, never touching variations; a re-sync only patches what changed', async () => {
+    const ld = fakeLd();
+    const { ex, run } = exec(ld, [step()]);
+    await ex.run(run);
+    expect(run.status).toBe('done');
+    expect(run.steps[0]!.message).toMatch(/Created AI Config/);
+    const created = ld.aiConfigs.get('support_reply_assistant')!;
+    expect(created.tags).toEqual(['migrated-from-statsig', 'migration-src-web', 'search']);
+    expect(parseFooter(created.description)).toMatchObject({ from: 'statsig', src: 'web', id: 'support_reply_assistant', fp: 'fp1' });
+    expect(ld.calls).toEqual(['get ai support_reply_assistant', 'create ai support_reply_assistant']);
+
+    // Same desired state, new fingerprint: the footer changes, nothing else.
+    ld.calls.length = 0;
+    const again = exec(ld, [step({ exists: true, provenance: { sourceKind: 'statsig', sourceAlias: 'web', statsigType: 'prompt', statsigId: 'support_reply_assistant', statsigFingerprint: 'fp2', decisionSetHash: 'dh' } })]);
+    await again.ex.run(again.run);
+    expect(again.run.steps[0]!.message).toBe('Updated AI Config “support_reply_assistant” (description).');
+    expect(ld.calls).toEqual(['get ai support_reply_assistant', 'patch ai support_reply_assistant description']);
+  });
+
+  it('refuses a foreign AI Config that appeared since planning unless adopted, and undo deletes only what it created', async () => {
+    const ld = fakeLd();
+    ld.aiConfigs.set('support_reply_assistant', { key: 'support_reply_assistant', name: 'Theirs', description: 'Hand-made', tags: ['ops'] });
+    const { ex, run } = exec(ld, [step()]);
+    await ex.run(run);
+    expect(run.status).toBe('failed');
+    expect(run.steps[0]!.error).toMatch(/wasn't created by this app/);
+
+    const adopted = exec(ld, [step({ exists: true, adopt: true })]);
+    await adopted.ex.run(adopted.run);
+    expect(adopted.run.status).toBe('done');
+    expect(adopted.run.steps[0]!.message).toMatch(/Updated AI Config .* \(name, description, tags, maintainerId\)/);
+    // Undo of an adopted config restores the pre-image's name, description and tags.
+    ld.calls.length = 0;
+    await adopted.ex.undo(adopted.run);
+    expect(ld.calls).toEqual(['patch ai support_reply_assistant name,description,tags']);
+
+    const fresh = fakeLd();
+    const created = exec(fresh, [step()]);
+    await created.ex.run(created.run);
+    await created.ex.undo(created.run);
+    expect(fresh.aiConfigs.has('support_reply_assistant')).toBe(false);
   });
 });

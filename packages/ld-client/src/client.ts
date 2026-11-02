@@ -2,8 +2,17 @@ import { HttpError, Transport, UnreachableError, type TransportOptions } from '@
 import type { z } from 'zod';
 import { LD_API_VERSION, LD_INSTANCES, type LdInstance, type LdInstanceId } from './instances.ts';
 import {
+  AiConfigSchema,
+  AiConfigsSchema,
   ApprovalRequestSchema,
   CallerIdentitySchema,
+  MemberSchema,
+  MembersSchema,
+  TeamSchema,
+  TeamsSchema,
+  type LdAiConfig,
+  type LdMember,
+  type LdTeam,
   ContextKindsSchema,
   EnvironmentSchema,
   EnvironmentsSchema,
@@ -293,6 +302,80 @@ export class LdClient {
     await this.write('DELETE', `/projects/${encodeURIComponent(projectKey)}/environments/${encodeURIComponent(envKey)}`, undefined, null, { signal });
   }
 
+  /** PATCH /projects/{p}/environments/{e} (JSON patch). Approval settings: only `required`, `minNumApprovals`, `canReviewOwnRequest`, `canApplyDeclinedChanges` and `requiredApprovalTags` are editable. */
+  patchEnvironmentJson(projectKey: string, envKey: string, patch: JsonPatchOp[], signal?: AbortSignal): Promise<LdEnvironment> {
+    return this.write('PATCH', `/projects/${encodeURIComponent(projectKey)}/environments/${encodeURIComponent(envKey)}`, patch, EnvironmentSchema, { signal });
+  }
+
+  // --- Members and teams (owner → maintainer, PLAN §8.3 `maintainer_unknown`) ---------------------
+
+  /** GET /members, every page. Reader on `member/*` is enough to list; Admin to invite. */
+  async listMembers(signal?: AbortSignal): Promise<LdMember[]> {
+    const out: LdMember[] = [];
+    for (let offset = 0; offset < 50_000; offset += MEMBER_PAGE) {
+      const page = await this.get('/members', MembersSchema, { query: { limit: String(MEMBER_PAGE), offset: String(offset) }, signal });
+      out.push(...page.items);
+      if (page.items.length < MEMBER_PAGE || (page.totalCount != null && out.length >= page.totalCount)) break;
+    }
+    return out;
+  }
+
+  /** POST /members (NewMemberForm[]): invites by email; LD sends each an invitation. Needs Admin or `createMember`. */
+  invite(members: { email: string; role: 'reader' | 'writer' | 'admin' | 'no_access'; firstName?: string; lastName?: string; teamKeys?: string[] }[], signal?: AbortSignal): Promise<LdMember[]> {
+    return this.write('POST', '/members', members, MembersSchema, { signal }).then((r) => r.items);
+  }
+
+  /** GET /teams, every page (Enterprise). */
+  async listTeams(signal?: AbortSignal): Promise<LdTeam[]> {
+    const out: LdTeam[] = [];
+    for (let offset = 0; offset < 10_000; offset += MEMBER_PAGE) {
+      const page = await this.get('/teams', TeamsSchema, { query: { limit: String(MEMBER_PAGE), offset: String(offset) }, signal });
+      out.push(...page.items);
+      if (page.items.length < MEMBER_PAGE || (page.totalCount != null && out.length >= page.totalCount)) break;
+    }
+    return out;
+  }
+
+  /** POST /teams (teamPostInput: key and name required; memberIDs are member `_id`s). */
+  createTeam(body: { key: string; name: string; description?: string; memberIDs?: string[] }, signal?: AbortSignal): Promise<LdTeam> {
+    return this.write('POST', '/teams', body, TeamSchema, { signal });
+  }
+
+  /** PATCH /teams/{key} with semantic-patch instructions (`addMembers` takes member IDs). */
+  patchTeamSemantic(teamKey: string, patch: SemanticPatch, signal?: AbortSignal): Promise<LdTeam> {
+    return this.write('PATCH', `/teams/${encodeURIComponent(teamKey)}`, patch, TeamSchema, { contentType: 'application/json; domain-model=launchdarkly.semanticpatch', signal });
+  }
+
+  // --- AI Configs (StatSig prompts, PLAN §6) ----------------------------------------------------------
+
+  async listAiConfigs(projectKey: string, signal?: AbortSignal): Promise<LdAiConfig[]> {
+    const out: LdAiConfig[] = [];
+    for (let offset = 0; offset < 10_000; offset += MEMBER_PAGE) {
+      const page = await this.get(`/projects/${encodeURIComponent(projectKey)}/ai-configs`, AiConfigsSchema, { query: { limit: String(MEMBER_PAGE), offset: String(offset) }, signal });
+      out.push(...page.items);
+      if (page.items.length < MEMBER_PAGE || (page.totalCount != null && out.length >= page.totalCount)) break;
+    }
+    return out;
+  }
+
+  getAiConfig(projectKey: string, key: string, signal?: AbortSignal): Promise<LdAiConfig | null> {
+    return this.optional(`/projects/${encodeURIComponent(projectKey)}/ai-configs/${encodeURIComponent(key)}`, AiConfigSchema, signal);
+  }
+
+  /** POST /projects/{p}/ai-configs (AIConfigPost: key and name required). */
+  createAiConfig(projectKey: string, body: { key: string; name: string; description?: string; tags?: string[]; mode?: string; maintainerId?: string; maintainerTeamKey?: string }, signal?: AbortSignal): Promise<LdAiConfig> {
+    return this.write('POST', `/projects/${encodeURIComponent(projectKey)}/ai-configs`, body, AiConfigSchema, { signal });
+  }
+
+  /** PATCH /projects/{p}/ai-configs/{key}: a plain object of fields to replace (AIConfigPatch), not a JSON patch. */
+  patchAiConfig(projectKey: string, key: string, body: { name?: string; description?: string; tags?: string[]; maintainerId?: string; maintainerTeamKey?: string }, signal?: AbortSignal): Promise<LdAiConfig> {
+    return this.write('PATCH', `/projects/${encodeURIComponent(projectKey)}/ai-configs/${encodeURIComponent(key)}`, body, AiConfigSchema, { signal });
+  }
+
+  async deleteAiConfig(projectKey: string, key: string, signal?: AbortSignal): Promise<void> {
+    await this.write('DELETE', `/projects/${encodeURIComponent(projectKey)}/ai-configs/${encodeURIComponent(key)}`, undefined, null, { signal });
+  }
+
   createMetric(projectKey: string, body: Record<string, unknown>, signal?: AbortSignal): Promise<LdMetric> {
     return this.write('POST', `/metrics/${encodeURIComponent(projectKey)}`, body, MetricSchema, { signal });
   }
@@ -534,6 +617,9 @@ export class LdClient {
     });
   }
 }
+
+/** Page size for the account-level lists (members, teams, AI Configs); LD caps `limit` at 50 on some of them. */
+const MEMBER_PAGE = 50;
 
 const SDK_KEY_FIELDS = new Set(['apiKey', 'mobileKey']);
 

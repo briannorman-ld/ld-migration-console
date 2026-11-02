@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { CanonicalSnapshot, NeutralFlag, NeutralSegment } from '@sslm/canonical';
 import { mapNeutralFlag, mapNeutralSegment, type MapArgs, type MapperCapabilities, type Resolution } from '../src/index.ts';
-import { CAPS, legacySnapshot, NOW, profileFor, server } from './fixtures.ts';
+import { CAPS, DIRECTORY, legacySnapshot, NOW, profileFor, server } from './fixtures.ts';
 
 beforeAll(() => server.listen({ onUnhandledFrame: 'error' }));
 afterAll(() => server.close());
@@ -15,7 +15,7 @@ beforeAll(async () => {
 const caps: MapperCapabilities = { ...CAPS, existingContextKinds: ['user', 'organization'] };
 function flagArgs(key: string, over: Partial<MapArgs<NeutralFlag>> = {}): MapArgs<NeutralFlag> {
   const entity = legacy.neutral!.flags.find((f) => f.key === key)!;
-  return { canonical: { snapshot: legacy }, entity, profile: profileFor(legacy, MAPPING), resolutions: new Map(), capabilities: caps, env: { statsig: 'production', ld: 'production' }, now: NOW, ...over };
+  return { canonical: { snapshot: legacy }, entity, profile: profileFor(legacy, MAPPING), resolutions: new Map(), capabilities: caps, env: { statsig: 'production', ld: 'production' }, now: NOW, directory: DIRECTORY, ...over };
 }
 function segArgs(key: string, over: Partial<MapArgs<NeutralSegment>> = {}): MapArgs<NeutralSegment> {
   const entity = legacy.neutral!.segments.find((s) => s.key === key)!;
@@ -41,7 +41,15 @@ describe('LD project → LD project (PLAN §20.3)', () => {
     ]);
     expect(r.env).toEqual({ ldEnv: 'production', statsigEnv: 'production', on: true, offVariation: 1, fallthrough: { variation: 0 }, rules: [], targets: [], prerequisites: [] });
     expect(r.fidelity.overall).toBe('full');
-    expect(r.fidelity.notes.map((n) => n.message)).toEqual([expect.stringContaining('Maintainer (ops@acme-legacy.example) not carried')]);
+    // The source maintainer (ops@acme-legacy.example) is an LD member of the target account: matched by email.
+    expect(r.shell.maintainerId).toBe('mem-legacy-ops');
+    expect(r.fidelity.notes).toEqual([]);
+  });
+
+  it('raises maintainer_unknown when the source maintainer is not a member of the target account', () => {
+    const r = mapNeutralFlag(flagArgs('legacy-kill-switch', { directory: { ...DIRECTORY, members: [] } }));
+    expect(types(r)).toEqual(['maintainer_unknown']);
+    expect(r.shell.maintainerId).toBeUndefined();
   });
 
   it('keeps clauses, negation and semVer operators as they are', () => {

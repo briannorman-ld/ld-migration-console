@@ -86,6 +86,25 @@ export interface DesiredFlagShell {
   clientSideAvailability: ClientSideAvailability;
   /** Provenance (PLAN §3.3) minus the per-environment `migration.sync.<env>` entries. */
   customProperties: Record<string, CustomProperty>;
+  /** LD member `_id` matched to the source owner's email (PLAN §8.3 `maintainer_unknown`). At most one of the two. */
+  maintainerId?: string;
+  /** LD team key matched to the source team, when no member matched (or the user chose the team). */
+  maintainerTeamKey?: string;
+}
+
+/**
+ * An LD AI Config from a StatSig prompt. The Console API (20240601) exposes no prompt versions,
+ * so only the shell migrates; variations are added in LD by hand (`manual` fidelity).
+ */
+export interface DesiredAiConfig {
+  key: string;
+  name: string;
+  /** Without the migration footer; the executor appends it (AI Configs have no custom properties). */
+  description: string;
+  tags: string[];
+  mode: 'completion';
+  maintainerId?: string;
+  maintainerTeamKey?: string;
 }
 
 /** One environment's targeting (PLAN §10.2). Applied as one atomic semantic PATCH. */
@@ -233,7 +252,9 @@ export type DecisionType =
   /** LD source (PLAN §20.3): copy the source flag's own custom properties, or leave them. */
   | 'copy_custom_properties'
   /** LD source: the target plan or token has no prerequisites. */
-  | 'prerequisite_unsupported';
+  | 'prerequisite_unsupported'
+  /** The owner's email is not an LD member (PLAN §8.3): leave unassigned, assign the team, or pick a member (`member:<id>`). */
+  | 'maintainer_unknown';
 
 /**
  * - blocking: no safe default; the item can't migrate until resolved.
@@ -321,6 +342,9 @@ export interface SourceProfile {
   unitTypeKinds: Record<string, string>;
 }
 
+/** How a source owner becomes an LD maintainer, decided once per owner on the guide's People step. */
+export type MaintainerChoice = { memberId: string } | { teamKey: string } | 'unassigned';
+
 /** The mapping profile (PLAN §8.1). Travels with the workspace file. */
 export interface MappingProfile {
   version: 1;
@@ -329,6 +353,25 @@ export interface MappingProfile {
   attributes: Record<string, string>;
   /** Workspace policies: decision type → option key (PLAN §8.1 "workspace policy"). */
   policies: Partial<Record<DecisionType, string>>;
+  /**
+   * Owner email (lower-cased) → maintainer. Owners without an entry are matched by email against
+   * the LD member directory; an unmatched one raises `maintainer_unknown` on each of their items.
+   */
+  maintainers?: Record<string, MaintainerChoice>;
+  /** Source team name → LD team key (`null`: no team). Teams without an entry match an LD team whose key is the sanitized name. */
+  teams?: Record<string, string | null>;
+}
+
+/**
+ * The LD account's members and teams, as far as the token can read them (PLAN §5.2 `members`,
+ * `teams`). A mapper input like the capability matrix: owners are matched against it by email.
+ */
+export interface LdDirectory {
+  members: { id: string; email: string }[];
+  teams: { key: string; name?: string }[];
+  /** False when the list route was not readable (403/404): nothing can be matched, and the notes say so. */
+  membersReadable: boolean;
+  teamsReadable: boolean;
 }
 
 export type CapabilityState = 'available' | 'not_permitted' | 'unavailable' | 'unknown' | 'manual';

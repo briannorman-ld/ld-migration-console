@@ -32,6 +32,9 @@ export function acmeMobile(): ProjectSeed {
     ],
     targetApps: ['acme-ios', 'acme-android'],
     teams: ['Mobile', 'Platform'],
+    teamMembers: { Mobile: [P.dana, P.sam], Platform: [P.alice] },
+    reviews: { configReviewRequired: false },
+    defaultUnitType: 'deviceID',
     users: [
       { ...P.dana, role: 'Admin' },
       { ...P.sam, role: 'Member' },

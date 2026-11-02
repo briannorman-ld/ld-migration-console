@@ -80,7 +80,9 @@ export type EntityKind =
   | 'holdout'
   | 'autotune'
   | 'metric'
-  | 'param_store';
+  | 'param_store'
+  /** StatSig prompt / AI Config (Console `/prompts`); becomes an LD AI Config. */
+  | 'prompt';
 
 export interface Owner {
   id?: string;
@@ -415,7 +417,18 @@ export interface ParamStore extends EntityBase {
   parameters: ParamStoreParameter[];
 }
 
-export type Entity = Gate | Config | Segment | Experiment | Layer | Holdout | Autotune | Metric | ParamStore;
+/**
+ * A StatSig prompt ("AI Config" in newer StatSig UIs). The Console API (20240601) exposes only the
+ * shell: name, description, tags, owner, team, target apps and a version counter. The prompt
+ * versions themselves (messages, model, parameters) have no read endpoint, so they are not here.
+ */
+export interface Prompt extends EntityBase {
+  kind: 'prompt';
+  idType: string;
+  holdoutIds: string[];
+}
+
+export type Entity = Gate | Config | Segment | Experiment | Layer | Holdout | Autotune | Metric | ParamStore | Prompt;
 
 // ---------------------------------------------------------------------------------------------
 // Project-level resources
@@ -426,8 +439,49 @@ export interface Environment {
   name: string;
   id?: string;
   isProduction?: boolean;
+  /** StatSig "requires review" on this environment: changes need a reviewer (→ LD approvals). */
+  requiresReview?: boolean;
   /** Spec sources infer environments; the user confirms them during setup (§4.2). */
   inferred: boolean;
+}
+
+/** A StatSig team (Console `/users/teams`). Members are emails, read from the team detail when permitted. */
+export interface StatsigTeam {
+  id: string;
+  name: string;
+  description?: string;
+  /** Lower-cased member emails; absent when the detail endpoint was not readable. */
+  memberEmails?: string[];
+}
+
+/** Project-wide review settings (Console `/settings/reviews`). */
+export interface ReviewSettings {
+  configReviewRequired?: boolean;
+  metricReviewRequired?: boolean;
+}
+
+/** Project settings (Console `/settings/project`). */
+export interface ProjectSettings {
+  /** Default unit ID type for new gates, experiments and metrics (→ LD default randomization unit). */
+  defaultUnitType?: string;
+  visibility?: string;
+}
+
+/** A topline alert (Console `/alerts`): a metric threshold that notifies people. LD has no equivalent; listed for the cut-over checklist. */
+export interface Alert {
+  id: string;
+  name: string;
+  alertType?: string;
+  message?: string;
+  /** Metric names the alert watches. */
+  metrics: string[];
+  condition?: string;
+  threshold?: number;
+  windowMs?: number;
+  team?: string;
+  owner?: Owner;
+  tags: string[];
+  subscribers: number;
 }
 
 export interface UnitType {
@@ -489,6 +543,12 @@ export interface CanonicalSnapshot {
   autotunes: Autotune[];
   metrics: Metric[];
   paramStores: ParamStore[];
+  /** Optional on the type because snapshots taken before 2026-11-02 lack them; read with `?? []`. */
+  prompts?: Prompt[];
+  teams?: StatsigTeam[];
+  alerts?: Alert[];
+  reviews?: ReviewSettings;
+  settings?: ProjectSettings;
   /**
    * Provider-neutral resources (PLAN §20.1): filled by the LaunchDarkly source adapter; absent on
    * StatSig sources until they move onto the neutral model too.
@@ -522,6 +582,9 @@ export function emptySnapshot(source: CanonicalSnapshot['source'], takenAt: stri
     autotunes: [],
     metrics: [],
     paramStores: [],
+    prompts: [],
+    teams: [],
+    alerts: [],
     completeness: { missing: [] },
     warnings: [],
   };

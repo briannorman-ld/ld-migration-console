@@ -5,6 +5,7 @@
 import { fingerprint, migratedFromTag, overridesForEnvironment, PROP, resolveRulesForEnvironment, SOURCE_KIND_LABEL, sourceTag, targetingFingerprint, type CanonicalSnapshot, type Condition, type Gate, type Holdout, type MigrationSourceKind } from '@sslm/canonical';
 import { ALWAYS, andDnf, MAX_EXPANSION, NEVER, resolveKind, SkipItem, translateCondition, unique, type ConditionContext, type Dnf, type Loc, resolveUnit, rolloutFor, splitOverrides, type OverrideGroup } from './conditions.ts';
 import { DecisionCollector, DROP_CONDITION, DROP_RULE, SKIP } from './decisions.ts';
+import { chooseMaintainer } from './maintainer.ts';
 import { sanitizeKey, sanitizeTag } from './profile.ts';
 import { inlineGate, type InlineState } from './refs.ts';
 import { scheduledChanges } from './schedule.ts';
@@ -24,6 +25,7 @@ import type {
   FidelityReport,
   IdListCoverages,
   IdLists,
+  LdDirectory,
   MapperCapabilities,
   MappingProfile,
   Resolution,
@@ -50,6 +52,8 @@ export interface MapArgs<E> {
   env: EnvTarget;
   /** ISO time the mapping is evaluated at (time conditions). */
   now: string;
+  /** LD members and teams for owner → maintainer matching; absent = not read yet (owners raise `maintainer_unknown`). */
+  directory?: LdDirectory;
 }
 
 export interface MapOutcome {
@@ -91,6 +95,7 @@ export function mapGate(args: MapArgs<Gate>): GateMapResult {
     sourceId,
     idLists: canonical.idLists ?? {},
     ...(canonical.coverage ? { coverage: canonical.coverage } : {}),
+    ...(args.directory ? { directory: args.directory } : {}),
     nowMs: Date.parse(args.now),
     scheduleFlips: new Set(),
     decisions,
@@ -427,6 +432,7 @@ function flagShell(ctx: ConditionContext, gate: Gate, alias: string, key: string
     tags,
     clientSideAvailability,
     customProperties: props,
+    ...chooseMaintainer(ctx, gate),
   };
 }
 

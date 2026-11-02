@@ -4,7 +4,7 @@
  * this module wires them to the store, the LD session and the StatSig source.
  */
 import { useSyncExternalStore } from "react";
-import type { Autotune, CanonicalSnapshot, Config, Gate, NeutralFlag, NeutralSegment, Segment } from "@sslm/canonical";
+import type { Autotune, CanonicalSnapshot, Config, Gate, NeutralFlag, NeutralSegment, Prompt, Segment } from "@sslm/canonical";
 import { Executor, newRun, type RunRecord } from "@sslm/executor";
 import type { CapabilityMatrix, LdFlagSummary } from "@sslm/ld-client";
 import {
@@ -13,6 +13,7 @@ import {
   mapGate,
   mapNeutralFlag,
   mapNeutralSegment,
+  mapPrompt,
   mapSegment,
   reconcileProfile,
   type AutotuneMapResult,
@@ -22,10 +23,12 @@ import {
   type GateMapResult,
   type IdListCoverages,
   type IdLists,
+  type LdDirectory,
   type MapperCapabilities,
   type MappingProfile,
   type NeutralFlagMapResult,
   type NeutralSegmentMapResult,
+  type PromptMapResult,
   type Resolution,
   type SegmentMapResult,
   optionLabel,
@@ -39,7 +42,8 @@ import {
 import { StatsigConsoleClient } from "@sslm/statsig-client";
 import type { SourceRecord, RunJournalRecord } from "@sslm/store";
 import { demoKey, startDemoMock } from "./demo.ts";
-import { learnCapability, ldClient, refreshLdState, type LdSession } from "./ld.ts";
+import { learnCapability, ldClient, ldSessionSnapshot, mergeLdFlags, mergeLdSegments, refreshLdState, type LdSession } from "./ld.ts";
+import { staleAfterRun } from "./reconcile.ts";
 import { secrets } from "./secrets.ts";
 import { store } from "./store.ts";
 
@@ -113,6 +117,7 @@ export function ldProjectState(ld: LdSession): LdProjectState {
     ...(ld.metrics ? { metrics: new Map(ld.metrics.map((m) => [m.key, { key: m.key, tags: m.tags ?? [], eventKey: m.eventKey ?? null, kind: m.kind ?? null }])) } : {}),
     experiments,
     ...(ld.randomizationUnits ? { randomizationUnits: ld.randomizationUnits } : {}),
+    ...(ld.aiConfigs ? { aiConfigs: new Map(ld.aiConfigs.map((a) => [a.key, { key: a.key, tags: a.tags ?? [] }])) } : {}),
   };
 }
 
@@ -143,10 +148,23 @@ export interface MappingInputs {
   profile: MappingProfile;
   resolutions: ReadonlyMap<string, Resolution>;
   capabilities: MapperCapabilities;
+  /** LD members and teams, for owner → maintainer matching (PLAN §8.3). */
+  directory: LdDirectory;
   idLists: IdLists;
   /** Reconciliation results for uploaded raw-ID lists (PLAN §4.2), by segment uid. */
   coverage: IdListCoverages;
   now: string;
+}
+
+/** The mapper's view of the LD account's people: what the session read, and whether it could. */
+export function ldDirectory(ld: LdSession): LdDirectory {
+  const cap = (k: string) => ld.matrix?.capabilities.find((c) => c.key === k)?.status;
+  return {
+    members: (ld.members ?? []).map((m) => ({ id: m._id, email: m.email })),
+    teams: (ld.teams ?? []).map((t) => ({ key: t.key, ...(t.name ? { name: t.name } : {}) })),
+    membersReadable: !!ld.members && cap("members") !== "not_permitted" && cap("members") !== "unavailable",
+    teamsReadable: !!ld.teams && cap("teams") !== "not_permitted" && cap("teams") !== "unavailable",
+  };
 }
 
 /*
@@ -187,6 +205,7 @@ export function mapGateFor(
       capabilities: i.capabilities,
       env,
       now: i.now,
+      directory: i.directory,
     }),
   );
 }
@@ -206,29 +225,36 @@ export function mapSegmentFor(
       capabilities: i.capabilities,
       env,
       now: i.now,
+      directory: i.directory,
     }),
   );
 }
 
 export function mapConfigFor(snapshot: CanonicalSnapshot, config: Config, env: EnvTarget, i: MappingInputs): ConfigMapResult {
   return memoized(i, snapshot, memoKey("config", config.uid, env), () =>
-    mapConfig({ canonical: { snapshot, idLists: i.idLists, coverage: i.coverage }, entity: config, profile: i.profile, resolutions: i.resolutions, capabilities: i.capabilities, env, now: i.now }),
+    mapConfig({ canonical: { snapshot, idLists: i.idLists, coverage: i.coverage }, entity: config, profile: i.profile, resolutions: i.resolutions, capabilities: i.capabilities, env, now: i.now, directory: i.directory }),
   );
 }
 
 export function mapAutotuneFor(snapshot: CanonicalSnapshot, autotune: Autotune, env: EnvTarget, i: MappingInputs): AutotuneMapResult {
   return memoized(i, snapshot, memoKey("autotune", autotune.uid, env), () =>
-    mapAutotune({ canonical: { snapshot, idLists: i.idLists, coverage: i.coverage }, entity: autotune, profile: i.profile, resolutions: i.resolutions, capabilities: i.capabilities, env, now: i.now }),
+    mapAutotune({ canonical: { snapshot, idLists: i.idLists, coverage: i.coverage }, entity: autotune, profile: i.profile, resolutions: i.resolutions, capabilities: i.capabilities, env, now: i.now, directory: i.directory }),
   );
 }
 
 /** Neutral (LD-source) flag → desired LD flag (PLAN §20), memoized like the StatSig mappers. */
 export function mapNeutralFlagFor(snapshot: CanonicalSnapshot, flag: NeutralFlag, env: EnvTarget, i: MappingInputs): NeutralFlagMapResult {
-  return memoized(i, snapshot, memoKey("flag", flag.uid, env), () => mapNeutralFlag({ canonical: { snapshot }, entity: flag, profile: i.profile, resolutions: i.resolutions, capabilities: i.capabilities, env, now: i.now }));
+  return memoized(i, snapshot, memoKey("flag", flag.uid, env), () => mapNeutralFlag({ canonical: { snapshot }, entity: flag, profile: i.profile, resolutions: i.resolutions, capabilities: i.capabilities, env, now: i.now, directory: i.directory }));
+}
+
+/** StatSig prompt → LD AI Config shell (PLAN §6). Project-level: the environment only keys the memo. */
+export function mapPromptFor(snapshot: CanonicalSnapshot, prompt: Prompt, i: MappingInputs): PromptMapResult {
+  const env = { statsig: "", ld: "" };
+  return memoized(i, snapshot, memoKey("prompt", prompt.uid, env), () => mapPrompt({ canonical: { snapshot }, entity: prompt, profile: i.profile, resolutions: i.resolutions, capabilities: i.capabilities, env, now: i.now, directory: i.directory }));
 }
 
 export function mapNeutralSegmentFor(snapshot: CanonicalSnapshot, segment: NeutralSegment, env: EnvTarget, i: MappingInputs): NeutralSegmentMapResult {
-  return memoized(i, snapshot, memoKey("nsegment", segment.uid, env), () => mapNeutralSegment({ canonical: { snapshot }, entity: segment, profile: i.profile, resolutions: i.resolutions, capabilities: i.capabilities, env, now: i.now }));
+  return memoized(i, snapshot, memoKey("nsegment", segment.uid, env), () => mapNeutralSegment({ canonical: { snapshot }, entity: segment, profile: i.profile, resolutions: i.resolutions, capabilities: i.capabilities, env, now: i.now, directory: i.directory }));
 }
 
 export interface DecisionInstance {
@@ -277,6 +303,7 @@ export function collectDecisions(
         ...snap.autotunes.filter((a) => !a.archived).map((a) => mapAutotuneFor(snap, a, env, i)),
         ...(snap.neutral?.flags ?? []).filter((f) => !f.archived).map((f) => mapNeutralFlagFor(snap, f, env, i)),
         ...(snap.neutral?.segments ?? []).filter((s) => !s.archived).map((s) => mapNeutralSegmentFor(snap, s, env, i)),
+        ...(snap.prompts ?? []).filter((p) => !p.archived).map((p) => mapPromptFor(snap, p, i)),
       ];
       for (const r of results) {
         const staleById = new Map(
@@ -375,11 +402,13 @@ export interface MigrationSelection {
   segments?: string[];
   /** Context kinds to create on their own (guide step 3). */
   contextKinds?: { key: string; unitType: string }[];
+  /** Prompt uids → LD AI Configs (project-level). */
+  prompts?: string[];
 }
 
-/** Only project-level steps (context kinds): the run needs no target environment. */
+/** Only project-level steps (context kinds, AI Configs): the run needs no target environment. */
 export function isProjectOnlySelection(sel: MigrationSelection): boolean {
-  return !!sel.contextKinds?.length && sel.gates.length === 0 && !sel.configs?.length && sel.autotunes.length === 0 && !sel.flags?.length && !sel.segments?.length;
+  return (!!sel.contextKinds?.length || !!sel.prompts?.length) && sel.gates.length === 0 && !sel.configs?.length && sel.autotunes.length === 0 && !sel.flags?.length && !sel.segments?.length;
 }
 
 export function describeSelection(sel: MigrationSelection): string {
@@ -387,8 +416,10 @@ export function describeSelection(sel: MigrationSelection): string {
   const flags = sel.flags ?? [];
   const segments = sel.segments ?? [];
   const kinds = sel.contextKinds ?? [];
+  const prompts = sel.prompts ?? [];
   const parts = [
     kinds.length ? `${kinds.length} context kind${kinds.length === 1 ? "" : "s"}` : "",
+    prompts.length ? `${prompts.length} AI Config${prompts.length === 1 ? "" : "s"}` : "",
     sel.gates.length ? `${sel.gates.length} gate${sel.gates.length === 1 ? "" : "s"}` : "",
     configs.length ? `${configs.length} dynamic config${configs.length === 1 ? "" : "s"}` : "",
     sel.autotunes.length ? `${sel.autotunes.length} autotune${sel.autotunes.length === 1 ? "" : "s"}` : "",
@@ -406,6 +437,7 @@ export function buildPlan(input: { selection: MigrationSelection; ldEnvs: string
     flags: input.selection.flags ?? [],
     segments: input.selection.segments ?? [],
     contextKinds: input.selection.contextKinds ?? [],
+    prompts: input.selection.prompts ?? [],
     ldEnvs: input.ldEnvs,
     snapshots: input.snapshots,
     idLists: input.idLists,
@@ -413,6 +445,7 @@ export function buildPlan(input: { selection: MigrationSelection; ldEnvs: string
     profile: input.profile,
     resolutions: input.resolutions,
     capabilities: input.capabilities,
+    directory: input.directory,
     ld: ldProjectState(input.ld),
     now: input.now,
   });
@@ -607,6 +640,7 @@ async function finishRun(
       await refreshLdState(workspaceId, {
         segmentEnvs: envs.length ? envs : Object.keys(ld.segments ?? {}),
       });
+      await reconcileRun(workspaceId, r);
     }
     return r;
   } finally {
@@ -614,6 +648,24 @@ async function finishRun(
     active.delete(workspaceId);
     notify();
   }
+}
+
+/**
+ * Settle every disagreement between the refreshed listings and what the run wrote by reading those
+ * resources directly (reconcile.ts). Best effort: a read that fails leaves that entry as listed,
+ * and never fails the run.
+ */
+async function reconcileRun(workspaceId: string, run: RunRecord): Promise<void> {
+  const s = ldSessionSnapshot(workspaceId);
+  if (!s.projectKey) return;
+  const p = s.projectKey;
+  const stale = staleAfterRun(run, new Map((s.flags?.items ?? []).map((f) => [f.key, f])), s.segments);
+  if (!stale.flagKeys.length && !stale.segments.length) return;
+  const c = ldClient(workspaceId);
+  const flags = await Promise.allSettled(stale.flagKeys.map(async (key) => ({ key, flag: await c.getFlag(p, key) })));
+  mergeLdFlags(workspaceId, flags.flatMap((r) => (r.status === "fulfilled" ? [r.value] : [])));
+  const segments = await Promise.allSettled(stale.segments.map(async ({ ldEnv, key }) => ({ ldEnv, key, segment: await c.getSegment(p, ldEnv, key) })));
+  mergeLdSegments(workspaceId, segments.flatMap((r) => (r.status === "fulfilled" ? [r.value] : [])));
 }
 
 /** A run left `running` in the journal but not executing in this tab was interrupted. */

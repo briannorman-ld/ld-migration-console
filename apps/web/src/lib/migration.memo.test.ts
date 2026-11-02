@@ -15,7 +15,7 @@ describe('mapping memo', () => {
   it('returns the same result object for the same inputs, and a fresh one once the inputs change', async () => {
     const web = await acmeSnapshot('web');
     const profile = { version: 1 as const, sources: {}, attributes: {}, policies: {} };
-    const inputs: MappingInputs = { profile, resolutions: new Map(), capabilities: CAPS, idLists: {}, coverage: {}, now: NOW };
+    const inputs: MappingInputs = { profile, resolutions: new Map(), capabilities: CAPS, directory: { members: [], teams: [], membersReadable: false, teamsReadable: false }, idLists: {}, coverage: {}, now: NOW };
     const env = envTargets(profile, web, false)[0]!;
     const gate = web.gates[0]!;
 

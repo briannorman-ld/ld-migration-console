@@ -9,6 +9,8 @@ import type {
   LayerSeed,
   MetricSeed,
   Person,
+  PromptSeed,
+  AlertSeed,
   SegmentSeed,
 } from '../console/builders.ts';
 
@@ -54,7 +56,15 @@ export interface ProjectSeed {
   tags: { name: string; description: string; isCore?: boolean }[];
   targetApps: string[];
   teams: string[];
+  /** Team name → members (admins first). Teams absent here have no members. */
+  teamMembers?: Record<string, Person[]>;
   users: (Person & { role: string })[];
+  /** `/settings/reviews`: whether config changes need a review (project-wide). */
+  reviews?: { configReviewRequired: boolean; metricReviewRequired?: boolean };
+  /** `/settings/project` default unit type for new gates, experiments and metrics. */
+  defaultUnitType?: string;
+  prompts?: PromptSeed[];
+  alerts?: AlertSeed[];
   gates: GateSeed[];
   configs: ConfigSeed[];
   segments: SegmentSeed[];

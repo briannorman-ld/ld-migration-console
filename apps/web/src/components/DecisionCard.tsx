@@ -31,6 +31,9 @@ export const TYPE_LABEL: Record<string, string> = {
   missing_metric: 'No success event for the bandit',
   duplicate_variant_value: 'Variants with identical values',
   variation_change_affects_migrated_env: 'New variation on a migrated flag',
+  copy_custom_properties: 'Copy custom properties',
+  prerequisite_unsupported: 'Prerequisites not available',
+  maintainer_unknown: 'Owner is not an LD member',
 };
 
 /**

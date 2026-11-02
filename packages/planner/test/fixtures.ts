@@ -4,7 +4,7 @@ import { crawlConsoleProject, normalizeConsoleSnapshot, normalizeLdSnapshot, rea
 import { LdClient } from '@sslm/ld-client';
 import { StatsigConsoleClient } from '@sslm/statsig-client';
 import type { CanonicalSnapshot } from '@sslm/canonical';
-import type { MapperCapabilities, MappingProfile } from '@sslm/mapper';
+import type { LdDirectory, MapperCapabilities, MappingProfile } from '@sslm/mapper';
 
 /**
  * Canonical snapshots of the demo dataset, read through the real Console API adapter against the
@@ -27,6 +27,14 @@ export const LD_ENVS = [
 ];
 
 export const CAPS: MapperCapabilities = { prerequisites: 'unknown', contextKinds: 'unknown', existingContextKinds: ['user'] };
+
+/** Every Acme owner but Jordan Former is an LD member (see packages/mapper/test/fixtures.ts). */
+export const DIRECTORY: LdDirectory = {
+  members: ['alice.chen', 'bob.okafor', 'priya.raman', 'marco.rossi', 'sam.taylor', 'dana.kim'].map((u) => ({ id: `mem-${u.split('.')[0]}`, email: `${u}@acmeretail.example` })),
+  teams: [{ key: 'checkout', name: 'Checkout' }],
+  membersReadable: true,
+  teamsReadable: true,
+};
 
 export const NOW = '2026-10-22T12:00:00.000Z';
 

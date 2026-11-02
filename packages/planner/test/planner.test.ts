@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { CanonicalSnapshot } from '@sslm/canonical';
 import type { Resolution } from '@sslm/mapper';
 import { flagOwner, migrationStatus, ownsSegment, planMigration, recommendedResolutions, syncPropertyKey, type LdProjectState, type PlanRequest } from '../src/index.ts';
-import { acmeSnapshot, CAPS, NOW, profileFor, server } from './fixtures.ts';
+import { acmeSnapshot, CAPS, DIRECTORY, NOW, profileFor, server } from './fixtures.ts';
 
 beforeAll(() => server.listen({ onUnhandledFrame: 'error' }));
 afterAll(() => server.close());
@@ -23,6 +23,7 @@ function request(gates: string[], over: Partial<PlanRequest> = {}): PlanRequest 
     profile: profileFor(web, { development: null, staging: 'test', production: 'production', qa: null }),
     resolutions: new Map(),
     capabilities: CAPS,
+    directory: DIRECTORY,
     ld: EMPTY_LD,
     now: NOW,
     ...over,
@@ -348,6 +349,7 @@ describe('planMigration with an LD source (PLAN §20)', () => {
       snapshots: [legacy],
       profile: profileFor(legacy, { test: 'test', production: 'production' }),
       resolutions: new Map(),
+      directory: { ...DIRECTORY, members: [...DIRECTORY.members, { id: 'mem-legacy-ops', email: 'ops@acme-legacy.example' }] },
       capabilities: { ...CAPS, existingContextKinds: ['user', 'organization'] },
       ld: ldWithKinds,
       now: NOW,
@@ -434,5 +436,38 @@ describe('planMigration with an LD source (PLAN §20)', () => {
     expect(owned.steps.map((s) => s.id)).toEqual(['shell:legacy-kill-switch', 'env:production:legacy-kill-switch']);
     const shell = owned.steps[0];
     expect(shell?.op === 'upsert_flag_shell' && shell.exists && !shell.adopt).toBe(true);
+  });
+});
+
+describe('prompts → AI Configs (PLAN §6)', () => {
+  const puid = (id: string) => web.prompts!.find((p) => p.id === id)!.uid;
+  const directory = DIRECTORY;
+
+  it('plans one project-level upsert_ai_config step per prompt, with no environment part', () => {
+    const plan = planMigration(request([], { prompts: [puid('support_reply_assistant')], directory }));
+    expect(plan.ready).toBe(true);
+    expect(plan.steps.map((s) => s.id)).toEqual(['ai_config:support_reply_assistant']);
+    const step = plan.steps[0]!;
+    expect(step.op === 'upsert_ai_config' && step.desired.maintainerId).toBe('mem-priya');
+    expect(step.op === 'upsert_ai_config' && step.provenance.statsigType).toBe('prompt');
+    expect(plan.items[0]).toMatchObject({ kind: 'prompt', ldEnv: '', status: 'ready', exists: false });
+    expect(plan.items[0]!.fidelity?.overall).toBe('manual');
+  });
+
+  it('re-syncs an AI Config the console created and asks before adopting a foreign one', () => {
+    const owned = planMigration(request([], { prompts: [puid('support_reply_assistant')], directory, ld: { ...EMPTY_LD, aiConfigs: new Map([['support_reply_assistant', { key: 'support_reply_assistant', tags: ['migrated-from-statsig', 'migration-src-web'] }]]) } }));
+    expect(owned.steps[0]).toMatchObject({ op: 'upsert_ai_config', exists: true, adopt: false });
+    const foreign = planMigration(request([], { prompts: [puid('support_reply_assistant')], directory, ld: { ...EMPTY_LD, aiConfigs: new Map([['support_reply_assistant', { key: 'support_reply_assistant', tags: [] }]]) } }));
+    expect(foreign.items[0]!.status).toBe('blocked');
+    expect(foreign.decisions.map((d) => d.type)).toEqual(['key_collision']);
+  });
+
+  it('an owner who is not an LD member blocks the prompt until maintainer_unknown is answered (accepting the recommendation unblocks it)', () => {
+    const req = request([], { prompts: [puid('product_description_writer')], directory });
+    expect(planMigration(req).items[0]!.status).toBe('blocked');
+    expect(planMigration(req).decisions.map((d) => d.type)).toEqual(['maintainer_unknown']);
+    const plan = planMigration(acceptAll(req));
+    expect(plan.ready).toBe(true);
+    expect(plan.steps[0]!.op === 'upsert_ai_config' && plan.steps[0]!.desired.maintainerId).toBeUndefined();
   });
 });

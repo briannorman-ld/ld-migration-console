@@ -32,9 +32,15 @@ function cases() {
         [tag, '/console/v1/metrics/metric_source/list', list('/console/v1/metrics/metric_source/list', d.metricSources)],
         [tag, '/console/v1/param_stores', list('/console/v1/param_stores', d.paramStores)],
         [tag, '/console/v1/users', list('/console/v1/users', d.users)],
-        [tag, '/console/v1/users/teams', list('/console/v1/users/teams', d.teams)],
+        [tag, '/console/v1/users/teams', list('/console/v1/users/teams', d.teams.map(({ members: _m, admins: _a, ...t }) => t))],
+        [tag, '/console/v1/prompts', list('/console/v1/prompts', d.prompts)],
+        [tag, '/console/v1/alerts', list('/console/v1/alerts', d.alerts)],
+        [tag, '/console/v1/settings/reviews', single(d.reviewSettings)],
+        [tag, '/console/v1/settings/project', single(d.projectSettings)],
         [tag, '/console/v1/overrides', single(d.overrides)],
       );
+      for (const t of d.teams) out.push([tag, '/console/v1/users/teams/{id}', single(t)]);
+      for (const p of d.prompts) out.push([tag, '/console/v1/prompts/{id}', single(p)]);
       for (const g of d.gates) out.push([tag, '/console/v1/gates/{id}', single(g)]);
       for (const c of d.dynamicConfigs) out.push([tag, '/console/v1/dynamic_configs/{id}', single(c)]);
       for (const [id, seed] of Object.entries(d.idLists)) {

@@ -42,6 +42,11 @@ export function acmeWeb(): ProjectSeed {
     ],
     targetApps: ['storefront-web', 'storefront-api', 'storefront-client-only'],
     teams: ['Checkout', 'Search', 'Growth', 'Platform'],
+    // Checkout has members who exist in LD (Bob, Alice) and one who left (Jordan); Growth has none.
+    teamMembers: { Checkout: [P.bob, P.alice, P.former], Search: [P.priya], Platform: [P.marco, P.sam] },
+    // Production requires reviews in StatSig (environments[].requiresReview) and config changes need a review project-wide.
+    reviews: { configReviewRequired: true },
+    defaultUnitType: 'userID',
     users: [
       { ...P.alice, role: 'Admin' },
       { ...P.bob, role: 'Member' },
@@ -1064,6 +1069,17 @@ export function acmeWeb(): ProjectSeed {
     ],
     experimentOverrides: [
       { experiment: 'search_ranking_v3', userIDOverrides: [{ groupName: 'Model v3', ids: ['user-search-qa'] }] },
+    ],
+    // Prompts / AI Configs (edge case 1.12): the Console API lists the shell only; versions are not readable.
+    prompts: [
+      { id: 'support_reply_assistant', description: 'Drafts first replies to support tickets from the order history.', owner: P.priya, team: 'Search', tags: ['search', '★ Core'], version: 4, targetApps: ['storefront-api'] },
+      // Owned by someone who left Acme (maintainer_unknown), in a holdout.
+      { id: 'product_description_writer', description: 'Generates product descriptions for new catalog items.', owner: P.former, team: 'Growth', tags: ['growth'], version: 2, holdoutIDs: ['checkout_holdout'] },
+    ],
+    // Topline alerts: no LD equivalent, listed at cut over.
+    alerts: [
+      { id: 'alert_purchase_drop', name: 'Purchases down 20%', alertType: 'pct_change', metrics: ['purchase_count'], message: 'Purchase count dropped more than 20% hour over hour.', condition: 'less', threshold: -20, windowMs: 3_600_000, owner: P.bob, team: 'Checkout', tags: ['checkout'], subscribers: [P.bob.email, P.alice.email] },
+      { id: 'alert_search_errors', name: 'Search errors above 50/h', alertType: 'threshold', metrics: ['search_error_count'], message: 'Search error count above 50 in an hour.', condition: 'greater', threshold: 50, windowMs: 3_600_000, owner: P.priya, team: 'Search' },
     ],
   };
 }

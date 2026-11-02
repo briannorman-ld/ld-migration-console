@@ -39,6 +39,8 @@ export type Lookup = { status: 'resolved'; optionKey: string; via: AppliedDecisi
  */
 export function acceptsOption(dp: Pick<DecisionPoint, 'type' | 'options'>, optionKey: string): boolean {
   if (dp.options.some((o) => o.key === optionKey)) return true;
+  // `maintainer_unknown` also takes a member or team the user picked on the People step.
+  if (dp.type === 'maintainer_unknown') return /^(member|team):.+/.test(optionKey);
   if (dp.type !== 'unit_type_kind') return false;
   if (optionKey.startsWith('create:')) return isValidContextKindKey(optionKey.slice('create:'.length));
   if (optionKey.startsWith('attribute:')) return isValidAttributeName(optionKey.slice('attribute:'.length));
@@ -128,6 +130,8 @@ export function optionLabel(d: Pick<DecisionPoint, 'type' | 'options'>, optionKe
   if (o) return o.label;
   if (d.type === 'unit_type_kind' && optionKey.startsWith('create:')) return `Create context kind “${optionKey.slice('create:'.length)}”`;
   if (d.type === 'unit_type_kind' && optionKey.startsWith('attribute:')) return `Keep “${optionKey.slice('attribute:'.length)}” as an attribute of the user context`;
+  if (d.type === 'maintainer_unknown' && optionKey.startsWith('member:')) return `Assign LD member ${optionKey.slice('member:'.length)}`;
+  if (d.type === 'maintainer_unknown' && optionKey.startsWith('team:')) return `Assign the team “${optionKey.slice('team:'.length)}”`;
   return optionKey;
 }
 

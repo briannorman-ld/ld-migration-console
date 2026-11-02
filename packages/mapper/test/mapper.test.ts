@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { CanonicalSnapshot, Condition, Config, Gate } from '@sslm/canonical';
-import { attributeOption, caseFoldedPattern, createKindOption, isValidContextKindKey, mapAutotune, mapConfig, mapGate, mapSegment, optionLabel, type MapArgs, type Resolution } from '../src/index.ts';
-import { acmeSnapshot, CAPS, NOW, profileFor, server } from './fixtures.ts';
+import { acceptsOption, attributeOption, caseFoldedPattern, createKindOption, isValidContextKindKey, mapAutotune, mapConfig, mapGate, mapPrompt, mapSegment, optionLabel, type MapArgs, type Resolution } from '../src/index.ts';
+import { acmeSnapshot, CAPS, DIRECTORY, NOW, profileFor, server } from './fixtures.ts';
 
 beforeAll(() => server.listen({ onUnhandledFrame: 'error' }));
 afterAll(() => server.close());
@@ -14,7 +14,8 @@ beforeAll(async () => {
 
 function args(gateId: string, over: Partial<MapArgs<Gate>> = {}): MapArgs<Gate> {
   const entity = web.gates.find((g) => g.id === gateId)!;
-  return { canonical: { snapshot: web }, entity, profile: profileFor(web, MAPPING), resolutions: new Map(), capabilities: CAPS, env: { statsig: 'production', ld: 'production' }, now: NOW, ...over };
+  // DIRECTORY: every Acme owner but Jordan Former is an LD member, so maintainers resolve unless a test says otherwise.
+  return { canonical: { snapshot: web }, entity, profile: profileFor(web, MAPPING), resolutions: new Map(), capabilities: CAPS, env: { statsig: 'production', ld: 'production' }, now: NOW, directory: DIRECTORY, ...over };
 }
 
 const types = (r: { unresolved: { type: string }[] }) => r.unresolved.map((d) => d.type).sort();
@@ -883,7 +884,7 @@ describe('known edge cases (docs/KNOWN-EDGE-CASES.md)', () => {
 describe('dynamic configs → JSON flags (PLAN §10.1; edge cases 10.1–10.9)', () => {
   function cargs(configId: string, over: Partial<MapArgs<Config>> = {}): MapArgs<Config> {
     const entity = web.configs.find((c) => c.id === configId)!;
-    return { canonical: { snapshot: web }, entity, profile: profileFor(web, MAPPING), resolutions: new Map(), capabilities: CAPS, env: { statsig: 'production', ld: 'production' }, now: NOW, ...over };
+    return { canonical: { snapshot: web }, entity, profile: profileFor(web, MAPPING), resolutions: new Map(), capabilities: CAPS, env: { statsig: 'production', ld: 'production' }, now: NOW, directory: DIRECTORY, ...over };
   }
   const names = (r: ReturnType<typeof mapConfig>) => r.shell.variations.map((v) => v.name);
 
@@ -1035,5 +1036,98 @@ describe('dynamic configs → JSON flags (PLAN §10.1; edge cases 10.1–10.9)',
     const base = web.configs.find((c) => c.id === 'checkout_config')!;
     const changed = mapConfig(cargs('checkout_config', { entity: { ...base, defaultValue: { max_items: 51 } } }));
     expect(changed.statsigFingerprint).not.toBe(a.statsigFingerprint);
+  });
+});
+
+describe('owner → maintainer (PLAN §8.3 maintainer_unknown; edge cases 1.5, 1.11)', () => {
+  /** stale_reviews_widget is owned by Jordan Former, who left Acme and is not an LD member. */
+  const former = (over: Partial<MapArgs<Gate>> = {}, team?: string) => {
+    const a = args('stale_reviews_widget', over);
+    return team ? { ...a, entity: { ...a.entity, team } } : a;
+  };
+
+  it('matches the owner by email against the LD member directory and sets maintainerId', () => {
+    const r = mapGate(args('kill_switch_payments'));
+    expect(r.shell.maintainerId).toBe('mem-sam');
+    expect(r.shell.maintainerTeamKey).toBeUndefined();
+    expect(types(r)).not.toContain('maintainer_unknown');
+  });
+
+  it('raises maintainer_unknown for an owner who is not a member, recommending the team when LD has it', () => {
+    const r = mapGate(former({}, 'Checkout'));
+    const d = r.unresolved.find((x) => x.type === 'maintainer_unknown')!;
+    expect(d.severity).toBe('choice');
+    expect(d.options.map((o) => o.key)).toEqual(['unassigned', 'team:checkout']);
+    expect(d.recommended).toBe('team:checkout');
+    // The preview applies the recommendation.
+    expect(r.shell.maintainerTeamKey).toBe('checkout');
+    expect(r.shell.maintainerId).toBeUndefined();
+    // Without a team in LD the only option is to leave it unassigned (partial).
+    const alone = mapGate(former());
+    expect(alone.unresolved.find((x) => x.type === 'maintainer_unknown')!.options.map((o) => o.key)).toEqual(['unassigned']);
+    expect(alone.fidelity.overall).toBe('partial');
+  });
+
+  it('without a directory the owner is unknown and the flag has no maintainer (partial), unless the profile decided', () => {
+    const { directory: _none, ...noDirectory } = args('kill_switch_payments');
+    const r = mapGate(noDirectory);
+    expect(types(r)).toContain('maintainer_unknown');
+    expect(r.shell.maintainerId).toBeUndefined();
+    expect(r.fidelity.notes.some((n) => n.fidelity === 'partial' && /no maintainer/.test(n.message))).toBe(true);
+
+    const profile = { ...profileFor(web, MAPPING), maintainers: { 'sam.taylor@acmeretail.example': { memberId: 'mem-picked' } } };
+    const chosen = mapGate({ ...noDirectory, profile });
+    expect(chosen.shell.maintainerId).toBe('mem-picked');
+    expect(types(chosen)).not.toContain('maintainer_unknown');
+
+    const unassigned = mapGate({ ...noDirectory, profile: { ...profile, maintainers: { 'sam.taylor@acmeretail.example': 'unassigned' } } });
+    expect(unassigned.shell.maintainerId).toBeUndefined();
+    expect(types(unassigned)).not.toContain('maintainer_unknown');
+  });
+
+  it('a decision answered with member:<id> or team:<key> is honoured; other answers are refused', () => {
+    const r = mapGate(former());
+    const d = r.unresolved.find((x) => x.type === 'maintainer_unknown')!;
+    expect(acceptsOption(d, 'member:mem-alice')).toBe(true);
+    expect(acceptsOption(d, 'team:growth')).toBe(true);
+    expect(acceptsOption(d, 'whatever')).toBe(false);
+    const resolutions = new Map<string, Resolution>([[d.id, { id: d.id, type: d.type, optionKey: 'member:mem-alice', scope: 'resource', fingerprint: d.fingerprint, decidedAt: NOW }]]);
+    const answered = mapGate(former({ resolutions }));
+    expect(answered.shell.maintainerId).toBe('mem-alice');
+    expect(types(answered)).not.toContain('maintainer_unknown');
+    expect(optionLabel(d, 'member:mem-alice')).toBe('Assign LD member mem-alice');
+  });
+
+  it('a team mapped in the profile wins over the directory, and a member always wins over the team', () => {
+    const profile = { ...profileFor(web, MAPPING), teams: { Checkout: 'payments-team' } };
+    const r = mapGate(former({ profile }, 'Checkout'));
+    expect(r.unresolved.find((x) => x.type === 'maintainer_unknown')!.recommended).toBe('team:payments-team');
+    // search_v2's owner (Priya) is a member and her team Search has no LD team: the member wins, no note.
+    const member = mapGate(args('search_v2'));
+    expect(member.shell.maintainerId).toBe('mem-priya');
+    expect(member.shell.maintainerTeamKey).toBeUndefined();
+  });
+});
+
+describe('prompts → AI Configs (PLAN §6; edge case 1.12)', () => {
+  it('maps the shell with provenance tags and a manual note about the unreadable versions', () => {
+    const p = web.prompts!.find((x) => x.id === 'support_reply_assistant')!;
+    const r = mapPrompt({ canonical: { snapshot: web }, entity: p, profile: profileFor(web, MAPPING), resolutions: new Map(), capabilities: CAPS, env: { statsig: 'production', ld: 'production' }, now: NOW, directory: DIRECTORY });
+    expect(r.key).toBe('support_reply_assistant');
+    expect(r.desired).toMatchObject({ key: 'support_reply_assistant', name: 'support_reply_assistant', mode: 'completion', maintainerId: 'mem-priya', tags: ['migrated-from-statsig', 'migration-src-web', 'search', 'core'] });
+    expect(r.fidelity.overall).toBe('manual');
+    expect(r.fidelity.notes.map((n) => n.fidelity)).toContain('manual');
+    expect(r.fidelity.notes.some((n) => /version 4/.test(n.message))).toBe(true);
+    expect(r.dependencies).toEqual([]);
+  });
+
+  it('an owner who left raises maintainer_unknown on the prompt too, and the fingerprint follows the shell', () => {
+    const p = web.prompts!.find((x) => x.id === 'product_description_writer')!;
+    const base = { canonical: { snapshot: web }, entity: p, profile: profileFor(web, MAPPING), resolutions: new Map(), capabilities: CAPS, env: { statsig: 'production', ld: 'production' }, now: NOW, directory: DIRECTORY };
+    const r = mapPrompt(base);
+    expect(r.unresolved.map((d) => d.type)).toEqual(['maintainer_unknown']);
+    expect(r.fidelity.notes.some((n) => /holdout/.test(n.message))).toBe(true);
+    const renamed = mapPrompt({ ...base, entity: { ...p, description: 'changed' } });
+    expect(renamed.statsigFingerprint).not.toBe(r.statsigFingerprint);
   });
 });

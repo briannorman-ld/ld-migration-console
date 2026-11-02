@@ -13,7 +13,7 @@
 import { normalizeCondition, toArray, type CanonicalSnapshot, type Condition, type Segment } from '@sslm/canonical';
 import { DROP_CONDITION, DROP_RULE, SKIP, type DecisionCollector, plannedContextKinds, plannedKindOptions } from './decisions.ts';
 import { attributeFor, attributeOption, configuredUnit, defaultKindFor, sanitizeKey, unitFromChoice, type UnitTarget } from './profile.ts';
-import type { DecisionOption, DecisionSubject, Dependency, DesiredRule, DesiredTarget, FidelityNote, IdListCoverages, IdLists, LdClause, LdOperator, LdRollout, MapperCapabilities, MappingProfile } from './types.ts';
+import type { DecisionOption, DecisionSubject, Dependency, DesiredRule, DesiredTarget, FidelityNote, IdListCoverages, IdLists, LdClause, LdDirectory, LdOperator, LdRollout, MapperCapabilities, MappingProfile } from './types.ts';
 
 export type Dnf = LdClause[][];
 export const ALWAYS: Dnf = [[]];
@@ -39,6 +39,8 @@ export interface ConditionContext {
   idLists: IdLists;
   /** Reconciliation results for uploaded raw-ID lists, by segment uid (PLAN §4.2). */
   coverage?: IdListCoverages;
+  /** LD members and teams for owner → maintainer matching (absent = not read). */
+  directory?: LdDirectory;
   nowMs: number;
   /**
    * Collects the timestamps at which a `time` condition that chose "schedule" flips, so the

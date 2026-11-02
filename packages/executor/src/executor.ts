@@ -12,7 +12,7 @@
  * segments filled by a CSV import. The first write a plan refuses updates the capability matrix.
  */
 import { footer as provenanceFooter, parseFooter as parseProvenanceFooter, PROP, readSync, SOURCE_KIND_LABEL, withFooter as withProvenanceFooter, type FooterInput } from '@sslm/canonical';
-import { LdAuthError, LdWriteError, type JsonPatchOp, type LdClient, type LdExperiment, type LdExperimentationSettings, type LdFlag, type LdFlagConfig, type LdMetric, type LdSegment, type SemanticPatch } from '@sslm/ld-client';
+import { LdAuthError, LdWriteError, type JsonPatchOp, type LdAiConfig, type LdClient, type LdExperiment, type LdExperimentationSettings, type LdFlag, type LdFlagConfig, type LdMetric, type LdSegment, type SemanticPatch } from '@sslm/ld-client';
 import { flagOwner, ownsSegment, syncPropertyKey, type PlanStep } from '@sslm/planner';
 import { SOURCE_KIND, type DesiredBandit, type DesiredFlagEnv, type DesiredRule, type DesiredSegment, type VariationOrRollout } from '@sslm/mapper';
 import type { MigrationSourceKind } from '@sslm/canonical';
@@ -51,6 +51,10 @@ export type LdWriter = Pick<
   | 'listScheduledChanges'
   | 'createScheduledChange'
   | 'deleteScheduledChange'
+  | 'getAiConfig'
+  | 'createAiConfig'
+  | 'patchAiConfig'
+  | 'deleteAiConfig'
 >;
 
 /** `pending_approval`: the write went into an LD approval request; `checkApprovals` moves it on. */
@@ -98,7 +102,7 @@ export interface ApprovalRecord {
 }
 
 export interface CapabilityUpdate {
-  key: 'prerequisites' | 'big_segments' | 'scheduled_changes' | 'approvals' | 'context_kinds';
+  key: 'prerequisites' | 'big_segments' | 'scheduled_changes' | 'approvals' | 'context_kinds' | 'invite_members' | 'approval_settings' | 'ai_configs' | 'teams';
   status: 'available' | 'unavailable' | 'not_permitted';
   evidence: string;
 }
@@ -164,6 +168,8 @@ export function stepLabel(s: PlanStep): string {
       return `Metric “${s.key}” (project)`;
     case 'create_bandit':
       return `Bandit “${s.key}” in ${s.ldEnv} (draft)`;
+    case 'upsert_ai_config':
+      return `AI Config “${s.key}” (project)`;
   }
 }
 
@@ -372,7 +378,7 @@ export class Executor {
   private comment(run: RunRecord, s: PlanStep): string {
     const by = this.opts.actor ? ` by ${this.opts.actor}` : '';
     const ref = `run #${run.id.slice(0, 8)}`;
-    if (s.op === 'update_flag_env' || s.op === 'upsert_segment' || s.op === 'upsert_metric' || s.op === 'create_bandit') {
+    if (s.op === 'update_flag_env' || s.op === 'upsert_segment' || s.op === 'upsert_metric' || s.op === 'create_bandit' || s.op === 'upsert_ai_config') {
       const p = s.provenance;
       return `Synced from ${SOURCE_KIND_LABEL[p.sourceKind ?? SOURCE_KIND]} ${p.statsigType} ${p.statsigId}${p.statsigVersion !== undefined ? ` v${p.statsigVersion}` : ''} (source ${p.sourceAlias})${by}, ${ref}`;
     }
@@ -400,7 +406,50 @@ export class Executor {
         return this.metric(run, rec, s);
       case 'create_bandit':
         return this.bandit(run, rec, s);
+      case 'upsert_ai_config':
+        return this.aiConfig(run, rec, s);
     }
+  }
+
+  /**
+   * StatSig prompt → LD AI Config shell (PLAN §6). AI Configs have no custom properties, so the
+   * provenance footer goes in the description and ownership is the pair of tags, like segments.
+   * Variations are never touched: they are the user's (the Console API cannot read StatSig's).
+   */
+  private async aiConfig(run: RunRecord, rec: StepRecord, s: Extract<PlanStep, { op: 'upsert_ai_config' }>): Promise<string> {
+    const d = s.desired;
+    let current = await this.c.getAiConfig(this.p, s.key, this.signal);
+    if (current && !rec.created && rec.preImage === undefined) {
+      if (!s.adopt && !ownsSegment({ key: current.key, tags: current.tags ?? [] }, s.provenance.sourceAlias)) throw new Error(`AI Config “${s.key}” appeared since planning and wasn't created by this app. Re-plan to decide.`);
+      rec.preImage = current;
+    }
+    const description = withFooter(d.description, footer(s.provenance, this.now()));
+    const maintainer = d.maintainerId ? { maintainerId: d.maintainerId } : d.maintainerTeamKey ? { maintainerTeamKey: d.maintainerTeamKey } : {};
+    if (!current) {
+      if (run.dryRun) return `Would create AI Config “${s.key}” (${d.tags.join(', ')}); its variations are added in LD by hand.`;
+      try {
+        current = await this.c.createAiConfig(this.p, { key: d.key, name: d.name, description, tags: d.tags, mode: d.mode, ...maintainer }, this.signal);
+      } catch (e) {
+        if (!(e instanceof LdWriteError && e.status === 409)) throw e;
+        current = await this.c.getAiConfig(this.p, s.key, this.signal);
+        if (!current || !ownsSegment({ key: current.key, tags: current.tags ?? [] }, s.provenance.sourceAlias)) throw e;
+      }
+      rec.created = true;
+      return `Created AI Config “${s.key}”. Add its variations in LaunchDarkly: StatSig's API does not expose prompt versions.`;
+    }
+    const body: Parameters<LdWriter['patchAiConfig']>[2] = {};
+    if (current.name !== d.name) body.name = d.name;
+    if ((current.description ?? '') !== description) body.description = description;
+    const tags = union(current.tags ?? [], d.tags);
+    if (tags.length !== (current.tags ?? []).length) body.tags = tags;
+    const m = current._maintainer;
+    if (d.maintainerId && m?.member?._id !== d.maintainerId) body.maintainerId = d.maintainerId;
+    else if (d.maintainerTeamKey && m?.team?.key !== d.maintainerTeamKey) body.maintainerTeamKey = d.maintainerTeamKey;
+    const fields = Object.keys(body);
+    if (fields.length === 0) return `AI Config “${s.key}” already up to date.`;
+    if (run.dryRun) return `Would update AI Config “${s.key}” (${fields.join(', ')}).`;
+    await this.c.patchAiConfig(this.p, s.key, body, this.signal);
+    return `Updated AI Config “${s.key}” (${fields.join(', ')}).`;
   }
 
   private async randomizationUnit(run: RunRecord, rec: StepRecord, s: Extract<PlanStep, { op: 'ensure_randomization_unit' }>): Promise<string> {
@@ -643,7 +692,18 @@ export class Executor {
     }
     if (!flag) {
       if (run.dryRun) return d.variations.every((v) => typeof v.value === 'boolean') ? `Would create boolean flag “${s.key}” (${d.tags.join(', ')}).` : `Would create JSON flag “${s.key}” with ${d.variations.length} variations (${d.tags.join(', ')}).`;
-      const body = { key: d.key, name: d.name, description: d.description, variations: d.variations, defaults: d.defaults, temporary: d.temporary, tags: d.tags, customProperties: d.customProperties, clientSideAvailability: d.clientSideAvailability };
+      const body = {
+        key: d.key,
+        name: d.name,
+        description: d.description,
+        variations: d.variations,
+        defaults: d.defaults,
+        temporary: d.temporary,
+        tags: d.tags,
+        customProperties: d.customProperties,
+        clientSideAvailability: d.clientSideAvailability,
+        ...(d.maintainerId ? { maintainerId: d.maintainerId } : d.maintainerTeamKey ? { maintainerTeamKey: d.maintainerTeamKey } : {}),
+      };
       try {
         flag = await this.c.createFlag(this.p, body, this.signal);
       } catch (e) {
@@ -853,6 +913,18 @@ export class Executor {
         if (rec.created) await this.c.patchExperimentSemantic(this.p, s.ldEnv, s.key, { comment, instructions: [{ kind: 'archiveExperiment' }] }, this.signal);
         return;
       }
+      case 'upsert_ai_config': {
+        if (rec.created) {
+          await this.c.deleteAiConfig(this.p, s.key, this.signal).catch((e) => {
+            if (!(e instanceof LdWriteError && e.status === 404)) throw e;
+          });
+          return;
+        }
+        const pre = rec.preImage as LdAiConfig | undefined;
+        if (!pre) return;
+        await this.c.patchAiConfig(this.p, s.key, { name: pre.name, description: pre.description ?? '', tags: pre.tags ?? [] }, this.signal);
+        return;
+      }
       case 'update_flag_env': {
         // Approval requests still waiting are withdrawn; scheduled changes this run created are deleted.
         for (const a of rec.approvals ?? []) if (a.status === 'pending' && a.purpose !== 'undo') await this.c.deleteFlagApprovalRequest(this.p, s.key, s.ldEnv, a.id).catch(ignore404);
@@ -969,6 +1041,10 @@ function shellPatch(flag: LdFlag, d: Extract<PlanStep, { op: 'upsert_flag_shell'
   if ((flag.temporary ?? true) !== d.temporary) ops.push({ op: 'replace', path: '/temporary', value: d.temporary });
   const csa = flag.clientSideAvailability;
   if (!csa || !!csa.usingEnvironmentId !== d.clientSideAvailability.usingEnvironmentId || !!csa.usingMobileKey !== d.clientSideAvailability.usingMobileKey) ops.push({ op: 'replace', path: '/clientSideAvailability', value: d.clientSideAvailability });
+  // Maintainer (PLAN §8.3): set when the mapper resolved one and LD holds a different one. A flag
+  // created by a service token has none; one somebody set by hand is only replaced, never cleared.
+  if (d.maintainerId && flag.maintainerId !== d.maintainerId) ops.push({ op: 'add', path: '/maintainerId', value: d.maintainerId });
+  else if (d.maintainerTeamKey && !d.maintainerId && flag.maintainerTeamKey !== d.maintainerTeamKey) ops.push({ op: 'add', path: '/maintainerTeamKey', value: d.maintainerTeamKey });
   for (const [k, v] of Object.entries(d.customProperties)) {
     const cur = flag.customProperties?.[k];
     if (!cur || JSON.stringify(cur.value ?? []) !== JSON.stringify(v.value)) ops.push({ op: 'add', path: `/customProperties/${pointer(k)}`, value: v });

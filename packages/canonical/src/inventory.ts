@@ -10,12 +10,14 @@ export const ENTITY_COLLECTIONS = {
   autotune: 'autotunes',
   metric: 'metrics',
   param_store: 'paramStores',
+  prompt: 'prompts',
 } as const satisfies Record<EntityKind, keyof CanonicalSnapshot>;
 
 export const ENTITY_KINDS = Object.keys(ENTITY_COLLECTIONS) as EntityKind[];
 
+/** Snapshots taken before a collection existed lack it (`prompts` since 2026-11-02): read as empty. */
 export function entitiesOf(snapshot: CanonicalSnapshot, kind: EntityKind): Entity[] {
-  return snapshot[ENTITY_COLLECTIONS[kind]] as Entity[];
+  return (snapshot[ENTITY_COLLECTIONS[kind]] ?? []) as Entity[];
 }
 
 export function allEntities(snapshot: CanonicalSnapshot): Entity[] {

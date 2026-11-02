@@ -1,4 +1,5 @@
 import {
+  AlertSchema,
   AutotuneSchema,
   CompanySchema,
   DynamicConfigSchema,
@@ -11,6 +12,9 @@ import {
   MetricSourceSchema,
   OverridesSchema,
   ParamStoreSchema,
+  ProjectSettingsSchema,
+  PromptSchema,
+  ReviewSettingsSchema,
   SegmentSchema,
   StatsigAuthError,
   StatsigUnreachableError,
@@ -20,6 +24,7 @@ import {
   UnitIdTypeSchema,
   UserSchema,
   type SchemaIssue,
+  type StatsigAlert,
   type StatsigAutotune,
   type StatsigCompany,
   type StatsigConsoleClient,
@@ -35,6 +40,9 @@ import {
   type StatsigOverrides,
   type StatsigParamStore,
   type StatsigProject,
+  type StatsigProjectSettings,
+  type StatsigPrompt,
+  type StatsigReviewSettings,
   type StatsigSegment,
   type StatsigTag,
   type StatsigTargetApp,
@@ -68,7 +76,12 @@ export interface RawConsoleSnapshot {
   metricSources: StatsigMetricSource[];
   paramStores: StatsigParamStore[];
   users: StatsigUser[];
+  /** Team details (`/users/teams/{id}`, with members) when readable; otherwise the list entries. */
   teams: StatsigTeam[];
+  prompts: StatsigPrompt[];
+  alerts: StatsigAlert[];
+  reviewSettings: StatsigReviewSettings | null;
+  projectSettings: StatsigProjectSettings | null;
   overrides: StatsigOverrides | null;
   schemaIssues: SchemaIssue[];
   /** Endpoints that failed without failing the crawl (missing plan feature, 403 scope, …). */
@@ -92,6 +105,7 @@ const JOBS_BY_KIND = {
   autotune: ['autotunes'],
   metric: ['metrics'],
   param_store: ['paramStores'],
+  prompt: ['prompts'],
 } as const satisfies Record<EntityKind, readonly string[]>;
 
 export interface CrawlOptions {
@@ -173,6 +187,10 @@ export async function crawlConsoleProject(
     paramStores: () => optional('/param_stores', [], () => client.list('/param_stores', ParamStoreSchema, {}, signal)),
     users: () => optional('/users', [], () => client.list('/users', UserSchema, {}, signal)),
     teams: () => optional('/users/teams', [], () => client.list('/users/teams', TeamSchema, {}, signal)),
+    prompts: () => optional('/prompts', [], () => client.list('/prompts', PromptSchema, {}, signal)),
+    alerts: () => optional('/alerts', [], () => client.list('/alerts', AlertSchema, {}, signal)),
+    reviewSettings: () => optional('/settings/reviews', null, () => client.get('/settings/reviews', ReviewSettingsSchema, {}, signal)),
+    projectSettings: () => optional('/settings/project', null, () => client.get('/settings/project', ProjectSettingsSchema, {}, signal)),
     overrides: () => optional('/overrides', null, () => client.get('/overrides', OverridesSchema, {}, signal)),
   } as const;
   // Kinds the user left out are not fetched: their jobs resolve to the empty fallback without a request.
@@ -191,6 +209,10 @@ export async function crawlConsoleProject(
     total++;
     metricSources = await optional('/metrics/metric_source/list', [], () => client.list('/metrics/metric_source/list', MetricSourceSchema, {}, signal));
   }
+
+  // 2b. Team members (for LD team creation and owner → maintainer matching): one detail call per team.
+  total += r.teams.length;
+  const teams = await Promise.all(r.teams.map((t) => optional(`/users/teams/${t.id}`, t, () => client.get(`/users/teams/${encodeURIComponent(t.id)}`, TeamSchema, {}, signal))));
 
   // 3. Small ID lists.
   const eagerMax = opts.eagerIdListMax ?? 1000;
@@ -214,6 +236,7 @@ export async function crawlConsoleProject(
     fetchedAt: new Date().toISOString(),
     project,
     ...r,
+    teams,
     metricSources,
     idLists,
     schemaIssues,
@@ -238,6 +261,10 @@ const EMPTY_JOBS = {
   paramStores: [],
   users: [],
   teams: [],
+  prompts: [],
+  alerts: [],
+  reviewSettings: null,
+  projectSettings: null,
   overrides: null,
 };
 

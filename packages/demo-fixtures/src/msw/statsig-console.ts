@@ -132,7 +132,15 @@ export function createStatsigConsoleHandlers(opts: MockStatsigOptions): HttpHand
     list('/metrics/metric_source/list', (d) => d.metricSources),
     list('/param_stores', (d) => d.paramStores),
     list('/users', (d) => d.users),
-    list('/users/teams', (d) => d.teams),
+    // The list omits members (TeamDtoWithoutMembersDto); the detail has them (TeamDto).
+    list('/users/teams', (d) => d.teams.map(({ members: _m, admins: _a, ...t }) => t)),
+    byId('/users/teams/:id', (d) => d.teams),
+    list('/prompts', (d) => d.prompts),
+    byId('/prompts/:id', (d) => d.prompts),
+    list('/alerts', (d) => d.alerts),
+    byId('/alerts/:id', (d) => d.alerts),
+    route('/settings/reviews', ({ d }) => single(d.reviewSettings)),
+    route('/settings/project', ({ d }) => single(d.projectSettings)),
     route('/overrides', ({ d }) => single(d.overrides)),
     route('/exposure_count', ({ url, d }) => {
       const ids = (url.searchParams.get('ids') ?? '').split(',').filter(Boolean).slice(0, 25);

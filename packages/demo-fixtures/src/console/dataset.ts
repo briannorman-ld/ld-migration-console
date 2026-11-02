@@ -1,4 +1,5 @@
 import {
+  alert,
   autotune,
   dynamicConfig,
   experiment,
@@ -7,6 +8,7 @@ import {
   holdout,
   layer,
   metric,
+  prompt,
   segment,
   type BuildContext,
   type IdListSeed,
@@ -47,7 +49,16 @@ export interface ConsoleProjectDataset {
   metricSources: JsonObject[];
   paramStores: JsonObject[];
   users: JsonObject[];
+  /** TeamDto with `members` and `admins`; the list route strips them (TeamDtoWithoutMembersDto). */
   teams: JsonObject[];
+  /** `/console/v1/prompts` (ExternalPromptDto). */
+  prompts: JsonObject[];
+  /** `/console/v1/alerts` (AlertSchemaDto). */
+  alerts: JsonObject[];
+  /** `/console/v1/settings/reviews`. */
+  reviewSettings: JsonObject;
+  /** `/console/v1/settings/project`. */
+  projectSettings: JsonObject;
   /** `/console/v1/overrides` payload. */
   overrides: JsonObject;
 }
@@ -122,10 +133,29 @@ export function buildConsoleDataset(seed: ProjectSeed, snapshot: number, now: nu
       const [firstName = '', lastName = ''] = u.name.split(' ');
       return { userID: u.id, email: u.email, firstName, lastName, role: u.role };
     }),
+    prompts: (seed.prompts ?? []).map((p) => prompt(ctx, p)),
+    alerts: (seed.alerts ?? []).map((a) => alert(ctx, a)),
+    reviewSettings: {
+      is_config_review_required: seed.reviews?.configReviewRequired ?? false,
+      is_metric_review_required: seed.reviews?.metricReviewRequired ?? false,
+      is_metric_review_required_on_verified_only: false,
+      is_whn_analysis_only_review_required: false,
+      is_whn_source_review_required: false,
+    },
+    projectSettings: { name: seed.projectName, visibility: 'OPEN', ...(seed.defaultUnitType ? { default_unit_type: seed.defaultUnitType } : {}) },
     teams: seed.teams.map((t) => ({
       name: t,
       description: `${t} team`,
       id: pseudoId(`${seed.projectName}/team/${t}`),
+      members: (seed.teamMembers?.[t] ?? []).map((m) => {
+        const [firstName = '', lastName = ''] = m.name.split(' ');
+        const role = seed.users.find((u) => u.email === m.email)?.role ?? 'Member';
+        return { userID: m.id, email: m.email, firstName, lastName, role };
+      }),
+      admins: (seed.teamMembers?.[t] ?? []).slice(0, 1).map((m) => {
+        const [firstName = '', lastName = ''] = m.name.split(' ');
+        return { userID: m.id, email: m.email, firstName, lastName, role: seed.users.find((u) => u.email === m.email)?.role ?? 'Member' };
+      }),
       defaultGateMetrics: [],
       defaultExperimentPrimaryMetrics: [],
       defaultExperimentSecondaryMetrics: [],

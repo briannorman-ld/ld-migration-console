@@ -300,9 +300,7 @@
       "flag": "legacy-kill-switch",
       "flagKind": "boolean",
       "fidelity": "full",
-      "notes": [
-        "full: Maintainer (ops@acme-legacy.example) not carried: member and team identities belong to the source account. [flag settings]"
-      ],
+      "notes": [],
       "decisions": [],
       "dependencies": [],
       "shell": {

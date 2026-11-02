@@ -25,6 +25,7 @@ import {
 import { LIST_SEGMENT_MAX, SkipItem, unique } from './conditions.ts';
 import { DecisionCollector, DROP_CONDITION, DROP_RULE, SKIP, plannedContextKinds, plannedKindOptions } from './decisions.ts';
 import { provenanceProperties, report, type MapArgs, type MapOutcome } from './gate.ts';
+import { chooseMaintainer } from './maintainer.ts';
 import { configuredUnit, kindFromChoice, sanitizeTag } from './profile.ts';
 import type { CustomProperty, DecisionOption, DecisionSubject, Dependency, DesiredFlagEnv, DesiredFlagShell, DesiredRule, DesiredSegment, DesiredSegmentRule, DesiredTarget, FidelityNote, LdClause, LdOperator, VariationOrRollout } from './types.ts';
 
@@ -425,7 +426,11 @@ function flagShell(ctx: Ctx, flag: NeutralFlag, alias: string, tagMigrated: stri
     if (choice === 'copy') for (const [k, v] of own) props[k] = { name: v.name, value: [...v.value] };
     else ctx.fidelity.push({ fidelity: 'partial', message: `${own.length} custom propert${own.length === 1 ? 'y' : 'ies'} not copied.`, location: 'custom properties' });
   }
-  if (flag.maintainer) ctx.fidelity.push({ fidelity: 'full', message: `Maintainer${flag.maintainer.email ? ` (${flag.maintainer.email})` : ''}${flag.maintainer.teamKey ? ` and team “${flag.maintainer.teamKey}”` : ''} not carried: member and team identities belong to the source account.`, location: 'flag settings' });
+  // Member IDs belong to the source account; the maintainer is matched by email (and the team by key) in the target, like a StatSig owner.
+  const maintainer = flag.maintainer
+    ? chooseMaintainer({ profile: ctx.args.profile, ...(ctx.args.directory ? { directory: ctx.args.directory } : {}), decisions: ctx.decisions, subject: ctx.subject, fidelity: ctx.fidelity }, { ...(flag.maintainer.email ? { owner: { id: flag.maintainer.id, email: flag.maintainer.email } } : {}), team: flag.maintainer.teamKey ?? null })
+    : {};
+  if (flag.maintainer?.id && !flag.maintainer.email && !flag.maintainer.teamKey) ctx.fidelity.push({ fidelity: 'full', message: `Maintainer not carried: ${sourceLabel(ctx)} gave only a member ID, which belongs to the source account.`, location: 'flag settings' });
   if (!flag.clientSideAvailability) ctx.fidelity.push({ fidelity: 'full', message: `${sourceLabel(ctx)} did not report client-side availability; the target flag is server-side only until changed.`, location: 'flag settings' });
 
   return {
@@ -438,6 +443,7 @@ function flagShell(ctx: Ctx, flag: NeutralFlag, alias: string, tagMigrated: stri
     tags,
     clientSideAvailability: flag.clientSideAvailability ?? { usingEnvironmentId: false, usingMobileKey: false },
     customProperties: props,
+    ...maintainer,
   };
 }
 

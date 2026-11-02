@@ -16,7 +16,10 @@ export type CapabilityKey =
   | 'release_pipelines'
   | 'flag_links'
   | 'members'
+  | 'invite_members'
   | 'teams'
+  | 'ai_configs'
+  | 'approval_settings'
   | 'warehouse_native';
 
 /**
@@ -95,8 +98,11 @@ const META: Record<CapabilityKey, { label: string; requirement: string; fallback
   metric_groups: { label: 'Metric groups (funnels)', requirement: 'Beta', fallback: 'Individual metrics.' },
   release_pipelines: { label: 'Release pipelines, guarded rollouts', requirement: 'Enterprise (beta)', fallback: 'Guidance only.' },
   flag_links: { label: 'Flag links', requirement: 'Beta', fallback: 'Custom property holding the StatSig permalink.' },
-  members: { label: 'Member lookup by email', requirement: 'Admin / Enterprise', fallback: 'Default maintainer, or a manual member picker.' },
-  teams: { label: 'Teams', requirement: 'Enterprise', fallback: 'Default maintainer.' },
+  members: { label: 'Member lookup by email', requirement: 'Reader on members', fallback: 'Owners cannot be matched: flags are created without a maintainer (maintainer_unknown decision), the owner email stays in a custom property.' },
+  invite_members: { label: 'Invite members', requirement: 'Admin / Owner, or createMember', fallback: 'Ask an LD admin to invite the missing owners; re-probe, then re-sync to set maintainers.' },
+  teams: { label: 'Teams', requirement: 'Enterprise', fallback: 'StatSig teams are not recreated; a flag whose owner is unknown stays without a maintainer.' },
+  ai_configs: { label: 'AI Configs', requirement: 'AI Configs enabled on the project', fallback: 'StatSig prompts are listed as a checklist to recreate by hand.' },
+  approval_settings: { label: 'Environment approval settings', requirement: 'Enterprise + updateApprovalSettings', fallback: 'Turn on required approvals in the LD environment settings by hand.' },
   warehouse_native: {
     label: 'Warehouse-native data sources',
     requirement: 'UI only (Admin)',
@@ -184,6 +190,7 @@ export async function probeCapabilities(client: LdClient, projectKey: string, op
     releasePipelines: { path: `/projects/${p}/release-pipelines`, beta: true, query: { limit: '1' } },
     members: { path: '/members', query: { limit: '1' } },
     teams: { path: '/teams', query: { limit: '1' } },
+    aiConfigs: { path: `/projects/${p}/ai-configs`, query: { limit: '1' } },
     ...(firstEnv
       ? {
           holdouts: { path: `/projects/${p}/environments/${encodeURIComponent(firstEnv)}/holdouts`, query: { limit: '1' } },
@@ -247,7 +254,24 @@ export async function probeCapabilities(client: LdClient, projectKey: string, op
     cap('release_pipelines', fromProbe(results.releasePipelines, 'release pipelines')),
     cap('flag_links', { status: 'unknown', evidence: 'Needs an existing flag to probe; checked on first use.' }),
     cap('members', fromProbe(results.members, 'members')),
+    cap(
+      'invite_members',
+      token.role === 'admin' || token.role === 'owner'
+        ? { status: 'available', evidence: `token role ${token.role}` }
+        : token.role
+          ? { status: 'not_permitted', evidence: `token role ${token.role}; inviting needs Admin, Owner or a createMember grant` }
+          : { status: 'unknown', evidence: 'Token role unknown (custom role?); the first invite decides.' },
+    ),
     cap('teams', fromProbe(results.teams, 'teams')),
+    cap('ai_configs', fromProbe(results.aiConfigs, 'AI Configs')),
+    cap(
+      'approval_settings',
+      environments.some((e) => e.deniedActions.includes('updateApprovalSettings'))
+        ? { status: 'not_permitted', evidence: '_access.denied includes updateApprovalSettings on an environment' }
+        : anyApprovals
+          ? { status: 'unknown', evidence: 'Approvals are enabled on the plan; whether this token may change the settings is decided by the first write.' }
+          : { status: 'unknown', evidence: 'Approval settings appear only when the feature is enabled; the first write decides.' },
+    ),
     cap('warehouse_native', { status: 'manual', evidence: 'Warehouse data sources cannot be created through the API.' }),
   ];
 

@@ -7,8 +7,8 @@
  */
 import type { MigrationSelection } from './migration.ts';
 
-export type SelectionKind = 'gate' | 'config' | 'autotune' | 'flag' | 'segment';
-const KINDS: ReadonlySet<string> = new Set<SelectionKind>(['gate', 'config', 'autotune', 'flag', 'segment']);
+export type SelectionKind = 'gate' | 'config' | 'autotune' | 'flag' | 'segment' | 'prompt';
+const KINDS: ReadonlySet<string> = new Set<SelectionKind>(['gate', 'config', 'autotune', 'flag', 'segment', 'prompt']);
 
 export function kindOfUid(uid: string): SelectionKind | undefined {
   const k = uid.split('/')[1];
@@ -17,7 +17,7 @@ export function kindOfUid(uid: string): SelectionKind | undefined {
 
 /** The plan request for a set of uids; uids of other kinds (experiments, say) are left out. */
 export function toSelection(uids: Iterable<string>): MigrationSelection {
-  const sel: Required<Omit<MigrationSelection, 'contextKinds'>> = { gates: [], configs: [], autotunes: [], flags: [], segments: [] };
+  const sel: Required<Omit<MigrationSelection, 'contextKinds'>> = { gates: [], configs: [], autotunes: [], flags: [], segments: [], prompts: [] };
   for (const uid of uids) {
     switch (kindOfUid(uid)) {
       case 'gate':
@@ -35,6 +35,9 @@ export function toSelection(uids: Iterable<string>): MigrationSelection {
       case 'segment':
         sel.segments.push(uid);
         break;
+      case 'prompt':
+        sel.prompts.push(uid);
+        break;
     }
   }
   return sel;
@@ -46,6 +49,7 @@ const NOUN: Record<SelectionKind, [string, string]> = {
   autotune: ['autotune', 'autotunes'],
   flag: ['flag', 'flags'],
   segment: ['segment', 'segments'],
+  prompt: ['AI Config', 'AI Configs'],
 };
 
 /** "5 gates, 2 dynamic configs and 1 segment" (kinds in migration order). */
@@ -55,7 +59,7 @@ export function describeUids(uids: Iterable<string>): string {
     const k = kindOfUid(uid);
     if (k) counts.set(k, (counts.get(k) ?? 0) + 1);
   }
-  const parts = (['segment', 'gate', 'config', 'flag', 'autotune'] as SelectionKind[]).filter((k) => counts.get(k)).map((k) => `${counts.get(k)} ${NOUN[k][counts.get(k) === 1 ? 0 : 1]}`);
+  const parts = (['segment', 'gate', 'config', 'flag', 'autotune', 'prompt'] as SelectionKind[]).filter((k) => counts.get(k)).map((k) => `${counts.get(k)} ${NOUN[k][counts.get(k) === 1 ? 0 : 1]}`);
   if (parts.length <= 1) return parts[0] ?? 'nothing';
   return `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}`;
 }

@@ -10,6 +10,7 @@ export const KIND_LABEL: Record<EntityKind, string> = {
   autotune: 'Autotunes',
   metric: 'Metrics',
   param_store: 'Param stores',
+  prompt: 'AI Configs',
 };
 
 /** Badge label and tone per source kind (sidebar, Connections, Snapshots). */

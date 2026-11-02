@@ -39,6 +39,8 @@ export function guidanceFor(entity: Entity): ItemGuidance {
       return paramStore(entity);
     case 'config':
       return config(entity);
+    case 'prompt':
+      return { status: 'decisions', verdict: 'shell migrates', detail: `Becomes an LD AI Config with this name, description, tags and maintainer${entity.version !== undefined ? ` (StatSig version ${entity.version})` : ''}; the prompt versions are not readable through the Console API, so the variations are added in LD by hand.`, coverageId: 'operations.ai' };
     default:
       return { status: 'decisions', verdict: 'migrates', detail: 'Open the side-by-side view for the mapping and its decisions.', coverageId: `${entity.kind}s` };
   }
@@ -107,11 +109,11 @@ export interface InventorySummary {
 }
 
 /** Counts a workspace's inventory against the matrix: what migrates now, what waits, what has no equivalent. */
-export function summarizeInventory(snapshots: readonly { gates: Entity[]; configs: Entity[]; segments: Entity[]; experiments: Entity[]; layers: Entity[]; holdouts: Entity[]; autotunes: Entity[]; metrics: Entity[]; paramStores: Entity[] }[]): InventorySummary {
+export function summarizeInventory(snapshots: readonly { gates: Entity[]; configs: Entity[]; segments: Entity[]; experiments: Entity[]; layers: Entity[]; holdouts: Entity[]; autotunes: Entity[]; metrics: Entity[]; paramStores: Entity[]; prompts?: Entity[] }[]): InventorySummary {
   const zero = (): Record<CoverageStatus, number> => ({ migrates: 0, decisions: 0, guided: 0, planned: 0, none: 0 });
   const out: InventorySummary = { byStatus: zero(), byKind: {}, total: 0, archived: 0 };
   for (const s of snapshots) {
-    const all: Entity[] = [...s.gates, ...s.configs, ...s.segments, ...s.experiments, ...s.layers, ...s.holdouts, ...s.autotunes, ...s.metrics, ...s.paramStores];
+    const all: Entity[] = [...s.gates, ...s.configs, ...s.segments, ...s.experiments, ...s.layers, ...s.holdouts, ...s.autotunes, ...s.metrics, ...s.paramStores, ...(s.prompts ?? [])];
     for (const e of all) {
       if (e.archived) {
         out.archived++;

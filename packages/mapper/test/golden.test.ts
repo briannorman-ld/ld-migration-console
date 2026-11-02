@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { CanonicalSnapshot } from '@sslm/canonical';
-import { mapAutotune, mapConfig, mapGate, mapNeutralFlag, mapNeutralSegment, mapSegment } from '../src/index.ts';
-import { acmeSnapshot, CAPS, legacySnapshot, NOW, profileFor, server } from './fixtures.ts';
+import { mapAutotune, mapConfig, mapGate, mapNeutralFlag, mapNeutralSegment, mapPrompt, mapSegment } from '../src/index.ts';
+import { acmeSnapshot, CAPS, DIRECTORY, legacySnapshot, NOW, profileFor, server } from './fixtures.ts';
 
 beforeAll(() => server.listen({ onUnhandledFrame: 'error' }));
 afterAll(() => server.close());
@@ -15,7 +15,8 @@ const MAPPING = { development: null, staging: 'test', production: 'production', 
 
 function golden(snap: CanonicalSnapshot, statsig: string, ld: string) {
   const profile = profileFor(snap, MAPPING);
-  const args = { canonical: { snapshot: snap }, profile, resolutions: new Map(), capabilities: CAPS, env: { statsig, ld }, now: NOW };
+  // DIRECTORY: every Acme owner but Jordan Former is an LD member, so maintainers resolve except theirs (maintainer_unknown).
+  const args = { canonical: { snapshot: snap }, profile, resolutions: new Map(), capabilities: CAPS, env: { statsig, ld }, now: NOW, directory: DIRECTORY };
   const gates = snap.gates.map((g) => {
     const r = mapGate({ ...args, entity: g });
     return {
@@ -72,7 +73,20 @@ function golden(snap: CanonicalSnapshot, statsig: string, ld: string) {
       bandit: r.bandit ? { treatments: r.bandit.treatments.map((t) => `${t.name}${t.baseline ? ' (baseline)' : ''} ${t.allocationPercent}%`), metricKey: r.bandit.metricKey, randomizationUnit: r.bandit.randomizationUnit } : null,
     };
   });
-  return { gates, configs, segments, autotunes };
+  // Project-level: the same for every environment, so only the production goldens carry them meaningfully.
+  const prompts = (snap.prompts ?? []).map((p) => {
+    const r = mapPrompt({ ...args, entity: p });
+    return {
+      prompt: p.id,
+      key: r.key,
+      ...(r.skipped ? { skipped: r.skipped } : {}),
+      fidelity: r.fidelity.overall,
+      notes: r.fidelity.notes.map((n) => `${n.fidelity}: ${n.message}${n.location ? ` [${n.location}]` : ''}`),
+      decisions: r.unresolved.map((d) => `${d.severity} ${d.type} (${d.subject.location ?? d.subject.id}) → ${d.recommended ?? 'no default'}`),
+      desired: r.desired,
+    };
+  });
+  return { gates, configs, segments, autotunes, prompts };
 }
 
 describe('mapper golden files', () => {
@@ -96,7 +110,7 @@ describe('mapper golden files', () => {
   ] as const)('acme-legacy (LD source) %s → LD %s', async (source, ld) => {
     const snap = await legacySnapshot();
     const profile = profileFor(snap, { test: 'test', production: 'production' });
-    const args = { canonical: { snapshot: snap }, profile, resolutions: new Map(), capabilities: { ...CAPS, existingContextKinds: ['user', 'organization'] }, env: { statsig: source, ld }, now: NOW };
+    const args = { canonical: { snapshot: snap }, profile, resolutions: new Map(), capabilities: { ...CAPS, existingContextKinds: ['user', 'organization'] }, env: { statsig: source, ld }, now: NOW, directory: DIRECTORY };
     const flags = snap.neutral!.flags.map((f) => {
       const r = mapNeutralFlag({ ...args, entity: f });
       return {

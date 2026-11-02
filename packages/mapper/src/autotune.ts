@@ -14,6 +14,7 @@ import { fingerprint, stableStringify, type Autotune } from '@sslm/canonical';
 import { resolveKind, SkipItem, unique, type ConditionContext, resolveUnit, rolloutFor } from './conditions.ts';
 import { DecisionCollector, SKIP } from './decisions.ts';
 import { chooseClientSideAvailability, provenanceProperties, report, sourceTag, TAG_MIGRATED, type MapArgs, type MapOutcome } from './gate.ts';
+import { chooseMaintainer } from './maintainer.ts';
 import { sanitizeKey, sanitizeTag } from './profile.ts';
 import type { Dependency, DesiredBandit, DesiredFlagEnv, DesiredFlagShell, DesiredMetric, DesiredTreatment, FidelityNote, VariationOrRollout } from './types.ts';
 
@@ -57,6 +58,7 @@ export function mapAutotune(args: MapArgs<Autotune>): AutotuneMapResult {
     snapshot,
     sourceId,
     idLists: canonical.idLists ?? {},
+    ...(args.directory ? { directory: args.directory } : {}),
     nowMs: Date.parse(args.now),
     decisions,
     subject,
@@ -214,6 +216,7 @@ export function mapAutotune(args: MapArgs<Autotune>): AutotuneMapResult {
       tags,
       clientSideAvailability: chooseClientSideAvailability(ctx, a.targetApps),
       customProperties: provenanceProperties(a, alias, 'autotune'),
+      ...chooseMaintainer(ctx, a),
     };
     const desiredEnv: DesiredFlagEnv = { ldEnv: env.ld, statsigEnv: env.statsig, on, offVariation: 0, fallthrough: serve, rules: [], targets: [], prerequisites: [] };
     const desiredBandit: DesiredBandit | null =
