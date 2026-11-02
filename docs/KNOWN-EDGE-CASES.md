@@ -62,7 +62,7 @@ Decision types referenced below are defined in `packages/mapper/src/types.ts` (`
 
 | # | Edge case | StatSig | LaunchDarkly | Handling | Demo example |
 |---|---|---|---|---|---|
-| 3.1 | Custom unit IDs | `userID`, `stableID`, custom (`companyID`, `deviceID`). | Context kinds; `user` is built in. | ⚙️ `userID` → `user`, `stableID` → `device`, `fooID` → `foo`; ✅ `unit_type_kind` when the kind doesn't exist in LD. Never collapsed into `user` (CLAUDE.md). | `b2b_bulk_ordering`, `anon_homepage_variant`, mobile `device_beta_program` |
+| 3.1 | Custom unit IDs | `userID`, `stableID`, custom (`companyID`, `deviceID`). | Context kinds; `user` is built in. | ⚙️ `userID` → `user`, `stableID` → `device`, `fooID` → `foo`; ✅ `unit_type_kind` when the kind doesn't exist in LD: create it (proposed or typed key), keep the unit type as a `user` attribute (clauses, `bucketBy`, overrides → a rule), or reuse a kind another unit type creates. Never the `user` key (CLAUDE.md). | `b2b_bulk_ordering`, `anon_homepage_variant`, mobile `device_beta_program` |
 | 3.2 | Two unit types defaulting to one kind | `stableID` and `deviceID` in one project. | Both default to `device`. | 🚧 No warning; the second would silently share the kind. | `acme-mobile` has both |
 | 3.3 | Unit type lookup | `customIDs` are looked up case-insensitively. | n/a | ⚙️ `kindFor` matches case-insensitively. | — |
 | 3.4 | Custom-ID overrides on a userID gate | `passingCustomIDs` without saying which unit type. | Targets need a context kind. | 🚧 Adapter warns `ambiguous_override` and records unit type `customID`; the mapper then asks for a context kind named `custom`, which is misleading. Should ask *which* unit type. | `search_v2` override `acct_3001` |

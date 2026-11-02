@@ -11,9 +11,9 @@
  * `[]` never matches; `[[]]` always matches.
  */
 import { normalizeCondition, toArray, type CanonicalSnapshot, type Condition, type Segment } from '@sslm/canonical';
-import { DROP_CONDITION, DROP_RULE, SKIP, type DecisionCollector } from './decisions.ts';
-import { attributeFor, kindFor, sanitizeKey, kindFromChoice } from './profile.ts';
-import type { DecisionOption, DecisionSubject, Dependency, FidelityNote, IdListCoverages, IdLists, LdClause, LdOperator, MapperCapabilities, MappingProfile } from './types.ts';
+import { DROP_CONDITION, DROP_RULE, SKIP, type DecisionCollector, plannedContextKinds, plannedKindOptions } from './decisions.ts';
+import { attributeFor, attributeOption, kindFor, sanitizeKey, unitFromChoice, type UnitTarget } from './profile.ts';
+import type { DecisionOption, DecisionSubject, Dependency, DesiredRule, DesiredTarget, FidelityNote, IdListCoverages, IdLists, LdClause, LdOperator, LdRollout, MapperCapabilities, MappingProfile } from './types.ts';
 
 export type Dnf = LdClause[][];
 export const ALWAYS: Dnf = [[]];
@@ -57,7 +57,7 @@ export interface ConditionContext {
   /** Set while translating an inlined gate's conditions, e.g. `via employees_only`. */
   pathPrefix?: string;
   /** Context-kind keys already decided for this mapping run, by unit type. */
-  kindCache: Map<string, string>;
+  kindCache: Map<string, UnitTarget>;
 }
 
 export interface Loc {
@@ -90,15 +90,25 @@ function applyCommon(choice: string, loc: Loc): Dnf | undefined {
   return undefined;
 }
 
-/** Context kind for a unit type, raising `unit_type_kind` for kinds the LD project lacks. */
+/** Context kind for a unit type (`user` when the unit type is kept as a user attribute). */
 export function resolveKind(ctx: ConditionContext, unitType: string): string {
+  return resolveUnit(ctx, unitType).contextKind;
+}
+
+/**
+ * Where a unit type's IDs live in LD, raising `unit_type_kind` for kinds the LD project lacks:
+ * create the kind (proposed, or under a key the user typed), keep the unit type as an attribute
+ * of the `user` context, use a kind another unit type's answer creates, or an existing kind.
+ * A custom unit ID is never the key of the `user` context (CLAUDE.md).
+ */
+export function resolveUnit(ctx: ConditionContext, unitType: string): UnitTarget {
   const cached = ctx.kindCache.get(unitType.toLowerCase());
   if (cached) return cached;
   const proposed = kindFor(ctx.profile, ctx.sourceId, unitType);
   const configured = Object.keys(ctx.profile.sources[ctx.sourceId]?.unitTypeKinds ?? {}).some((k) => k.toLowerCase() === unitType.toLowerCase());
-  let kind = proposed;
+  let unit: UnitTarget = { contextKind: proposed, attribute: 'key' };
   if (proposed !== 'user' && !configured && !ctx.capabilities.existingContextKinds.includes(proposed)) {
-    const existing = ctx.capabilities.existingContextKinds.filter((k) => k !== proposed);
+    const existing = ctx.capabilities.existingContextKinds.filter((k) => k !== proposed && k !== 'user');
     const canCreate = ctx.capabilities.contextKinds !== 'not_permitted' && ctx.capabilities.contextKinds !== 'unavailable';
     const options: DecisionOption[] = [
       {
@@ -109,6 +119,13 @@ export function resolveKind(ctx: ConditionContext, unitType: string): string {
           : `This token can't create context kinds. Ask an LD admin to create “${proposed}” first; SDK evaluations also auto-create kinds.`,
         resultingFidelity: 'full',
       },
+      {
+        key: attributeOption(unitType),
+        label: `Keep “${unitType}” as an attribute of the user context`,
+        explanation: `No new context kind. Conditions on ${unitType} become clauses on the user attribute “${unitType}”, rollouts bucket by it, and ID overrides become a targeting rule (LD targets individuals only by key). Your app must send ${unitType} as a user attribute.`,
+        resultingFidelity: 'full',
+      },
+      ...plannedKindOptions(plannedContextKinds(ctx.decisions.resolutions, ctx.profile), new Set([proposed, ...ctx.capabilities.existingContextKinds]), unitType, canCreate),
       ...existing.map((k) => ({ key: `existing:${k}`, label: `Use the existing kind “${k}”`, explanation: `StatSig's ${unitType} becomes the key of the LD “${k}” context.`, resultingFidelity: 'full' as const })),
     ];
     const choice = ctx.decisions.choose(
@@ -118,18 +135,54 @@ export function resolveKind(ctx: ConditionContext, unitType: string): string {
         subject: { sourceId: ctx.sourceId, kind: 'unit_type', uid: `${ctx.sourceId}/unit_type/${unitType}`, id: unitType },
         path: 'kind',
         title: `Context kind for unit type ${unitType}`,
-        explanation: `StatSig buckets and targets by ${unitType}. LD needs a context kind for it; custom unit IDs must not be collapsed into “user”.`,
+        explanation: `StatSig buckets and targets by ${unitType}. LD needs somewhere for it: its own context kind, or an attribute of the user context. A custom unit ID is never the key of the user context.`,
         sourceFragment: { unitType },
         options,
         recommended: options[0]!.key,
       },
       options[0]!.key,
     );
-    kind = kindFromChoice(choice, proposed);
+    unit = unitFromChoice(choice, proposed);
   }
-  ctx.kindCache.set(unitType.toLowerCase(), kind);
-  if (kind !== 'user' && !ctx.capabilities.existingContextKinds.includes(kind)) ctx.deps.set(`context_kind:${kind}`, { kind: 'context_kind', key: kind, entityId: unitType });
-  return kind;
+  ctx.kindCache.set(unitType.toLowerCase(), unit);
+  if (unit.attribute === 'key' && unit.contextKind !== 'user' && !ctx.capabilities.existingContextKinds.includes(unit.contextKind)) {
+    ctx.deps.set(`context_kind:${unit.contextKind}`, { kind: 'context_kind', key: unit.contextKind, entityId: unitType });
+  }
+  return unit;
+}
+
+/** A percentage rollout over a unit type: by context key, or bucketed by the user attribute it maps to. */
+export function rolloutFor(unit: UnitTarget, variations: LdRollout['variations']): LdRollout {
+  return { contextKind: unit.contextKind, ...(unit.attribute !== 'key' ? { bucketBy: unit.attribute } : {}), variations };
+}
+
+/** One group of ID overrides: same unit, same variation. */
+export type OverrideGroup = UnitTarget & { unitType: string; variation: number; values: string[] };
+
+/**
+ * Overrides keyed by context key become individual targets; overrides on a unit type kept as a
+ * user attribute become targeting rules placed before the flag's own rules (LD targets
+ * individuals only by key). Both sorted, so the output is deterministic.
+ */
+export function splitOverrides(ctx: ConditionContext, groups: OverrideGroup[]): { targets: DesiredTarget[]; rules: DesiredRule[] } {
+  const live = groups.filter((g) => g.values.length > 0);
+  const targets = live
+    .filter((g) => g.attribute === 'key')
+    .map((g) => ({ contextKind: g.contextKind, variation: g.variation, values: g.values }))
+    .sort((a, b) => `${a.contextKind}|${a.variation}`.localeCompare(`${b.contextKind}|${b.variation}`));
+  const byAttr = live.filter((g) => g.attribute !== 'key').sort((a, b) => `${a.attribute}|${a.variation}`.localeCompare(`${b.attribute}|${b.variation}`));
+  const rules: DesiredRule[] = byAttr.map((g) => ({
+    description: `${g.unitType} overrides`,
+    clauses: [{ contextKind: g.contextKind, attribute: g.attribute, op: 'in', values: g.values, negate: false }],
+    variation: g.variation,
+  }));
+  const perAttribute = new Map<string, OverrideGroup[]>();
+  for (const g of byAttr) perAttribute.set(g.attribute, [...(perAttribute.get(g.attribute) ?? []), g]);
+  for (const [attribute, gs] of perAttribute) {
+    const n = gs.reduce((c, g) => c + g.values.length, 0);
+    ctx.fidelity.push({ fidelity: 'full', message: `${n} ${gs[0]!.unitType} override${n === 1 ? '' : 's'} became ${gs.length} targeting rule${gs.length === 1 ? '' : 's'} on user attribute “${attribute}”: LD targets individuals only by context key.` });
+  }
+  return { targets, rules };
 }
 
 export function translateCondition(ctx: ConditionContext, c: Condition, loc: Loc): Dnf {
@@ -153,7 +206,8 @@ export function translateCondition(ctx: ConditionContext, c: Condition, loc: Loc
     case 'user_id':
       return attributeCondition(ctx, c, loc, resolveKind(ctx, 'userID'), 'key');
     case 'unit_id':
-      return attributeCondition(ctx, c, loc, resolveKind(ctx, c.customID ?? 'userID'), 'key');
+      const u = resolveUnit(ctx, c.customID ?? 'userID');
+      return attributeCondition(ctx, c, loc, u.contextKind, u.attribute);
     case 'email':
     case 'ip_address':
     case 'locale':

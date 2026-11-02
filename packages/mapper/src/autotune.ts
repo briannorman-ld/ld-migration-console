@@ -11,7 +11,7 @@
  * `autotune_running` (default: wait); a concluded one becomes a flag serving the winner at 100%.
  */
 import { fingerprint, stableStringify, type Autotune } from '@sslm/canonical';
-import { resolveKind, SkipItem, unique, type ConditionContext } from './conditions.ts';
+import { resolveKind, SkipItem, unique, type ConditionContext, resolveUnit, rolloutFor } from './conditions.ts';
 import { DecisionCollector, SKIP } from './decisions.ts';
 import { chooseClientSideAvailability, provenanceProperties, report, sourceTag, TAG_MIGRATED, type MapArgs, type MapOutcome } from './gate.ts';
 import { sanitizeKey, sanitizeTag } from './profile.ts';
@@ -105,7 +105,8 @@ export function mapAutotune(args: MapArgs<Autotune>): AutotuneMapResult {
   if (a.variants.length === 0) return skip('has no variants');
 
   try {
-    const contextKind = resolveKind(ctx, a.idType || 'userID');
+    const unit = resolveUnit(ctx, a.idType || 'userID');
+    const contextKind = unit.contextKind;
     const arms = buildArms(ctx, a);
     if (arms.length < 2) throw new SkipItem(`has a single value “${arms[0]?.name ?? ''}” (nothing to tune: hard-code it, or create a plain flag)`);
     if (flagKey !== a.id) fidelity.push({ fidelity: 'full', message: `Flag key “${flagKey}” differs from the StatSig name “${a.id}” (LD keys allow letters, digits, . _ -).` });
@@ -146,7 +147,7 @@ export function mapAutotune(args: MapArgs<Autotune>): AutotuneMapResult {
       } else {
         fidelity.push({ fidelity: 'full', message: `Not started in StatSig: the flag is created off with a draft bandit. Start it from LD when ready.` });
       }
-      serve = { rollout: { contextKind, variations: arms.map((x, i) => ({ variation: i, weight: x.weight })) } };
+      serve = { rollout: rolloutFor(unit, arms.map((x, i) => ({ variation: i, weight: x.weight }))) };
     }
 
     // Metric (PLAN §11 "Metrics are the critical path").
@@ -193,6 +194,7 @@ export function mapAutotune(args: MapArgs<Autotune>): AutotuneMapResult {
         fidelity.push({ fidelity: 'manual', message: 'No success event: the flag is created without a bandit. Add a metric and a multi-armed bandit on it in LD.' });
       }
     }
+    if (bandit && unit.attribute !== 'key') fidelity.push({ fidelity: 'partial', message: `Randomizes by the user key: LD experiments randomize by context kind, not by the user attribute “${unit.attribute}” that ${a.idType} maps to.` });
     if (bandit && contextKind !== 'user') {
       deps.set(`randomization_unit:${contextKind}`, { kind: 'randomization_unit', key: contextKind, entityId: a.idType });
       fidelity.push({ fidelity: 'full', message: `Randomizes by “${contextKind}”: the migration enables it as a randomization unit in the LD project's experimentation settings.` });

@@ -4,7 +4,7 @@
  * overrides, minus its fail overrides. Otherwise the caller decides (prerequisite, drop, skip).
  */
 import { overridesForEnvironment, resolveRulesForEnvironment, targetingFingerprint, type Gate } from '@sslm/canonical';
-import { ALWAYS, andDnf, MAX_EXPANSION, NEVER, notDnf, resolveKind, translateCondition, type ConditionContext, type Dnf } from './conditions.ts';
+import { ALWAYS, andDnf, MAX_EXPANSION, NEVER, notDnf, resolveKind, translateCondition, type ConditionContext, type Dnf, resolveUnit } from './conditions.ts';
 import type { EnvTarget, LdClause } from './types.ts';
 
 const MAX_DEPTH = 4;
@@ -98,9 +98,9 @@ function computeInline(ctx: ConditionContext, state: InlineState, gateId: string
   const failClauses: LdClause[] = [];
   for (const o of overrides) {
     if (o.value.kind !== 'gate' || o.ids.length === 0) continue;
-    const contextKind = resolveKind(ctx, o.unitType);
-    if (o.value.pass) passTerms.push([{ contextKind, attribute: 'key', op: 'in', values: o.ids, negate: false }]);
-    else failClauses.push({ contextKind, attribute: 'key', op: 'in', values: o.ids, negate: true });
+    const { contextKind, attribute } = resolveUnit(ctx, o.unitType);
+    if (o.value.pass) passTerms.push([{ contextKind, attribute, op: 'in', values: o.ids, negate: false }]);
+    else failClauses.push({ contextKind, attribute, op: 'in', values: o.ids, negate: true });
   }
   const dnf = [...passTerms, ...ruleTerms.map((t) => [...t, ...failClauses])];
   if (dnf.length > MAX_EXPANSION) return { ok: false, reason: `gate “${gateId}” expands into more than ${MAX_EXPANSION} LD rules` };

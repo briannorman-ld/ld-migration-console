@@ -3,7 +3,7 @@
  * the same flag, decisions and fingerprints. `now` is an input because `time` conditions depend on it.
  */
 import { fingerprint, migratedFromTag, overridesForEnvironment, PROP, resolveRulesForEnvironment, SOURCE_KIND_LABEL, sourceTag, targetingFingerprint, type CanonicalSnapshot, type Condition, type Gate, type Holdout, type MigrationSourceKind } from '@sslm/canonical';
-import { ALWAYS, andDnf, MAX_EXPANSION, NEVER, resolveKind, SkipItem, translateCondition, unique, type ConditionContext, type Dnf, type Loc } from './conditions.ts';
+import { ALWAYS, andDnf, MAX_EXPANSION, NEVER, resolveKind, SkipItem, translateCondition, unique, type ConditionContext, type Dnf, type Loc, resolveUnit, rolloutFor, splitOverrides, type OverrideGroup } from './conditions.ts';
 import { DecisionCollector, DROP_CONDITION, DROP_RULE, SKIP } from './decisions.ts';
 import { sanitizeKey, sanitizeTag } from './profile.ts';
 import { inlineGate, type InlineState } from './refs.ts';
@@ -178,7 +178,7 @@ export function mapGate(args: MapArgs<Gate>): GateMapResult {
       }
     }
 
-    const targets = overrideTargets(c, overrides);
+    const ov = overrideTargets(c, overrides);
     for (const key of [...prerequisites].sort()) deps.set(`flag:${sanitizeKey(key)}`, { kind: 'flag', key: sanitizeKey(key), entityId: key });
     return {
       ldEnv: env.ld,
@@ -186,8 +186,8 @@ export function mapGate(args: MapArgs<Gate>): GateMapResult {
       on: enabled,
       offVariation: FAIL,
       fallthrough,
-      rules: out,
-      targets,
+      rules: [...ov.rules, ...out],
+      targets: ov.targets,
       prerequisites: [...prerequisites].sort().map((k) => ({ key: sanitizeKey(k), variation: PASS })),
     };
   };
@@ -229,7 +229,7 @@ function serveFor(ctx: ConditionContext, gate: Gate, ruleId: string, ruleName: s
   if (choice === 'skip') throw new SkipItem(`waiting for the ${pass}% rollout in rule “${ruleName}” to finish`);
   ctx.fidelity.push({ fidelity: 'partial', message: `${pass}% rollout re-buckets users (StatSig and LD hash differently).`, location: `rule “${ruleName}”` });
   const weight = Math.round(pass * 1000);
-  return { rollout: { contextKind: resolveKind(ctx, idType || gate.idType), variations: [{ variation: PASS, weight }, { variation: FAIL, weight: 100_000 - weight }] } };
+  return { rollout: rolloutFor(resolveUnit(ctx, idType || gate.idType), [{ variation: PASS, weight }, { variation: FAIL, weight: 100_000 - weight }]) };
 }
 
 /** The gate's `holdoutIds` resolved against the snapshot, in id order; ids the snapshot lacks are left out. */
@@ -376,18 +376,19 @@ export function commonPassesGate(ruleConditions: Condition[][]): string | null {
  * Overrides → individual targets (PLAN §10.2 step 4). Environment-specific overrides come first,
  * so they win over all-environment ones; LD allows each key in one variation only.
  */
-function overrideTargets(ctx: ConditionContext, overrides: Gate['overrides']): DesiredTarget[] {
+function overrideTargets(ctx: ConditionContext, overrides: Gate['overrides']): ReturnType<typeof splitOverrides> {
   const ordered = [...overrides.filter((o) => o.environment !== null), ...overrides.filter((o) => o.environment === null)];
   const seen = new Map<string, number>();
-  const groups = new Map<string, DesiredTarget>();
+  const groups = new Map<string, OverrideGroup>();
   let conflicts = 0;
   for (const o of ordered) {
     if (o.value.kind !== 'gate') continue;
-    const contextKind = resolveKind(ctx, o.unitType);
+    const unit = resolveUnit(ctx, o.unitType);
     const variation = o.value.pass ? PASS : FAIL;
-    const g = groups.get(`${contextKind}|${variation}`) ?? { contextKind, variation, values: [] };
+    const gk = `${unit.contextKind}|${unit.attribute}|${variation}`;
+    const g = groups.get(gk) ?? { ...unit, unitType: o.unitType, variation, values: [] };
     for (const id of o.ids) {
-      const k = `${contextKind}|${id}`;
+      const k = `${unit.contextKind}|${unit.attribute}|${id}`;
       const prev = seen.get(k);
       if (prev !== undefined) {
         if (prev !== variation) conflicts++;
@@ -396,10 +397,10 @@ function overrideTargets(ctx: ConditionContext, overrides: Gate['overrides']): D
       seen.set(k, variation);
       g.values.push(id);
     }
-    groups.set(`${contextKind}|${variation}`, g);
+    groups.set(gk, g);
   }
   if (conflicts) ctx.fidelity.push({ fidelity: 'partial', message: `${conflicts} ID${conflicts === 1 ? ' is' : 's are'} overridden both to pass and to fail; the environment-specific (or first) override wins.` });
-  return [...groups.values()].filter((g) => g.values.length > 0).sort((a, b) => `${a.contextKind}|${a.variation}`.localeCompare(`${b.contextKind}|${b.variation}`));
+  return splitOverrides(ctx, [...groups.values()]);
 }
 
 function flagShell(ctx: ConditionContext, gate: Gate, alias: string, key: string): DesiredFlagShell {

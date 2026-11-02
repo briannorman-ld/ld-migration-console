@@ -27,6 +27,8 @@ import {
   filterDecisions,
   NO_FILTERS,
   SEVERITY_RANK,
+  decisionRank,
+  FOUNDATIONAL_TYPES,
   summarizeDecisions,
   type DecisionFilters,
   type TypeSummary,
@@ -118,8 +120,7 @@ export function DecisionsView({
     }
     return [...byKey.values()].sort(
       (a, b) =>
-        SEVERITY_RANK[a.xs[0]!.decision.severity] -
-          SEVERITY_RANK[b.xs[0]!.decision.severity] ||
+        decisionRank(a.xs[0]!.decision) - decisionRank(b.xs[0]!.decision) ||
         b.xs.length - a.xs.length,
     );
   }, [filtered, tab]);
@@ -150,7 +151,7 @@ export function DecisionsView({
       byUid.set(s.uid, g);
     }
     const worst = (xs: DecisionInstance[]) =>
-      Math.min(...xs.map((x) => SEVERITY_RANK[x.decision.severity]));
+      Math.min(...xs.map((x) => decisionRank(x.decision)));
     return [...byUid.values()].sort(
       (a, b) =>
         worst(a.xs) - worst(b.xs) ||
@@ -424,6 +425,13 @@ export function DecisionsView({
                         {typeRow.open.toLocaleString()} open in{" "}
                         {typeRow.openItems.toLocaleString()} item
                         {typeRow.openItems === 1 ? "" : "s"}
+                      </span>
+                    )}
+                    {FOUNDATIONAL_TYPES.has(g.type) && tab === "open" && (
+                      <span className="font-normal text-fg-muted">
+                        · decide first: every rule and target uses these
+                        kinds, and a kind created here is offered to the
+                        next unit type
                       </span>
                     )}
                   </h3>

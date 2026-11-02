@@ -62,11 +62,40 @@ export function createKindOption(key: string): string {
   return `create:${key}`;
 }
 
+/** The `unit_type_kind` option key that keeps a unit type as an attribute of the `user` context. */
+export function attributeOption(name: string): string {
+  return `attribute:${name}`;
+}
+
+export function isValidAttributeName(name: string): boolean {
+  const n = name.trim();
+  return n.length > 0 && n === name && !RESERVED_ATTRIBUTES.has(n) && !n.includes('/');
+}
+
+/**
+ * Where a unit type's IDs live in LD: the key of a context kind (`attribute: 'key'`), or an
+ * attribute of the `user` context. Rules match on it, rollouts bucket by it, and ID overrides
+ * become targets (key) or a targeting rule (attribute: LD targets individuals only by key).
+ */
+export interface UnitTarget {
+  contextKind: string;
+  attribute: string;
+}
+
+export function unitFromChoice(choice: string, proposed: string): UnitTarget {
+  if (choice.startsWith('attribute:')) {
+    const a = choice.slice('attribute:'.length);
+    return isValidAttributeName(a) ? { contextKind: 'user', attribute: a } : { contextKind: proposed, attribute: 'key' };
+  }
+  return { contextKind: kindFromChoice(choice, proposed), attribute: 'key' };
+}
+
 /**
  * The context kind a `unit_type_kind` answer names: `create:<key>` or `existing:<key>`. A key the
  * user typed is accepted only when LD would accept it; anything else falls back to the proposal.
  */
 export function kindFromChoice(choice: string, proposed: string): string {
+  if (choice.startsWith('attribute:')) return proposed;
   const key = choice.split(':').slice(1).join(':');
   return key && isValidContextKindKey(key) ? key : proposed;
 }

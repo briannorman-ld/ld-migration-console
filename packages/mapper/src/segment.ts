@@ -6,7 +6,7 @@
  * segment (same decision id), so one answer covers the segment and every rule that needs it.
  */
 import { fingerprint, resolveRulesForEnvironment, targetingFingerprint, type Segment } from '@sslm/canonical';
-import { andDnf, bigSegmentChoice, hashedListChoice, LIST_SEGMENT_MAX, MAX_EXPANSION, resolveKind, segmentSize, SkipItem, translateCondition, unique, type ConditionContext } from './conditions.ts';
+import { andDnf, bigSegmentChoice, hashedListChoice, LIST_SEGMENT_MAX, MAX_EXPANSION, resolveKind, segmentSize, SkipItem, translateCondition, unique, type ConditionContext, resolveUnit } from './conditions.ts';
 import { DecisionCollector } from './decisions.ts';
 import { report, sourceTag, TAG_MIGRATED, type MapArgs, type MapOutcome } from './gate.ts';
 import { sanitizeKey, sanitizeTag } from './profile.ts';
@@ -86,8 +86,16 @@ export function mapSegment(args: MapArgs<Segment>): SegmentMapResult {
           fidelity.push({ fidelity: cov.missing > 0 || !cov.verified ? 'partial' : 'full', message: cov.verified ? `Reconciled raw-ID upload: ${cov.matched.toLocaleString('en-US')} of ${cov.total.toLocaleString('en-US')} StatSig hashes matched${cov.missing ? `, ${cov.missing.toLocaleString('en-US')} missing` : ''}${cov.extra ? `, ${cov.extra.toLocaleString('en-US')} uploaded IDs not in the list left out` : ''}.` : `Raw-ID upload of ${cov.matched.toLocaleString('en-US')} IDs against StatSig's count of ${cov.total.toLocaleString('en-US')}; no hash file was uploaded, so membership is unverified.` });
       }
       if (!size.ids) throw new SkipItem('its ID list was not fetched from StatSig');
-      const kind = resolveKind(ctx, seg.idType);
+      const unit = resolveUnit(ctx, seg.idType);
+      const kind = unit.contextKind;
       const ids = unique(size.ids);
+      if (unit.attribute !== 'key') {
+        // The unit type is a user attribute: LD segments list members by key only, so the IDs become a rule.
+        if (ids.length > LIST_SEGMENT_MAX) throw new SkipItem(`${ids.length.toLocaleString('en-US')} ${seg.idType} IDs on the user attribute “${unit.attribute}”: LD matches attributes only in rules, and a clause that long is not practical; create a context kind for ${seg.idType} instead`);
+        base.rules.push({ description: `${seg.idType} IDs`, clauses: [{ contextKind: kind, attribute: unit.attribute, op: 'in', values: ids, negate: false }] });
+        fidelity.push({ fidelity: 'full', message: `${ids.length} ${seg.idType} IDs matched by a rule on user attribute “${unit.attribute}” (LD lists segment members only by context key).` });
+        return finish(base);
+      }
       if (ids.length > LIST_SEGMENT_MAX) {
         const { choice } = bigSegmentChoice(ctx, seg, ids.length, fragment);
         if (choice === 'skip') throw new SkipItem(`${ids.length.toLocaleString('en-US')} IDs exceed LD's ${LIST_SEGMENT_MAX.toLocaleString('en-US')}-ID list segment limit`);
@@ -116,7 +124,8 @@ export function mapSegment(args: MapArgs<Segment>): SegmentMapResult {
       if (r.passPercentage <= 0) continue;
       const dnf = andDnf(r.conditions.map((c, i) => translateCondition(ctx, c, { ruleId: r.id, ruleName: r.name, index: i })));
       if (!dnf) throw new SkipItem(`rule “${r.name}” expands into more than ${MAX_EXPANSION} LD rules`);
-      const kind = resolveKind(ctx, r.idType || seg.idType);
+      const unit = resolveUnit(ctx, r.idType || seg.idType);
+      const kind = unit.contextKind;
       let weight: number | undefined;
       if (r.passPercentage < 100) {
         const choice = ctx.decisions.choose(
@@ -152,7 +161,7 @@ export function mapSegment(args: MapArgs<Segment>): SegmentMapResult {
       for (const [k, term] of dnf.entries()) {
         // LD segment rules need a clause; "everyone of this kind" is a match-anything key regex.
         const clauses: LdClause[] = term.length ? term : [{ contextKind: kind, attribute: 'key', op: 'matches', values: ['.*'], negate: false }];
-        out.push({ description: dnf.length > 1 ? `${r.name} (${k + 1}/${dnf.length})` : r.name, clauses, ...(weight !== undefined ? { weight, rolloutContextKind: kind } : {}) });
+        out.push({ description: dnf.length > 1 ? `${r.name} (${k + 1}/${dnf.length})` : r.name, clauses, ...(weight !== undefined ? { weight, rolloutContextKind: kind, ...(unit.attribute !== 'key' ? { bucketBy: unit.attribute } : {}) } : {}) });
       }
     }
     base.rules = out;

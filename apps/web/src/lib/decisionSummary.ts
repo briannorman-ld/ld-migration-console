@@ -1,4 +1,4 @@
-import { optionLabel, type DecisionType, type MappingProfile, type Severity } from '@sslm/mapper';
+import { optionLabel, type DecisionPoint, type DecisionType, type MappingProfile, type Severity } from '@sslm/mapper';
 import type { DecisionInstance } from './migration.ts';
 
 /**
@@ -26,6 +26,18 @@ export interface TypeSummary {
 }
 
 export const SEVERITY_RANK: Record<Severity, number> = { blocking: 0, choice: 1, acknowledge: 2 };
+
+/**
+ * Decisions other decisions build on. `unit_type_kind` names the context kinds every rule,
+ * target and later kind decision refers to, so it is listed first whatever its severity: decide
+ * the kinds, then the kind created for one unit type is offered to the next.
+ */
+export const FOUNDATIONAL_TYPES: ReadonlySet<DecisionType> = new Set<DecisionType>(['unit_type_kind']);
+
+/** Sort key: foundational types first, then by severity. */
+export function decisionRank(d: Pick<DecisionPoint, 'type' | 'severity'>): number {
+  return (FOUNDATIONAL_TYPES.has(d.type) ? 0 : 10) + SEVERITY_RANK[d.severity];
+}
 
 export function summarizeDecisions(all: DecisionInstance[], policies: MappingProfile['policies']): TypeSummary[] {
   const rows = new Map<DecisionType, TypeSummary & { items: Set<string>; optionIndex: Map<string, { label: string; covers: number }> }>();
@@ -61,7 +73,7 @@ export function summarizeDecisions(all: DecisionInstance[], policies: MappingPro
       openItems: items.size,
       options: [...optionIndex.entries()].map(([key, v]) => ({ key, ...v })).sort((a, b) => b.covers - a.covers || a.label.localeCompare(b.label)),
     }))
-    .sort((a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity] || b.open - a.open || a.type.localeCompare(b.type));
+    .sort((a, b) => decisionRank(a) - decisionRank(b) || b.open - a.open || a.type.localeCompare(b.type));
 }
 
 export interface DecisionFilters {

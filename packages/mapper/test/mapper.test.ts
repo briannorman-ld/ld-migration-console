@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { CanonicalSnapshot, Condition, Config, Gate } from '@sslm/canonical';
-import { caseFoldedPattern, createKindOption, isValidContextKindKey, mapAutotune, mapConfig, mapGate, mapSegment, optionLabel, type MapArgs, type Resolution } from '../src/index.ts';
+import { attributeOption, caseFoldedPattern, createKindOption, isValidContextKindKey, mapAutotune, mapConfig, mapGate, mapSegment, optionLabel, type MapArgs, type Resolution } from '../src/index.ts';
 import { acmeSnapshot, CAPS, NOW, profileFor, server } from './fixtures.ts';
 
 beforeAll(() => server.listen({ onUnhandledFrame: 'error' }));
@@ -77,6 +77,25 @@ describe('operator pitfalls (CLAUDE.md, PLAN §10.3)', () => {
     expect(isValidContextKindKey('plan')).toBe(true);
     expect(isValidContextKindKey('Plan_v2.x')).toBe(true);
     for (const k of ['', 'kind', 'multi', 'plan key', 'plan/key']) expect(isValidContextKindKey(k)).toBe(false);
+  });
+
+  it('a unit type kept as a user attribute: clauses on the attribute, overrides as rules, no context kind', () => {
+    const first = mapGate(args('b2b_bulk_ordering'));
+    const d = first.unresolved.find((x) => x.type === 'unit_type_kind')!;
+    expect(d.options.map((o) => o.key)).toEqual(['create:company', 'attribute:companyID']); // never `existing:user`: a company ID is not a user key
+    const res = new Map([[d.id, { id: d.id, type: d.type, optionKey: attributeOption('companyID'), scope: 'resource' as const, fingerprint: d.fingerprint, decidedAt: NOW }]]);
+    const r = mapGate(args('b2b_bulk_ordering', { resolutions: res }));
+    expect(types(r)).not.toContain('unit_type_kind');
+    expect(r.dependencies.filter((x) => x.kind === 'context_kind')).toEqual([]);
+    expect(r.env.targets).toEqual([]);
+    const overrideRules = r.env.rules.filter((x) => x.description === 'companyID overrides');
+    expect(overrideRules).toHaveLength(2);
+    expect(overrideRules.map((x) => x.clauses[0])).toEqual(first.env.targets.map((t) => ({ contextKind: 'user', attribute: 'companyID', op: 'in', values: t.values, negate: false })));
+    expect(overrideRules.map((x) => x.variation)).toEqual(first.env.targets.map((t) => t.variation));
+    const ruleClauses = r.env.rules.filter((x) => x.description !== 'companyID overrides').flatMap((x) => x.clauses);
+    expect(ruleClauses[0]).toMatchObject({ contextKind: 'user', attribute: 'companyID' });
+    expect(r.fidelity.notes.map((n) => n.message)).toContainEqual(expect.stringMatching(/became 2 targeting rules on user attribute “companyID”/));
+    expect(optionLabel(d, attributeOption('companyID'))).toBe('Keep “companyID” as an attribute of the user context');
   });
 
   it('a configured unit type → kind mapping needs no decision', () => {

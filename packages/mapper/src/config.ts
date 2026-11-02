@@ -13,7 +13,7 @@
  * the same whichever environment is migrated first (append-only, PLAN §7).
  */
 import { fingerprint, overridesForEnvironment, resolveRulesForEnvironment, stableStringify, targetingFingerprint, type Config, type Rule } from '@sslm/canonical';
-import { andDnf, resolveKind, SkipItem, translateCondition, unique, type ConditionContext } from './conditions.ts';
+import { andDnf, resolveKind, SkipItem, translateCondition, unique, type ConditionContext, resolveUnit, rolloutFor, splitOverrides, type OverrideGroup } from './conditions.ts';
 import { DecisionCollector } from './decisions.ts';
 import { chooseClientSideAvailability, commonPassesGate, expansion, gateReference, PASS, provenanceProperties, report, sourceTag, TAG_MIGRATED, type MapArgs, type MapOutcome } from './gate.ts';
 import { sanitizeKey, sanitizeTag } from './profile.ts';
@@ -143,7 +143,7 @@ export function mapConfig(args: MapArgs<Config>): ConfigMapResult {
       }
     }
 
-    const targets = overrideTargets(c, overrides, variations);
+    const ov = overrideTargets(c, overrides, variations);
     for (const key of [...prerequisites].sort()) deps.set(`flag:${sanitizeKey(key)}`, { kind: 'flag', key: sanitizeKey(key), entityId: key });
     return {
       ldEnv: env.ld,
@@ -151,8 +151,8 @@ export function mapConfig(args: MapArgs<Config>): ConfigMapResult {
       on: config.enabled,
       offVariation: DEFAULT,
       fallthrough,
-      rules: out,
-      targets,
+      rules: [...ov.rules, ...out],
+      targets: ov.targets,
       prerequisites: [...prerequisites].sort().map((k) => ({ key: sanitizeKey(k), variation: PASS })),
     };
   };
@@ -197,7 +197,7 @@ const WHOLE = 100_000;
 function serveFor(ctx: ConditionContext, config: Config, r: Rule, vars: Variations): VariationOrRollout {
   const pass = Math.min(100, Math.max(0, r.passPercentage));
   const valueIdx = vars.index(r.returnValue ?? {});
-  const contextKind = resolveKind(ctx, r.idType || config.idType);
+  const unit = resolveUnit(ctx, r.idType || config.idType);
 
   if (r.variants?.length) {
     // Variants split the rule's passing units by cumulative share (10.3); what they don't cover gets the rule's own value.
@@ -214,7 +214,7 @@ function serveFor(ctx: ConditionContext, config: Config, r: Rule, vars: Variatio
     const live = [...weights.entries()].filter(([, w]) => w > 0);
     if (live.length <= 1) return { variation: live[0]?.[0] ?? DEFAULT };
     acknowledgeRebucket(ctx, r, pass, { variants: shares.map((s) => `${vars.list[s.variation]!.name} ${s.share}%`) });
-    return { rollout: { contextKind, variations: toThousandths(live) } };
+    return { rollout: rolloutFor(unit, toThousandths(live)) };
   }
 
   if (valueIdx === DEFAULT) return { variation: DEFAULT };
@@ -222,7 +222,7 @@ function serveFor(ctx: ConditionContext, config: Config, r: Rule, vars: Variatio
   if (pass <= 0) return { variation: DEFAULT };
   acknowledgeRebucket(ctx, r, pass, {});
   const weight = Math.round(pass * 1000);
-  return { rollout: { contextKind, variations: [{ variation: valueIdx, weight }, { variation: DEFAULT, weight: WHOLE - weight }] } };
+  return { rollout: rolloutFor(unit, [{ variation: valueIdx, weight }, { variation: DEFAULT, weight: WHOLE - weight }]) };
 }
 
 /**
@@ -265,10 +265,10 @@ function toThousandths(live: [number, number][]): { variation: number; weight: n
  * Overrides → individual targets (PLAN §10.2 step 4). Only spec sources carry config overrides,
  * with the forced value; a pass/fail override without a value can only serve the default.
  */
-function overrideTargets(ctx: ConditionContext, overrides: Config['overrides'], vars: Variations): DesiredTarget[] {
+function overrideTargets(ctx: ConditionContext, overrides: Config['overrides'], vars: Variations): ReturnType<typeof splitOverrides> {
   const ordered = [...overrides.filter((o) => o.environment !== null), ...overrides.filter((o) => o.environment === null)];
   const seen = new Map<string, number>();
-  const groups = new Map<string, DesiredTarget>();
+  const groups = new Map<string, OverrideGroup>();
   let conflicts = 0;
   let valueless = 0;
   for (const o of ordered) {
@@ -282,10 +282,11 @@ function overrideTargets(ctx: ConditionContext, overrides: Config['overrides'], 
       ctx.fidelity.push({ fidelity: 'partial', message: `${o.ids.length} ${o.unitType} override${o.ids.length === 1 ? '' : 's'} to group “${o.value.groupName ?? o.value.groupId}” dropped: a config has no groups.` });
       continue;
     }
-    const contextKind = resolveKind(ctx, o.unitType);
-    const g = groups.get(`${contextKind}|${variation}`) ?? { contextKind, variation, values: [] };
+    const unit = resolveUnit(ctx, o.unitType);
+    const gk = `${unit.contextKind}|${unit.attribute}|${variation}`;
+    const g = groups.get(gk) ?? { ...unit, unitType: o.unitType, variation, values: [] };
     for (const id of o.ids) {
-      const k = `${contextKind}|${id}`;
+      const k = `${unit.contextKind}|${unit.attribute}|${id}`;
       const prev = seen.get(k);
       if (prev !== undefined) {
         if (prev !== variation) conflicts++;
@@ -294,11 +295,11 @@ function overrideTargets(ctx: ConditionContext, overrides: Config['overrides'], 
       seen.set(k, variation);
       g.values.push(id);
     }
-    groups.set(`${contextKind}|${variation}`, g);
+    groups.set(gk, g);
   }
   if (valueless) ctx.fidelity.push({ fidelity: 'partial', message: `${valueless} ID${valueless === 1 ? ' is' : 's are'} overridden to pass without a value; LD targets ${valueless === 1 ? 'it' : 'them'} to the default value.` });
   if (conflicts) ctx.fidelity.push({ fidelity: 'partial', message: `${conflicts} ID${conflicts === 1 ? ' is' : 's are'} overridden to two values; the environment-specific (or first) override wins.` });
-  return [...groups.values()].filter((g) => g.values.length > 0).sort((a, b) => `${a.contextKind}|${a.variation}`.localeCompare(`${b.contextKind}|${b.variation}`));
+  return splitOverrides(ctx, [...groups.values()]);
 }
 
 function flagShell(ctx: ConditionContext, config: Config, alias: string, key: string, vars: Variations): DesiredFlagShell {

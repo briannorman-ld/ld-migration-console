@@ -1,5 +1,5 @@
 import { fingerprint } from '@sslm/canonical';
-import { isValidContextKindKey } from './profile.ts';
+import { isValidAttributeName, isValidContextKindKey, kindFromChoice } from './profile.ts';
 import type { AppliedDecision, DecisionOption, DecisionPoint, DecisionSubject, DecisionType, MappingProfile, Resolution, Severity, StaleDecision } from './types.ts';
 
 export interface DecisionSpec {
@@ -39,7 +39,10 @@ export type Lookup = { status: 'resolved'; optionKey: string; via: AppliedDecisi
  */
 export function acceptsOption(dp: Pick<DecisionPoint, 'type' | 'options'>, optionKey: string): boolean {
   if (dp.options.some((o) => o.key === optionKey)) return true;
-  return dp.type === 'unit_type_kind' && optionKey.startsWith('create:') && isValidContextKindKey(optionKey.slice('create:'.length));
+  if (dp.type !== 'unit_type_kind') return false;
+  if (optionKey.startsWith('create:')) return isValidContextKindKey(optionKey.slice('create:'.length));
+  if (optionKey.startsWith('attribute:')) return isValidAttributeName(optionKey.slice('attribute:'.length));
+  return false;
 }
 
 export function lookupResolution(dp: DecisionPoint, resolutions: ReadonlyMap<string, Resolution>, profile: MappingProfile): Lookup {
@@ -124,5 +127,42 @@ export function optionLabel(d: Pick<DecisionPoint, 'type' | 'options'>, optionKe
   const o = d.options.find((x) => x.key === optionKey);
   if (o) return o.label;
   if (d.type === 'unit_type_kind' && optionKey.startsWith('create:')) return `Create context kind “${optionKey.slice('create:'.length)}”`;
+  if (d.type === 'unit_type_kind' && optionKey.startsWith('attribute:')) return `Keep “${optionKey.slice('attribute:'.length)}” as an attribute of the user context`;
   return optionKey;
+}
+
+/**
+ * Context kinds that other `unit_type_kind` answers in this workspace already create or map to,
+ * by kind key → the unit types that chose it. A unit type decided later can pick one of these
+ * instead of creating a second kind for the same concept (`planKey` and `plan_id` → `plan`).
+ * Read from the resolutions and the profile; the mapper stays pure.
+ */
+export function plannedContextKinds(resolutions: ReadonlyMap<string, Resolution>, profile: MappingProfile): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  const add = (kind: string, unitType: string) => {
+    if (!kind || kind === 'user' || !isValidContextKindKey(kind)) return;
+    const list = out.get(kind) ?? [];
+    if (!list.includes(unitType)) list.push(unitType);
+    out.set(kind, list);
+  };
+  for (const r of resolutions.values()) {
+    if (r.type !== 'unit_type_kind' || r.scope !== 'resource') continue;
+    // Decision ids are `unit_type_kind:<sourceId>/unit_type/<unitType>:kind`.
+    const unitType = r.id.match(/\/unit_type\/([^:]+):kind$/)?.[1] ?? r.id;
+    add(kindFromChoice(r.optionKey, ''), unitType);
+  }
+  for (const sp of Object.values(profile.sources)) for (const [unitType, kind] of Object.entries(sp.unitTypeKinds)) add(kind, unitType);
+  return out;
+}
+
+/** The "use the kind another unit type already creates" options for a `unit_type_kind` decision. */
+export function plannedKindOptions(planned: Map<string, string[]>, exclude: Set<string>, unitType: string, canCreate: boolean): DecisionOption[] {
+  return [...planned.entries()]
+    .filter(([k]) => !exclude.has(k))
+    .map(([k, by]) => ({
+      key: `create:${k}`,
+      label: `Use the kind “${k}”, which this migration creates`,
+      explanation: `Chosen for ${by.join(', ')}. ${unitType} is keyed by the same “${k}” context${canCreate ? '; the kind is created once' : ''}.`,
+      resultingFidelity: 'full' as const,
+    }));
 }

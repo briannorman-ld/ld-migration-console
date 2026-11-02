@@ -23,7 +23,7 @@ import {
   type NeutralServe,
 } from '@sslm/canonical';
 import { LIST_SEGMENT_MAX, SkipItem, unique } from './conditions.ts';
-import { DecisionCollector, DROP_CONDITION, DROP_RULE, SKIP } from './decisions.ts';
+import { DecisionCollector, DROP_CONDITION, DROP_RULE, SKIP, plannedContextKinds, plannedKindOptions } from './decisions.ts';
 import { provenanceProperties, report, type MapArgs, type MapOutcome } from './gate.ts';
 import { sanitizeTag, kindFromChoice } from './profile.ts';
 import type { CustomProperty, DecisionOption, DecisionSubject, Dependency, DesiredFlagEnv, DesiredFlagShell, DesiredRule, DesiredSegment, DesiredSegmentRule, DesiredTarget, FidelityNote, LdClause, LdOperator, VariationOrRollout } from './types.ts';
@@ -112,6 +112,7 @@ export function resolveSourceKind(ctx: Ctx, kindKey: string): string {
         resultingFidelity: 'full',
       },
       ...existing.map((k) => ({ key: `existing:${k}`, label: `Use the existing kind “${k}”`, explanation: `Contexts of kind “${proposed}” in ${sourceLabel(ctx)} become “${k}” contexts in the target. Your app must send that kind.`, resultingFidelity: 'partial' as const })),
+      ...plannedKindOptions(plannedContextKinds(ctx.decisions.resolutions, ctx.args.profile), new Set([proposed, ...caps.existingContextKinds]), kindKey, canCreate),
     ];
     const choice = ctx.decisions.choose(
       {

@@ -22,7 +22,7 @@
   - `version_gte` → `semVerLessThan` + negate.
   - `any` is case-insensitive in StatSig, so it needs a decision.
   - `environment_tier` is resolved statically per environment.
-  - Custom unit IDs map to their own context kind, not `user`.
+  - Custom unit IDs map to their own context kind, or to an attribute of the `user` context if the user chooses so; never to the `user` context's key.
 - The demo (PLAN §19) uses MSW in front of the real adapters. Its dataset in `packages/demo-fixtures` is also the main test fixture.
 - `packages/coverage/src/matrix.ts` is the **coverage matrix**: every StatSig construct, its LD target and how completely the console migrates it. It drives the in-app "What migrates" page and the generated block in `docs/LIMITATIONS.md` (`pnpm coverage:generate`; a test fails when the doc is stale). When a resource kind starts migrating, or a limitation is found, update the matrix row first. `docs/LIMITATIONS.md` also holds the hand-written narrative for the blog post.
 - `docs/KNOWN-EDGE-CASES.md` is the running list of places where StatSig and LD differ. When you find a new one: add a row there, a demo example in `packages/demo-fixtures/src/acme/`, and a test in `packages/mapper/test/mapper.test.ts` (the golden files then cover it). Rows marked as gaps are the mapper backlog. LD-source differences go in its §18, with the demo example in `packages/demo-fixtures/src/ld/acme-legacy.ts` and the test in `packages/mapper/test/neutral.test.ts`.
