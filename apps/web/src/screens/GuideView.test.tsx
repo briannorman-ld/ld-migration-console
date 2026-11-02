@@ -94,7 +94,9 @@ describe('GuideView: teams and people', () => {
   it('creates every missing team with one click when the token may create teams', async () => {
     setup({ canCreateTeams: true });
     fireEvent.click(screen.getByRole('button', { name: /^Teams/ }));
-    expect(screen.getByText('2 teams are not in LaunchDarkly.')).toBeTruthy();
+    const teamsBar = screen.getByText('2 teams are not in LaunchDarkly.');
+    // The bulk action sits above the team list.
+    expect(teamsBar.compareDocumentPosition(screen.getByText('Checkout')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Create all 2 teams' }));
     await screen.findByRole('button', { name: 'Create all 2 teams' }); // the model is static here, so the row stays until LD state refreshes
     expect(createLdTeam).toHaveBeenCalledTimes(2);
@@ -107,7 +109,9 @@ describe('GuideView: teams and people', () => {
   it('invites everyone only after the word is typed, listing every address first', () => {
     setup();
     fireEvent.click(screen.getByRole('button', { name: /^People/ }));
-    expect(screen.getByText('2 people are not in LaunchDarkly.')).toBeTruthy();
+    const peopleBar = screen.getByText('2 people are not in LaunchDarkly.');
+    // The bulk action sits above the owners table.
+    expect(peopleBar.compareDocumentPosition(screen.getByText('StatSig owner').closest('table')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /Invite all 2 people/ }));
     const dialog = screen.getByRole('dialog', { name: 'Invite 2 people to LaunchDarkly' });
     expect(within(dialog).getByText(/join your whole LaunchDarkly account/)).toBeTruthy();

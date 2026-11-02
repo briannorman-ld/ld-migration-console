@@ -339,6 +339,17 @@ function Teams({ workspaceId, g, m }: { workspaceId: string; g: GuideModel; m: M
         people. Creating a team sends no email.
       </p>
       {!g.connected && <Callout tone="blue">Connect LaunchDarkly (step 1) to see which teams it already has.</Callout>}
+      {g.connected && missing.length > 0 && p.canCreateTeams && (
+        <div className="flex flex-wrap items-center gap-2 rounded-md border border-line p-3 text-xs">
+          <span className="font-medium">
+            {missing.length} team{missing.length === 1 ? ' is' : 's are'} not in LaunchDarkly.
+          </span>
+          <Button className="py-1 text-xs" disabled={!!busy} onClick={() => void run('team:all', createAll)}>
+            {busy === 'team:all' ? <Spinner /> : null} Create all {missing.length} team{missing.length === 1 ? '' : 's'}
+          </Button>
+          <span className="text-fg-muted">Each team gets the members that already exist in LD; nobody is emailed.</span>
+        </div>
+      )}
       {g.connected && p.teams.length > 0 && (
         <ul className="divide-y divide-line-soft">
           {p.teams.map((t) => (
@@ -357,17 +368,6 @@ function Teams({ workspaceId, g, m }: { workspaceId: string; g: GuideModel; m: M
             />
           ))}
         </ul>
-      )}
-      {g.connected && missing.length > 0 && p.canCreateTeams && (
-        <div className="flex flex-wrap items-center gap-2 rounded-md border border-line p-3 text-xs">
-          <span className="font-medium">
-            {missing.length} team{missing.length === 1 ? ' is' : 's are'} not in LaunchDarkly.
-          </span>
-          <Button className="py-1 text-xs" disabled={!!busy} onClick={() => void run('team:all', createAll)}>
-            {busy === 'team:all' ? <Spinner /> : null} Create all {missing.length} team{missing.length === 1 ? '' : 's'}
-          </Button>
-          <span className="text-fg-muted">Each team gets the members that already exist in LD; nobody is emailed.</span>
-        </div>
       )}
       {g.connected && !p.canCreateTeams && missing.length > 0 && <p className="text-xs text-fg-muted">Teams are an LD Enterprise feature{p.teamsReadable ? '' : ' and this token cannot read them'}: create them in LaunchDarkly by hand, or skip them here.</p>}
       {g.connected && p.teams.length === 0 && <p className="text-xs text-fg-muted">The sources carry no teams: nothing to create.</p>}
@@ -407,23 +407,6 @@ function People({ workspaceId, g, m, nav }: { workspaceId: string; g: GuideModel
           members, or leave every owner unassigned below.
         </Callout>
       )}
-      {g.connected && p.owners.length > 0 && (
-        <table className="w-full text-sm">
-          <thead className="text-left text-xs text-fg-muted">
-            <tr>
-              <th className="py-1 pr-3 font-medium">StatSig owner</th>
-              <th className="py-1 pr-3 font-medium">Items</th>
-              <th className="py-1 pr-3 font-medium">Team</th>
-              <th className="py-1 font-medium">In LaunchDarkly</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-line-soft">
-            {p.owners.map((o) => (
-              <OwnerLine key={o.email} o={o} teams={p.teams} members={members} busy={busy === `invite:${o.email}`} canInvite={p.canInvite} onInvite={() => void run(`invite:${o.email}`, () => inviteLdMembers(workspaceId, [invitee(o)], role))} onChoose={(c) => choose(o.email, c)} />
-            ))}
-          </tbody>
-        </table>
-      )}
       {g.connected && missing.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 rounded-md border border-line p-3 text-xs">
           <span className="font-medium">
@@ -448,6 +431,23 @@ function People({ workspaceId, g, m, nav }: { workspaceId: string; g: GuideModel
           </Button>
           <span className="text-fg-muted">Inviting sends each person an email from LaunchDarkly{p.canInvite ? '' : '; this token may not invite (Admin or createMember needed), so ask an LD admin'}.</span>
         </div>
+      )}
+      {g.connected && p.owners.length > 0 && (
+        <table className="w-full text-sm">
+          <thead className="text-left text-xs text-fg-muted">
+            <tr>
+              <th className="py-1 pr-3 font-medium">StatSig owner</th>
+              <th className="py-1 pr-3 font-medium">Items</th>
+              <th className="py-1 pr-3 font-medium">Team</th>
+              <th className="py-1 font-medium">In LaunchDarkly</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-line-soft">
+            {p.owners.map((o) => (
+              <OwnerLine key={o.email} o={o} teams={p.teams} members={members} busy={busy === `invite:${o.email}`} canInvite={p.canInvite} onInvite={() => void run(`invite:${o.email}`, () => inviteLdMembers(workspaceId, [invitee(o)], role))} onChoose={(c) => choose(o.email, c)} />
+            ))}
+          </tbody>
+        </table>
       )}
       {confirmAll && (
         <InviteAllModal
