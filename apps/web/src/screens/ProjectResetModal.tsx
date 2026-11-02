@@ -31,7 +31,7 @@ function gates(projectKey: string) {
       caseSensitive: false,
       title: 'Final confirmation: engage project reset.',
       body: 'Last chance to close this dialog and go for a walk instead. If you proceed, the console works through the preview one request at a time and shows you what LaunchDarkly refused.',
-      prompt: 'Type “engage project reset” to begin. The button lights up only when the phrase matches exactly.',
+      prompt: 'Type “engage project reset” to begin.',
     },
   ] as const;
 }
