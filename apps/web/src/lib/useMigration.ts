@@ -1,7 +1,7 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useEffect, useMemo, useState } from 'react';
 import type { CanonicalSnapshot } from '@sslm/canonical';
-import type { DecisionPoint, DecisionType, MappingProfile, Resolution } from '@sslm/mapper';
+import { type DecisionPoint, type DecisionType, type MappingProfile, type Resolution, acceptsOption } from '@sslm/mapper';
 import { DEMO_ENV_HINTS, DEMO_WORKSPACE_ID } from './demo.ts';
 import { useLdSession, type LdSession } from './ld.ts';
 import { ensureProfile, mapperCapabilities, type MappingInputs } from './migration.ts';
@@ -50,13 +50,7 @@ export function useMigration(workspaceId: string, snapshots: CanonicalSnapshot[]
       idLists: Object.fromEntries(idListRecs.map((r) => [r.uid, r.ids])),
       coverage: Object.fromEntries(idListRecs.flatMap((r) => (r.coverage ? [[r.uid, r.coverage] as const] : []))),
       now,
-      resolve: async (decisions, optionKey) => {
-        const decidedAt = new Date().toISOString();
-        await store.saveResolutions(
-          workspaceId,
-          decisions.filter((d) => d.options.some((o) => o.key === optionKey)).map((d) => ({ id: d.id, type: d.type, optionKey, scope: 'resource', fingerprint: d.fingerprint, decidedAt })),
-        );
-      },
+      resolve: (decisions, optionKey) => store.saveResolutions(workspaceId, resolutionsFor(decisions, optionKey, new Date().toISOString())),
       saveResolutions: (rs) => store.saveResolutions(workspaceId, rs),
       setPolicy: async (type, optionKey) => {
         const policies = { ...profile.policies };
@@ -68,4 +62,13 @@ export function useMigration(workspaceId: string, snapshots: CanonicalSnapshot[]
       saveProfile: (p) => store.saveProfile(workspaceId, p),
     };
   }, [profile, resolutionList, idListRecs, ld, ldEnvs, now, workspaceId]);
+}
+
+/**
+ * The resource-scoped resolutions that answer `decisions` with `optionKey`. Decisions that don't
+ * take the answer are left out: `acceptsOption`, not the listed options, because a
+ * `unit_type_kind` answer may be a kind key or attribute the user typed rather than a listed one.
+ */
+export function resolutionsFor(decisions: DecisionPoint[], optionKey: string, decidedAt: string): Resolution[] {
+  return decisions.filter((d) => acceptsOption(d, optionKey)).map((d) => ({ id: d.id, type: d.type, optionKey, scope: 'resource', fingerprint: d.fingerprint, decidedAt }));
 }
