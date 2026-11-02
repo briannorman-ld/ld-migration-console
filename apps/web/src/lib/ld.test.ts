@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { probeStartPatch, type LdSession } from './ld.ts';
+import { ldConnecting, probeStartPatch, type LdSession } from './ld.ts';
 
 const matrix = { capabilities: [], environments: [] } as unknown as NonNullable<LdSession['matrix']>;
 const connected: LdSession = { status: 'connected', projectKey: 'p1', matrix, flags: { items: [], loadedAt: 't' }, segments: { test: [] } };
@@ -21,5 +21,21 @@ describe('probeStartPatch', () => {
   it('a first probe (no matrix yet) clears as before', () => {
     expect(probeStartPatch({ status: 'connected', projectKey: 'p1' }, 'p1').matrix).toBeUndefined();
     expect('matrix' in probeStartPatch({ status: 'connected', projectKey: 'p1' }, 'p1')).toBe(true);
+  });
+});
+
+describe('ldConnecting', () => {
+  it('is true while the token is checked and while the first probe of the project runs', () => {
+    expect(ldConnecting({ status: 'connecting' })).toBe(true);
+    expect(ldConnecting({ status: 'connected', projectKey: 'p1', probing: 'Reading environments' })).toBe(true);
+  });
+
+  it('is false once the matrix is in, with no project chosen, on error, and when disconnected', () => {
+    expect(ldConnecting(connected)).toBe(false);
+    expect(ldConnecting({ ...connected, probing: 'Re-probing' })).toBe(false);
+    expect(ldConnecting({ status: 'connected', projects: [] })).toBe(false);
+    expect(ldConnecting({ status: 'error', error: 'Unauthorized' })).toBe(false);
+    expect(ldConnecting({ status: 'disconnected' })).toBe(false);
+    expect(ldConnecting(undefined)).toBe(false);
   });
 });

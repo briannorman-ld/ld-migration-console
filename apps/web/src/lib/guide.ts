@@ -13,7 +13,7 @@ import { parseFooter, type CanonicalSnapshot, type EntityKind } from '@sslm/cano
 import type { DecisionPoint } from '@sslm/mapper';
 import { migrationStatus, ownsSegment } from '@sslm/planner';
 import type { SourceRecord } from '@sslm/store';
-import type { LdSession } from './ld.ts';
+import { ldConnecting, type LdSession } from './ld.ts';
 import { ldFlagState, mapAutotuneFor, mapConfigFor, mapGateFor, mapSegmentFor, type DecisionInstance, type MappingInputs } from './migration.ts';
 
 export type StepKey = 'connect' | 'environment' | 'contexts' | 'segments' | 'flags' | 'experiments' | 'cutover';
@@ -69,6 +69,8 @@ export interface GuideModel {
   /** Per source: the LD environment `env` maps to, if any. Sources without the environment are left out. */
   envBySource: { source: SourceRecord; snapshot: CanonicalSnapshot; isProduction: boolean; ldEnv?: string }[];
   connected: boolean;
+  /** LaunchDarkly is being reached (token check or first probe): show a spinner, not "not connected". */
+  connecting: boolean;
   synced: number;
   contexts: {
     /** Unit types seen in sources that take part in this environment. */
@@ -123,6 +125,7 @@ export function currentStep(done: Record<StepKey, boolean>): StepKey {
 export function computeGuide(input: GuideInput): GuideModel {
   const { sources, snapshots, m, env, decisions } = input;
   const connected = !!m?.connected;
+  const connecting = !connected && ldConnecting(m?.ld);
   const envs = [...new Set(snapshots.flatMap((s) => s.environments.map((e) => e.name)))];
   const envBySource: GuideModel['envBySource'] = [];
   for (const snapshot of snapshots) {
@@ -205,6 +208,7 @@ export function computeGuide(input: GuideInput): GuideModel {
     ldEnvs,
     envBySource,
     connected,
+    connecting,
     synced: snapshots.length,
     contexts,
     segments,

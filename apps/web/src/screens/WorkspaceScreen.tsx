@@ -28,7 +28,7 @@ import {
 } from "../components/ui.tsx";
 import { describeScope, KIND_LABEL, refreshable, secretKindOf, SOURCE_BADGE } from "../lib/kinds.ts";
 import { timeAgo } from "../lib/time.ts";
-import { useLdSession } from "../lib/ld.ts";
+import { ldConnecting, useLdSession } from "../lib/ld.ts";
 import { secrets } from "../lib/secrets.ts";
 import {
   collectDecisions,
@@ -364,11 +364,19 @@ export function WorkspaceScreen({
                     : "slate"
               }
             />
-            {ld.status === "connected"
-              ? ld.projectKey
-                ? `LD · ${ld.projectKey}`
-                : "LD · choose project"
-              : "Connect LaunchDarkly"}
+            {ldConnecting(ld) && !ld.matrix ? (
+              <>
+                <Spinner /> Connecting to LaunchDarkly…
+              </>
+            ) : ld.status === "connected" ? (
+              ld.projectKey ? (
+                `LD · ${ld.projectKey}`
+              ) : (
+                "LD · choose project"
+              )
+            ) : (
+              "Connect LaunchDarkly"
+            )}
             {ld.matrix && (
               <Badge tone="blue">
                 {

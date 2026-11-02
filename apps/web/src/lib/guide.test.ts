@@ -34,6 +34,16 @@ describe('guide: the current step', () => {
     expect(currentStep({ ...none, connect: true, environment: true, contexts: true, segments: true, flags: true, experiments: true })).toBe('cutover');
   });
 
+  it('reports LaunchDarkly as connecting (not "not connected") while the saved token reconnects', () => {
+    const base: GuideInput = { sources: [], snapshots: [], m: null, env: '', decisions: [], monitoring: { attention: 0, rows: 0, loaded: false }, interruptedRuns: 0 };
+    const m = (ld: Partial<NonNullable<GuideInput['m']>['ld']>) => ({ ...base, m: { ld: { status: 'connecting', ...ld }, connected: false, capabilities: {} } as unknown as NonNullable<GuideInput['m']> });
+    expect(computeGuide(m({})).connecting).toBe(true);
+    expect(computeGuide(m({ status: 'connected', projectKey: 'p1', probing: 'Starting' })).connecting).toBe(true);
+    expect(computeGuide(m({ status: 'disconnected' })).connecting).toBe(false);
+    expect(computeGuide(m({ status: 'error', error: 'nope' })).connecting).toBe(false);
+    expect(computeGuide(base).connecting).toBe(false);
+  });
+
   it('a fresh workspace starts at Connect with nothing tallied', () => {
     const input: GuideInput = { sources: [], snapshots: [], m: null, env: '', decisions: [], monitoring: { attention: 0, rows: 0, loaded: false }, interruptedRuns: 0 };
     const g = computeGuide(input);

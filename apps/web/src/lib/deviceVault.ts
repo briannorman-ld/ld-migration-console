@@ -1,5 +1,5 @@
 import type { WorkspaceRecord } from '@sslm/store';
-import { connectLd } from './ld.ts';
+import { connectLd, expectReconnect, reconnectSkipped } from './ld.ts';
 import { restoreDeviceVault, secrets, unlockDeviceVault, type Restored } from './secrets.ts';
 
 export interface Reconnected {
@@ -12,6 +12,7 @@ export interface Reconnected {
 function reconnect(workspaceId: string, workspace: WorkspaceRecord, restored: Restored): Reconnected {
   const token = secrets.get('ld', workspaceId);
   if (restored.ld && token) void connectLd(workspaceId, workspace.ld?.instance ?? 'us', token);
+  else reconnectSkipped(workspaceId);
   return { ld: restored.ld, statsig: restored.statsig.length, ldSources: restored.ldSources.length };
 }
 
@@ -26,6 +27,15 @@ export async function unlockAndReconnect(workspaceId: string, workspace: Workspa
  * restore (memory only, a passphrase vault, or already open).
  */
 export async function restoreAndReconnect(workspaceId: string, workspace: WorkspaceRecord): Promise<Reconnected | undefined> {
-  const restored = await restoreDeviceVault(workspaceId);
-  return restored ? reconnect(workspaceId, workspace, restored) : undefined;
+  // A workspace that connected LaunchDarkly before, with tokens kept on the device, is about to
+  // reconnect: show "connecting" from the first paint rather than "not connected".
+  if (workspace.ld && workspace.tokenStorage !== 'memory') expectReconnect(workspaceId);
+  try {
+    const restored = await restoreDeviceVault(workspaceId);
+    if (!restored) reconnectSkipped(workspaceId);
+    return restored ? reconnect(workspaceId, workspace, restored) : undefined;
+  } catch (e) {
+    reconnectSkipped(workspaceId);
+    throw e;
+  }
 }

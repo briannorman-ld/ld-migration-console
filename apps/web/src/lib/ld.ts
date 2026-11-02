@@ -35,6 +35,8 @@ export interface LdSession {
 const sessions = new Map<string, LdSession>();
 const clients = new Map<string, LdClient>();
 const listeners = new Set<() => void>();
+/** Workspaces whose device vault is being restored: "connecting" until the token comes back (or doesn't). */
+const pendingRestore = new Set<string>();
 const EMPTY: LdSession = { status: 'disconnected' };
 
 function set(workspaceId: string, patch: Partial<LdSession>) {
@@ -57,6 +59,32 @@ export function ldSessionSnapshot(workspaceId: string): LdSession {
   return sessions.get(workspaceId) ?? EMPTY;
 }
 
+/**
+ * Whether LaunchDarkly is on its way: the token is being checked, or it is good and the chosen
+ * project's first probe has not returned yet (`connected` in useMigration needs the matrix). Screens
+ * show a spinner for this instead of "not connected", which on a reload would be wrong for seconds.
+ */
+export function ldConnecting(s: LdSession | undefined): boolean {
+  if (!s) return false;
+  return s.status === 'connecting' || (s.status === 'connected' && !s.matrix && !!s.probing);
+}
+
+/**
+ * Before a device vault restore on workspace open (lib/deviceVault.ts): a workspace that was
+ * connected before shows "connecting" while its tokens decrypt, so a reload never flashes "not
+ * connected" first. `reconnectSkipped` takes it back when no LD token comes out of the vault.
+ */
+export function expectReconnect(workspaceId: string): void {
+  if ((sessions.get(workspaceId) ?? EMPTY).status !== 'disconnected') return;
+  pendingRestore.add(workspaceId);
+  set(workspaceId, { status: 'connecting' });
+}
+
+export function reconnectSkipped(workspaceId: string): void {
+  if (!pendingRestore.delete(workspaceId)) return;
+  if (sessions.get(workspaceId)?.status === 'connecting') set(workspaceId, { status: 'disconnected' });
+}
+
 export function ldClient(workspaceId: string): LdClient {
   return client(workspaceId);
 }
@@ -69,6 +97,7 @@ function client(workspaceId: string): LdClient {
 
 /** Validate the token (caller identity) and list projects. */
 export async function connectLd(workspaceId: string, instance: LdInstanceId, token: string): Promise<void> {
+  pendingRestore.delete(workspaceId);
   set(workspaceId, { status: 'connecting', instance, error: undefined, matrix: undefined, flags: undefined });
   const c = new LdClient({ instance, token });
   try {
@@ -76,10 +105,11 @@ export async function connectLd(workspaceId: string, instance: LdInstanceId, tok
     const projects = await c.listProjects();
     secrets.set('ld', workspaceId, token);
     clients.set(workspaceId, c);
-    set(workspaceId, { status: 'connected', identity, projects });
-    // Keep the workspace's chosen project (e.g. the demo's) and probe it straight away.
+    // Keep the workspace's chosen project (e.g. the demo's) and probe it straight away. The probe
+    // starts in the same patch as "connected", so `ldConnecting` stays true without a gap.
     const saved = (await store.getWorkspace(workspaceId))?.ld;
     const keep = saved?.instance === instance && saved.projectKey && projects.some((p) => p.key === saved.projectKey) ? saved.projectKey : undefined;
+    set(workspaceId, { status: 'connected', identity, projects, ...(keep ? probeStartPatch(sessions.get(workspaceId) ?? EMPTY, keep) : {}) });
     await store.updateWorkspace(workspaceId, { ld: { instance, ...(keep ? { projectKey: keep } : {}) } });
     if (keep) await chooseProject(workspaceId, keep);
     else if (saved?.projectKey) set(workspaceId, { error: `Project "${saved.projectKey}" isn't visible to this token on ${instance}; choose another.` });

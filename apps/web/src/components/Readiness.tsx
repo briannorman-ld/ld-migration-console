@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
-import { Badge, Button, Card, cx } from './ui.tsx';
+import { Badge, Button, Card, cx, Spinner } from './ui.tsx';
+import { ldConnecting } from '../lib/ld.ts';
 import type { MigrationContext } from '../lib/useMigration.ts';
 
 /**
@@ -17,6 +18,8 @@ export interface ReadinessStep {
   action?: { label: string; onClick: () => void };
   /** Shown but never blocks the Migrate button. */
   advisory?: boolean;
+  /** In progress by itself (a connection being made): a spinner instead of the step number. */
+  busy?: boolean;
 }
 
 export interface ReadinessInput {
@@ -40,7 +43,9 @@ export function readinessSteps(i: ReadinessInput): ReadinessStep[] {
   const blocking = i.selected > 0 ? i.blockingSelected : i.blockingAll;
   return [
     { key: 'source', label: 'Source synced', done: i.hasSnapshot, detail: 'Connect a source project (StatSig, or another LaunchDarkly project) and wait for its first sync.', action: { label: 'Connections', onClick: i.nav.connections } },
-    { key: 'ld', label: 'LaunchDarkly connected', done: i.m.connected, detail: 'Connect LaunchDarkly and choose the target project.', action: { label: 'Connect LD', onClick: i.nav.ld } },
+    !i.m.connected && ldConnecting(i.m.ld)
+      ? { key: 'ld', label: 'Connecting to LaunchDarkly…', done: false, busy: true, detail: `Reconnecting with the saved token${i.m.ld.probing ? `: ${i.m.ld.probing.toLowerCase()}` : ''}…`, action: { label: 'LaunchDarkly', onClick: i.nav.ld } }
+      : { key: 'ld', label: 'LaunchDarkly connected', done: i.m.connected, detail: 'Connect LaunchDarkly and choose the target project.', action: { label: 'Connect LD', onClick: i.nav.ld } },
     {
       key: 'mapping',
       label: `${i.env || 'environment'} mapped to LD`,
@@ -76,15 +81,21 @@ export function ReadinessLine({ steps, right }: { steps: ReadinessStep[]; right?
           const current = s === next;
           return (
             <li key={s.key} className={cx('flex items-center gap-1.5', s.done ? 'text-fg-muted' : current ? 'text-fg' : 'text-fg-subtle')}>
-              <span
-                aria-hidden
-                className={cx(
-                  'flex h-4 w-4 items-center justify-center rounded-full text-[10px] font-bold',
-                  s.done ? 'bg-success-fill text-on-accent' : s.advisory ? 'bg-warning-fill text-on-accent' : current ? 'bg-accent text-on-accent' : 'border border-line',
-                )}
-              >
-                {s.done ? '✓' : n + 1}
-              </span>
+              {s.busy && !s.done ? (
+                <span aria-hidden className="flex h-4 w-4 items-center justify-center text-fg-muted">
+                  <Spinner />
+                </span>
+              ) : (
+                <span
+                  aria-hidden
+                  className={cx(
+                    'flex h-4 w-4 items-center justify-center rounded-full text-[10px] font-bold',
+                    s.done ? 'bg-success-fill text-on-accent' : s.advisory ? 'bg-warning-fill text-on-accent' : current ? 'bg-accent text-on-accent' : 'border border-line',
+                  )}
+                >
+                  {s.done ? '✓' : n + 1}
+                </span>
+              )}
               <span className={cx(current && 'font-medium')}>{s.label}</span>
               {!s.done && s.action && (
                 <button type="button" className="text-link hover:underline" onClick={s.action.onClick}>

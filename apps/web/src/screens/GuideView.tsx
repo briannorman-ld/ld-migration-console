@@ -87,7 +87,7 @@ export function GuideView({
 function summaryFor(k: StepKey, g: GuideModel, input: GuideInput): string {
   switch (k) {
     case 'connect':
-      return `${g.synced} source${g.synced === 1 ? '' : 's'} synced · LaunchDarkly ${g.connected ? `project “${input.m?.ld.projectKey ?? ''}”` : 'not connected'}`;
+      return `${g.synced} source${g.synced === 1 ? '' : 's'} synced · LaunchDarkly ${g.connected ? `project “${input.m?.ld.projectKey ?? ''}”` : g.connecting ? 'connecting…' : 'not connected'}`;
     case 'environment':
       return g.env ? (g.ldEnvs.length ? `${g.env} → LD ${g.ldEnvs.join(', ')}` : `${g.env} is not mapped to an LD environment yet`) : 'No environment chosen';
     case 'contexts':
@@ -138,9 +138,18 @@ function Connect({ g, input, nav }: { g: GuideModel; input: GuideInput; nav: Gui
           </Button>
         </li>
         <li className="flex items-center gap-2">
-          <Mark ok={g.connected} /> {g.connected ? `LaunchDarkly project “${input.m?.ld.projectKey}” connected` : 'LaunchDarkly not connected, or no target project chosen'}
+          <Mark ok={g.connected} busy={g.connecting} />{' '}
+          {g.connected ? (
+            `LaunchDarkly project “${input.m?.ld.projectKey}” connected`
+          ) : g.connecting ? (
+            <span role="status">Connecting to LaunchDarkly{input.m?.ld.probing ? `: ${input.m.ld.probing.toLowerCase()}` : ''}…</span>
+          ) : input.m?.ld.status === 'error' && input.m.ld.error ? (
+            <span className="text-error">LaunchDarkly: {input.m.ld.error}</span>
+          ) : (
+            'LaunchDarkly not connected, or no target project chosen'
+          )}
           <Button variant="ghost" className="ml-auto py-1 text-xs" onClick={nav.ld}>
-            {g.connected ? 'LaunchDarkly' : 'Connect LaunchDarkly'}
+            {g.connected || g.connecting ? 'LaunchDarkly' : 'Connect LaunchDarkly'}
           </Button>
         </li>
       </ul>
@@ -185,7 +194,17 @@ function Environment({ workspaceId, g, m, onEnvChange, nav }: { workspaceId: str
         </Select>
         {prod && <Badge tone="red">production</Badge>}
       </label>
-      {!g.connected && <Callout tone="blue">Connect LaunchDarkly (step 1) to map it to an LD environment.</Callout>}
+      {!g.connected && (
+        <Callout tone="blue">
+          {g.connecting ? (
+            <span className="inline-flex items-center gap-2">
+              <Spinner /> Connecting to LaunchDarkly… the LD environments appear when the connection is up.
+            </span>
+          ) : (
+            'Connect LaunchDarkly (step 1) to map it to an LD environment.'
+          )}
+        </Callout>
+      )}
       {g.connected && m && (
         <table className="w-full text-sm">
           <tbody className="divide-y divide-line-soft">
@@ -415,7 +434,14 @@ function CutOver({ g, input, workspace, nav, doneCount }: { g: GuideModel; input
   );
 }
 
-function Mark({ ok }: { ok: boolean }) {
+function Mark({ ok, busy }: { ok: boolean; busy?: boolean }) {
+  if (busy && !ok) {
+    return (
+      <span aria-hidden className="inline-flex h-4 w-4 shrink-0 items-center justify-center text-fg-muted">
+        <Spinner />
+      </span>
+    );
+  }
   return (
     <span aria-hidden className={cx('inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[10px] font-bold', ok ? 'bg-success-fill text-on-accent' : 'border border-line text-fg-subtle')}>
       {ok ? '✓' : ''}
