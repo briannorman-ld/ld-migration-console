@@ -6,6 +6,7 @@ import { DecisionCard } from '../components/DecisionCard.tsx';
 import { Badge, Button, Callout, Card, cx, Input, Modal, Select, Spinner } from '../components/ui.tsx';
 import { ACCESS_LABEL, ACCOUNT_WIDE_STEPS, computeGuide, describeTally, LOOP_STEP, provisionedBy, STEP_ORDER, STEP_TITLE, teamKeysFor, type GuideInput, type GuideModel, type OwnerRow, type StepKey, type Tally, type TeamRow } from '../lib/guide.ts';
 import { KIND_LABEL } from '../lib/kinds.ts';
+import { timeAgo } from '../lib/time.ts';
 import { createLdEnvironment, createLdTeam, inviteLdMembers, refreshLdPeople, refreshLdState, reprobe, requireLdApprovals, setDefaultRandomizationUnit, type LdInviteRole } from '../lib/ld.ts';
 import { store } from '../lib/store.ts';
 import type { MigrationSelection } from '../lib/migration.ts';
@@ -868,6 +869,12 @@ function Items({ g, tallies, noun, nav, onMigrate, toSelection }: { g: GuideMode
       {!g.ldEnvs.length && <Callout tone="blue">Map the environment first (step 2).</Callout>}
       {g.ldEnvs.length > 0 && (
         <>
+          {g.ldAsOf && (
+            <p className="flex items-center gap-1.5 text-xs text-fg-muted" role="status">
+              {g.ldAsOf.refreshing && <Spinner />} LaunchDarkly as read {timeAgo(g.ldAsOf.at)};{' '}
+              {g.ldAsOf.refreshing ? 'reading it again now.' : 'the latest read failed (see step 1).'}
+            </p>
+          )}
           <ul className="space-y-1">
             {tallies.map((t) => (
               <li key={t.kind} className="flex items-center gap-2">

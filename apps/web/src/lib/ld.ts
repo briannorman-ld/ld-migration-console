@@ -38,8 +38,17 @@ export interface LdSession {
   teams?: LdTeam[];
   /** AI Configs in the project (StatSig prompts); undefined when not readable or not on the plan. */
   aiConfigs?: LdAiConfig[];
+  /**
+   * Set while the listing shown is the one saved on the last read (its time), restored on open so
+   * the guide and explorers have LD state at once; cleared when the live refresh has landed.
+   */
+  stale?: string;
   error?: string;
 }
+
+/** The listing fields of a session: what a refresh reads, and what is kept for the next open. */
+type LdListing = Pick<LdSession, 'flags' | 'contextKinds' | 'segments' | 'experiments' | 'metrics' | 'randomizationUnits' | 'defaultRandomizationUnit' | 'members' | 'teams' | 'aiConfigs'>;
+const LISTING_KEYS = ['flags', 'contextKinds', 'segments', 'experiments', 'metrics', 'randomizationUnits', 'defaultRandomizationUnit', 'members', 'teams', 'aiConfigs'] as const satisfies readonly (keyof LdListing)[];
 
 const sessions = new Map<string, LdSession>();
 const clients = new Map<string, LdClient>();
@@ -135,24 +144,33 @@ export async function connectLd(workspaceId: string, instance: LdInstanceId, tok
  */
 export function probeStartPatch(current: LdSession, projectKey: string): Partial<LdSession> {
   const sameProject = current.projectKey === projectKey && !!current.matrix;
-  return { projectKey, probing: 'Starting', error: undefined, ...(sameProject ? {} : { matrix: undefined, flags: undefined, segments: undefined, experiments: undefined }) };
+  return { projectKey, probing: 'Starting', error: undefined, ...(sameProject ? {} : { matrix: undefined, flags: undefined, segments: undefined, experiments: undefined, stale: undefined }) };
 }
 
 export async function chooseProject(workspaceId: string, projectKey: string): Promise<void> {
   const c = client(workspaceId);
   set(workspaceId, probeStartPatch(sessions.get(workspaceId) ?? EMPTY, projectKey));
-  // After a reload (token restored from the device vault), show the last probe's matrix at once so
-  // the mapping, decisions and monitoring screens render while the fresh probe runs.
+  // After a reload (token restored from the device vault), show the last probe's matrix and the
+  // last listing at once, so the guide, mapping, decisions and monitoring screens render while
+  // the fresh probe and refresh run. The listing is marked `stale` until the refresh has landed.
   if (!sessions.get(workspaceId)?.matrix) {
     const saved = (await store.getCapabilities(workspaceId))?.matrix as CapabilityMatrix | undefined;
     if (saved && saved.projectKey === projectKey && saved.instance === c.instance.id && !sessions.get(workspaceId)?.matrix) set(workspaceId, { matrix: saved });
+  }
+  if (!sessions.get(workspaceId)?.flags) {
+    const saved = await store.getLdState(workspaceId).catch(() => undefined);
+    if (saved && saved.projectKey === projectKey && saved.instance === c.instance.id && !sessions.get(workspaceId)?.flags) set(workspaceId, { ...(saved.state as LdListing), stale: saved.loadedAt });
   }
   try {
     const matrix = await probeCapabilities(c, projectKey, { onProgress: (s) => set(workspaceId, { probing: s }) });
     set(workspaceId, { matrix, probing: undefined });
     await store.updateWorkspace(workspaceId, { ld: { instance: c.instance.id, projectKey } });
     await store.saveCapabilities(workspaceId, matrix);
-    await refreshLdState(workspaceId);
+    // Segments and experiments for the environments the profile maps to, in the same refresh as the
+    // flags: the guide's segment step and the plan need them, and asking afterwards meant a second
+    // full flag listing before the first segment showed.
+    const mapped = await mappedLdEnvs(workspaceId, matrix);
+    await refreshLdState(workspaceId, { segmentEnvs: [...new Set([...mapped, ...Object.keys(sessions.get(workspaceId)?.segments ?? {})])] });
   } catch (e) {
     set(workspaceId, { probing: undefined, error: `Capability probe failed: ${(e as Error).message}` });
   }
@@ -199,6 +217,24 @@ export async function reprobe(workspaceId: string): Promise<void> {
   if (s?.projectKey) await chooseProject(workspaceId, s.projectKey);
 }
 
+/** The LD environments the workspace's profile maps source environments to, among those the project has. */
+async function mappedLdEnvs(workspaceId: string, matrix: CapabilityMatrix): Promise<string[]> {
+  const profile = await store.getProfile(workspaceId).catch(() => undefined);
+  const known = new Set(matrix.environments.map((e) => e.key));
+  const out = new Set<string>();
+  for (const src of Object.values(profile?.sources ?? {})) for (const ld of Object.values(src.envMapping ?? {})) if (ld && known.has(ld)) out.add(ld);
+  return [...out];
+}
+
+/** Keep the session's listing for the next open (see `LdSession.stale`). Best effort: a failed write changes nothing shown. */
+async function persistLdState(workspaceId: string): Promise<void> {
+  const s = sessions.get(workspaceId);
+  if (!s?.projectKey || !s.instance || !s.flags) return;
+  const state: LdListing = {};
+  for (const k of LISTING_KEYS) if (s[k] !== undefined) (state as Record<string, unknown>)[k] = s[k];
+  await store.saveLdState(workspaceId, { instance: s.instance, projectKey: s.projectKey, loadedAt: s.flags.loadedAt, state }).catch(() => undefined);
+}
+
 /**
  * Refreshes and merges are ordered: a listing that started earlier than the newest applied state is
  * discarded when it finishes, so slow pages never overwrite what a run just wrote.
@@ -220,6 +256,7 @@ export function mergeLdFlags(workspaceId: string, updates: { key: string; flag: 
     updates.map((u) => ({ key: u.key, item: u.flag })),
   );
   set(workspaceId, { flags: { items, loadedAt: new Date().toISOString() } });
+  void persistLdState(workspaceId);
 }
 
 /** Same for segments, per LD environment. */
@@ -235,13 +272,16 @@ export function mergeLdSegments(workspaceId: string, updates: { ldEnv: string; k
     );
   }
   set(workspaceId, { segments });
+  void persistLdState(workspaceId);
 }
 
 /**
  * Re-read flags (all environments) and context kinds: after connecting and after every run.
- * `segmentEnvs` also loads segments and experiments in those environments (what a plan needs).
- * Experimentation reads (metrics, experiments, randomization units) are optional: plans without
- * the add-on answer 403, which must not hide the flags.
+ * `segmentEnvs` also loads segments and experiments in those environments (what a plan and the
+ * guide's segment step need); without it, the environments already loaded are re-read. Every
+ * list is read in parallel and lands in the session as soon as it is in, so the segments step
+ * does not wait for the flag pages. Experimentation reads (metrics, experiments, randomization
+ * units) are optional: plans without the add-on answer 403, which must not hide the flags.
  */
 export async function refreshLdState(workspaceId: string, opts: { segmentEnvs?: string[] } = {}): Promise<void> {
   const s = sessions.get(workspaceId);
@@ -256,39 +296,43 @@ export async function refreshLdState(workspaceId: string, opts: { segmentEnvs?: 
       return undefined;
     }
   };
-  try {
-    const [items, kinds, metrics, settings, members, teams, aiConfigs] = await Promise.all([
-      c.listFlags(p),
-      c.listContextKinds(p),
-      optional(() => c.listMetrics(p)),
-      optional(() => c.getExperimentationSettings(p)),
-      optional(() => c.listMembers()),
-      optional(() => c.listTeams()),
-      optional(() => c.listAiConfigs(p)),
-    ]);
-    const segments = { ...(sessions.get(workspaceId)?.segments ?? {}) };
-    const experiments = { ...(sessions.get(workspaceId)?.experiments ?? {}) };
-    for (const env of opts.segmentEnvs ?? Object.keys(segments)) {
-      segments[env] = await c.listSegments(p, env);
-      const ex = await optional(() => c.listExperiments(p, env));
-      if (ex) experiments[env] = ex;
-    }
-    const defaultUnit = settings?.randomizationUnits?.find((u) => u.default)?.randomizationUnit;
-    // A refresh that started before a later one (or a run's merge) finished would put older flags back.
-    if (seq < appliedSeq) return;
+  // A refresh that started before a later one (or a run's merge) finished would put older state back:
+  // once something newer has been applied, this refresh applies nothing more.
+  const apply = (patch: Partial<LdSession>): boolean => {
+    if (seq < appliedSeq) return false;
     appliedSeq = seq;
-    set(workspaceId, {
-      flags: { items, loadedAt: new Date().toISOString() },
-      contextKinds: kinds.items.filter((k) => !k.archived).map((k) => k.key),
-      segments,
-      experiments,
-      ...(metrics ? { metrics } : {}),
-      ...(settings ? { randomizationUnits: (settings.randomizationUnits ?? []).map((u) => u.randomizationUnit) } : {}),
-      ...(defaultUnit ? { defaultRandomizationUnit: defaultUnit } : {}),
-      ...(members ? { members } : {}),
-      ...(teams ? { teams } : {}),
-      ...(aiConfigs ? { aiConfigs } : {}),
+    set(workspaceId, patch);
+    return true;
+  };
+  const envs = opts.segmentEnvs ?? Object.keys(s.segments ?? {});
+  try {
+    const flags = Promise.all([c.listFlags(p), c.listContextKinds(p)]).then(([items, kinds]) =>
+      apply({ flags: { items, loadedAt: new Date().toISOString() }, contextKinds: kinds.items.filter((k) => !k.archived).map((k) => k.key) }),
+    );
+    const perEnv = envs.map(async (env) => {
+      const [segments, experiments] = await Promise.all([c.listSegments(p, env), optional(() => c.listExperiments(p, env))]);
+      const cur = sessions.get(workspaceId);
+      apply({
+        segments: { ...(cur?.segments ?? {}), [env]: segments },
+        ...(experiments ? { experiments: { ...(cur?.experiments ?? {}), [env]: experiments } } : {}),
+      });
     });
+    const account = Promise.all([optional(() => c.listMetrics(p)), optional(() => c.getExperimentationSettings(p)), optional(() => c.listMembers()), optional(() => c.listTeams()), optional(() => c.listAiConfigs(p))]).then(
+      ([metrics, settings, members, teams, aiConfigs]) => {
+        const defaultUnit = settings?.randomizationUnits?.find((u) => u.default)?.randomizationUnit;
+        apply({
+          ...(metrics ? { metrics } : {}),
+          ...(settings ? { randomizationUnits: (settings.randomizationUnits ?? []).map((u) => u.randomizationUnit) } : {}),
+          ...(defaultUnit ? { defaultRandomizationUnit: defaultUnit } : {}),
+          ...(members ? { members } : {}),
+          ...(teams ? { teams } : {}),
+          ...(aiConfigs ? { aiConfigs } : {}),
+        });
+      },
+    );
+    await Promise.all([flags, account, ...perEnv]);
+    if (!apply({ stale: undefined })) return;
+    await persistLdState(workspaceId);
   } catch (e) {
     set(workspaceId, { error: `Could not read the LD project: ${(e as Error).message}` });
   }

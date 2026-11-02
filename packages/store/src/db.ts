@@ -198,6 +198,20 @@ export interface VaultRecord {
   device?: CryptoKey;
 }
 
+/**
+ * The last LaunchDarkly listing read for the workspace's project: flags, segments and experiments
+ * per environment, context kinds, metrics, members, teams, AI Configs. Shown on the next open,
+ * marked as of `loadedAt`, while the live read runs, the way the capability matrix is. No token.
+ */
+export interface LdStateRecord {
+  workspaceId: string;
+  instance: string;
+  projectKey: string;
+  loadedAt: string;
+  /** The LdSession listing fields (kept structural here to avoid a package cycle with @sslm/ld-client). */
+  state: unknown;
+}
+
 export class MigratorDb extends Dexie {
   workspaces!: EntityTable<WorkspaceRecord, "id">;
   sources!: EntityTable<SourceRecord, "id">;
@@ -214,6 +228,7 @@ export class MigratorDb extends Dexie {
   monitorState!: EntityTable<MonitorStateRecord, "workspaceId">;
   vaults!: EntityTable<VaultRecord, "workspaceId">;
   exclusions!: Dexie.Table<ExclusionRecord, [string, string]>;
+  ldState!: EntityTable<LdStateRecord, "workspaceId">;
 
   // The IndexedDB name predates the app's rename and stays: changing it would orphan every
   // user's local workspaces.
@@ -255,6 +270,10 @@ export class MigratorDb extends Dexie {
     // Items set aside ("Don't migrate"), per workspace.
     this.version(7).stores({
       exclusions: "[workspaceId+uid], workspaceId",
+    });
+    // The last LD listing per workspace, shown while the next read runs.
+    this.version(8).stores({
+      ldState: "workspaceId",
     });
   }
 }

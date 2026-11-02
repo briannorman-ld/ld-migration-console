@@ -320,3 +320,18 @@ describe("exclusions (items set aside)", () => {
     expect(await s.listExclusions(other.id)).toHaveLength(1);
   });
 });
+
+describe("last LD listing (shown while the next read runs)", () => {
+  it("keeps one listing per workspace, replaces it, and deletes it with the workspace", async () => {
+    const s = store();
+    const ws = await s.createWorkspace({ name: "Listing" });
+    expect(await s.getLdState(ws.id)).toBeUndefined();
+    await s.saveLdState(ws.id, { instance: "us", projectKey: "shop", loadedAt: "2026-11-02T10:00:00Z", state: { flags: { items: [{ key: "f1" }], loadedAt: "2026-11-02T10:00:00Z" }, segments: { test: [] } } });
+    await s.saveLdState(ws.id, { instance: "us", projectKey: "shop", loadedAt: "2026-11-02T11:00:00Z", state: { flags: { items: [{ key: "f1" }, { key: "f2" }], loadedAt: "2026-11-02T11:00:00Z" }, segments: { test: [{ key: "beta" }] } } });
+    const rec = await s.getLdState(ws.id);
+    expect(rec?.loadedAt).toBe("2026-11-02T11:00:00Z");
+    expect((rec?.state as { segments: Record<string, unknown[]> }).segments.test).toHaveLength(1);
+    await s.deleteWorkspace(ws.id);
+    expect(await s.getLdState(ws.id)).toBeUndefined();
+  });
+});

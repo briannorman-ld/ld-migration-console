@@ -7,6 +7,7 @@ import {
   type ExclusionRecord,
   type IdListHashesRecord,
   type IdListRecord,
+  type LdStateRecord,
   type MonitorItemRecord,
   type MonitorSampleRecord,
   type MonitorStateRecord,
@@ -150,8 +151,10 @@ export class WorkspaceStore {
       this.db.monitorState,
       this.db.vaults,
       this.db.exclusions,
+      this.db.ldState,
     ];
     await this.db.transaction("rw", tables, async () => {
+      await this.db.ldState.delete(id);
       await this.db.vaults.delete(id);
       await this.db.exclusions.where("workspaceId").equals(id).delete();
       await this.db.monitorSamples.where("workspaceId").equals(id).delete();
@@ -336,6 +339,18 @@ export class WorkspaceStore {
 
   getCapabilities(workspaceId: string): Promise<CapabilityRecord | undefined> {
     return this.db.capabilities.get(workspaceId);
+  }
+
+  /** Keep the LD listing just read, replacing the previous one. */
+  async saveLdState(workspaceId: string, rec: Omit<LdStateRecord, "workspaceId">): Promise<void> {
+    // No assertNoSecrets: the listing is LaunchDarkly's own resources (flags, segments, members),
+    // which may carry user-chosen keys such as a custom property named "token". Our credentials
+    // never reach it: `state` holds only what the LD client returned.
+    await this.db.ldState.put({ workspaceId, ...rec });
+  }
+
+  getLdState(workspaceId: string): Promise<LdStateRecord | undefined> {
+    return this.db.ldState.get(workspaceId);
   }
 
   // --- Mapping profile and decisions (PLAN §8) --------------------------------------------------

@@ -172,6 +172,8 @@ export interface GuideModel {
   connected: boolean;
   /** LaunchDarkly is being reached (token check or first probe): show a spinner, not "not connected". */
   connecting: boolean;
+  /** The LD state tallied here is the copy saved on the last read, as of `at`; `refreshing` until the live read lands (false once it failed). */
+  ldAsOf?: { at: string; refreshing: boolean };
   synced: number;
   /** Owners and teams across every source (account-level, not per environment). */
   people: {
@@ -388,6 +390,7 @@ export function computeGuide(input: GuideInput): GuideModel {
     envBySource,
     connected,
     connecting,
+    ...(m?.ld.stale ? { ldAsOf: { at: m.ld.stale, refreshing: !m.ld.error } } : {}),
     synced: snapshots.length,
     people,
     contexts,
