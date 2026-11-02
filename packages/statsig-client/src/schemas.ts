@@ -272,6 +272,17 @@ export const PaginationSchema = z.looseObject({
   totalItems: optNum,
 });
 
+/** `/exposure_count` (`ExposureCountDto`): recent exposure events per entity, all environments together. */
+const ExposureCountEntry = z.looseObject({ id: str, pastDay: optNum, past7Days: optNum });
+export const ExposureCountSchema = z.looseObject({
+  gates: z.array(ExposureCountEntry).nullish(),
+  experiments: z.array(ExposureCountEntry).nullish(),
+  dynamicConfigs: z.array(ExposureCountEntry).nullish(),
+});
+
+/** `/gates/{id}/checks` (`GateChecksDto`). */
+export const GateChecksSchema = z.looseObject({ has_production_checks_in_last_7_days: optBool });
+
 export type StatsigCondition = z.infer<typeof ConditionSchema>;
 export type StatsigRule = z.infer<typeof RuleSchema>;
 export type StatsigGate = z.infer<typeof GateSchema>;
@@ -298,3 +309,5 @@ export type StatsigProjectSettings = z.infer<typeof ProjectSettingsSchema>;
 export type StatsigProject = z.infer<typeof ProjectSchema>;
 export type StatsigCompany = z.infer<typeof CompanySchema>;
 export type StatsigOverrides = z.infer<typeof OverridesSchema>;
+export type StatsigExposureCounts = z.infer<typeof ExposureCountSchema>;
+export type StatsigGateChecks = z.infer<typeof GateChecksSchema>;

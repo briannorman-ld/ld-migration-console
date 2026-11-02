@@ -254,6 +254,22 @@ export interface Lifecycle {
   typeReason?: string;
 }
 
+/**
+ * Recent traffic a Console API source reports for a gate or config (PLAN §14 "StatSig side"):
+ * `/exposure_count` (`pastDay` / `past7Days`, every environment together) and, for gates with no
+ * exposures, `/gates/{id}/checks`. Null = the route was not readable; absent = not a Console source.
+ * Exposure counts come from SDK exposure events, so a gate checked with exposure logging off
+ * can look unused while it is not: the production-checks flag is the second opinion.
+ */
+export interface Usage {
+  /** Exposure events in the past 24 hours, all environments. */
+  exposuresPastDay: number | null;
+  /** Exposure events in the past 7 days, all environments. */
+  exposuresPast7Days: number | null;
+  /** `has_production_checks_in_last_7_days`; read only when the 7-day exposure count is 0 (gates only). */
+  productionChecksPast7Days?: boolean | null;
+}
+
 export interface Gate extends EntityBase {
   kind: 'gate';
   enabled: boolean;
@@ -263,6 +279,7 @@ export interface Gate extends EntityBase {
   status?: GateStatus;
   lifecycle?: Lifecycle;
   checksPerHour?: number | null;
+  usage?: Usage;
   holdoutIds: string[];
   salt?: string;
 }
@@ -278,6 +295,7 @@ export interface Config extends EntityBase {
   schema?: string | null;
   lifecycle?: Lifecycle;
   checksPerHour?: number | null;
+  usage?: Usage;
   holdoutIds: string[];
   salt?: string;
 }

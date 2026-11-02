@@ -10,7 +10,7 @@ import {
 import { LD_INSTANCES } from "@sslm/ld-client";
 import type { ConfigMapResult, DecisionType, GateMapResult } from "@sslm/mapper";
 import { migrationStatus, type MigrationStatus } from "@sslm/planner";
-import type { SourceRecord } from "@sslm/store";
+import type { ExclusionRecord, SourceRecord } from "@sslm/store";
 import {
   DecisionCard,
   FIDELITY_TONE,
@@ -35,6 +35,8 @@ import {
   Select,
 } from "../components/ui.tsx";
 import { ldFlagState, mapConfigFor, mapGateFor, type MappingInputs } from "../lib/migration.ts";
+import { describeUsage, isQuiet, suggestedReason, type UsageLevel, type UsageSummary } from "../lib/usage.ts";
+import { timeAgo } from "../lib/time.ts";
 import type { MigrationContext } from "../lib/useMigration.ts";
 import type { ExplorerNav } from "./AutotunesSideBySide.tsx";
 
@@ -72,7 +74,24 @@ export const STATUS: Record<
 };
 
 type StatusFilter =
-  "all" | "open" | "blocking" | "not_migrated" | "in_sync" | "changed";
+  | "all"
+  | "open"
+  | "blocking"
+  | "not_migrated"
+  | "in_sync"
+  | "changed"
+  /** No exposure events in StatSig in the past 7 days (lib/usage.ts): candidates to set aside. */
+  | "no_exposures"
+  /** Marked "Don't migrate". */
+  | "set_aside";
+
+const USAGE_TONE: Record<UsageLevel, "slate" | "green" | "amber" | "red" | "blue" | "violet"> = {
+  active: "green",
+  no_exposures: "amber",
+  unused: "red",
+  unknown: "slate",
+  needs_key: "slate",
+};
 
 /** The two StatSig resources that become plain LD flags: gates (boolean) and dynamic configs (JSON). */
 export type FlagKind = "gate" | "config";
@@ -103,6 +122,10 @@ interface Row {
   result: FlagMapResult;
   /** Per LD environment, for the status strip. */
   strip: { ldEnv: string; status: MigrationStatus }[];
+  /** Recent StatSig traffic (Console API sources). */
+  usage: UsageSummary;
+  /** The "Don't migrate" mark, when the user set this item aside. */
+  setAside?: ExclusionRecord;
 }
 
 /**
@@ -200,6 +223,7 @@ export function FlagSideBySide({
                 };
               })
             : [];
+          const setAside = m.exclusions.get(gate.uid);
           return {
             sourceId,
             gate,
@@ -207,11 +231,15 @@ export function FlagSideBySide({
             ldEnv,
             result,
             strip,
+            usage: describeUsage(gate),
+            ...(setAside ? { setAside } : {}),
           };
         }),
       ),
     [matched, snapshots, env, m, ldFlags],
   );
+  const quietCount = useMemo(() => rows.filter((r) => !r.gate.archived && isQuiet(r.usage)).length, [rows]);
+  const setAsideCount = useMemo(() => rows.filter((r) => !r.gate.archived && r.setAside).length, [rows]);
 
   // Open decision types across all items, with how many items raise each: the "decision" filter.
   const decisionTypes = useMemo(() => {
@@ -254,6 +282,10 @@ export function FlagSideBySide({
             return here === "in_sync";
           case "changed":
             return here === "statsig_changed" || here === "decisions_changed";
+          case "no_exposures":
+            return isQuiet(r.usage);
+          case "set_aside":
+            return !!r.setAside;
           default:
             return true;
         }
@@ -263,8 +295,9 @@ export function FlagSideBySide({
   const pager = usePager(visible);
 
   // Bulk answers for the selection: the open decisions of the selected items, rolled up by type.
+  // An item set aside after it was ticked drops out here, so it is never planned.
   const selectedRows = useMemo(
-    () => rows.filter((r) => selected.has(r.gate.uid)),
+    () => rows.filter((r) => selected.has(r.gate.uid) && !r.setAside),
     [rows, selected],
   );
   const bulk = useMemo(() => {
@@ -284,7 +317,7 @@ export function FlagSideBySide({
         .map((x) => x.decision),
       optionKey,
     );
-  const selectable = visible.filter((r) => !r.gate.archived);
+  const selectable = visible.filter((r) => !r.gate.archived && !r.setAside);
   const allSelected =
     selectable.length > 0 && selectable.every((r) => selected.has(r.gate.uid));
   const mappedHere = [
@@ -335,6 +368,12 @@ export function FlagSideBySide({
       return n;
     });
   const clearOwn = () => setSelected((x) => new Set([...x].filter((uid) => !rows.some((r) => r.gate.uid === uid))));
+  // "Don't migrate" for the whole selection: the mark carries the usage reason when every item agrees.
+  const setAsideSelected = async () => {
+    const uids = selectedRows.map((r) => r.gate.uid);
+    await m.exclude(uids, suggestedReason(selectedRows.map((r) => r.usage)));
+    setSelected((x) => new Set([...x].filter((uid) => !uids.includes(uid))));
+  };
 
   return (
     <div className="pb-20">
@@ -364,6 +403,8 @@ export function FlagSideBySide({
             <option value="not_migrated">Not migrated here</option>
             <option value="in_sync">In sync</option>
             <option value="changed">Changed since sync</option>
+            <option value="no_exposures">No exposures in 7 days{quietCount ? ` (${quietCount.toLocaleString()})` : ""}</option>
+            <option value="set_aside">Set aside{setAsideCount ? ` (${setAsideCount.toLocaleString()})` : ""}</option>
           </Select>
           {decisionTypes.length > 0 && (
             <Select
@@ -429,6 +470,16 @@ export function FlagSideBySide({
           </Callout>
         </div>
       )}
+      {filter === "no_exposures" && !readOnly && (
+        <div className="mb-3">
+          <Callout tone="blue">
+            {visible.length === 0
+              ? `Every ${words.one} logged exposures in StatSig in the past 7 days.`
+              : `${visible.length.toLocaleString()} ${visible.length === 1 ? words.one : words.many} logged no exposures in StatSig in the past 7 days (all environments together). Open one to see whether production still checks it, then tick the ones to set aside and choose “Don't migrate”.`}{" "}
+            Counts come from SDK exposure events, so a {words.one} evaluated with exposure logging off can look unused.
+          </Callout>
+        </div>
+      )}
       {unmappedSources.length > 0 && (
         <div className="mb-3">
           <Callout>
@@ -457,9 +508,12 @@ export function FlagSideBySide({
                   />
                 )}
               </th>
-              <th className="w-[38%] px-3 py-2">StatSig</th>
-              <th className="w-[10%] px-3 py-2">In {env}</th>
-              <th className="w-[18%] px-3 py-2">Mapping</th>
+              <th className="w-[34%] px-3 py-2">StatSig</th>
+              <th className="w-[9%] px-3 py-2">In {env}</th>
+              <th className="w-[12%] px-3 py-2" title="Exposure events StatSig received in the past 7 days, all environments together (Console API sources)">
+                Usage, 7 d
+              </th>
+              <th className="w-[16%] px-3 py-2">Mapping</th>
               <th className="px-3 py-2">LaunchDarkly</th>
             </tr>
           </thead>
@@ -479,6 +533,7 @@ export function FlagSideBySide({
                     className={cx(
                       "cursor-pointer align-top hover:bg-surface-hover",
                       open === key && "bg-surface-2",
+                      row.setAside && "opacity-70",
                     )}
                     onClick={() => setOpen(open === key ? undefined : key)}
                   >
@@ -490,8 +545,9 @@ export function FlagSideBySide({
                         <input
                           type="checkbox"
                           aria-label={`Select ${gate.id}`}
-                          disabled={gate.archived}
-                          checked={selected.has(gate.uid)}
+                          disabled={gate.archived || !!row.setAside}
+                          title={row.setAside ? "Set aside: open the row to migrate it after all" : undefined}
+                          checked={selected.has(gate.uid) && !row.setAside}
                           onChange={() => toggle(gate.uid)}
                         />
                       )}
@@ -514,6 +570,14 @@ export function FlagSideBySide({
                         )}
                         {!gate.enabled && <Badge tone="red">disabled</Badge>}
                         {gate.archived && <Badge tone="slate">archived</Badge>}
+                        {row.setAside && (
+                          <Badge
+                            tone="slate"
+                            title={`Don't migrate${row.setAside.reason ? `: ${row.setAside.reason}` : ""} (marked ${timeAgo(row.setAside.markedAt)})`}
+                          >
+                            set aside
+                          </Badge>
+                        )}
                         {gate.lifecycle?.type === "STALE" && (
                           <Badge
                             tone="amber"
@@ -569,6 +633,9 @@ export function FlagSideBySide({
                         </div>
                       )}
                     </td>
+                    <td className="px-3 py-2 text-xs">
+                      <UsageCell usage={row.usage} />
+                    </td>
                     <td className="px-3 py-2">
                       <div className="flex flex-wrap gap-1">
                         {/* Fidelity is only meaningful once nothing is blocking. */}
@@ -602,7 +669,7 @@ export function FlagSideBySide({
                   </tr>
                   {open === key && (
                     <tr className="bg-surface-2">
-                      <td colSpan={5} className="px-3 pb-4">
+                      <td colSpan={6} className="px-3 pb-4">
                         <Detail
                           row={row}
                           m={m}
@@ -641,6 +708,13 @@ export function FlagSideBySide({
                 onClick={clearOwn}
               >
                 Clear
+              </button>
+              <button
+                className="text-sm text-fg-muted hover:text-fg"
+                onClick={() => void setAsideSelected()}
+                title={`Mark the selected ${words.many} as not to be migrated. They stay listed; the guide and plans leave them out until you migrate them after all.`}
+              >
+                Don't migrate these
               </button>
             </div>
 
@@ -731,6 +805,59 @@ export function FlagSideBySide({
   );
 }
 
+function UsageCell({ usage }: { usage: UsageSummary }) {
+  if (usage.level === "needs_key" || usage.level === "unknown") {
+    return (
+      <span className="text-fg-muted" title={usage.detail}>
+        {usage.label}
+      </span>
+    );
+  }
+  return (
+    <Badge tone={USAGE_TONE[usage.level]} title={usage.detail}>
+      {usage.label}
+    </Badge>
+  );
+}
+
+/**
+ * The "Don't migrate" mark for one item: set it aside with a reason, or bring it back. Set-aside
+ * items stay in the list, but leave "Select all", the guide's counts and every plan.
+ */
+function SetAsideCard({ row, m, words }: { row: Row; m: MigrationContext; words: { one: string; many: string } }) {
+  const [reason, setReason] = useState(suggestedReason([row.usage]) ?? "");
+  if (row.setAside) {
+    return (
+      <Card className="flex flex-wrap items-center gap-3 p-3 text-xs">
+        <Badge tone="slate">set aside</Badge>
+        <span>
+          Not to be migrated{row.setAside.reason ? <>: <b>{row.setAside.reason}</b></> : ""} · marked {timeAgo(row.setAside.markedAt)}. It is left out of “Select all”, the guide and plans.
+        </span>
+        <Button variant="ghost" className="ml-auto py-1 text-xs" onClick={() => void m.include([row.gate.uid])}>
+          Migrate it after all
+        </Button>
+      </Card>
+    );
+  }
+  return (
+    <Card className="flex flex-wrap items-center gap-3 p-3 text-xs">
+      <span className="text-fg-muted" title={row.usage.detail}>
+        Usage: {row.usage.label}.
+      </span>
+      <Input
+        placeholder="Reason (optional)"
+        value={reason}
+        onChange={(e) => setReason(e.target.value)}
+        className="w-72 py-1 text-xs"
+        aria-label={`Reason not to migrate ${row.gate.id}`}
+      />
+      <Button variant="ghost" className="py-1 text-xs" onClick={() => void m.exclude([row.gate.uid], reason.trim() || undefined)}>
+        Don't migrate this {words.one}
+      </Button>
+    </Card>
+  );
+}
+
 function LdCell({
   row,
   connected,
@@ -800,6 +927,7 @@ function Detail({
   const stale = new Map(r.stale.map((s) => [s.decision.id, s.previous]));
   return (
     <div className="space-y-3 pt-1">
+      {!readOnly && !row.gate.archived && <SetAsideCard row={row} m={m} words={LABEL[row.gate.kind]} />}
       <div className="grid grid-cols-2 gap-3">
         <Card className="p-3">
           <div className="mb-2 text-xs font-semibold text-fg-muted">

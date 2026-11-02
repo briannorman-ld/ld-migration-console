@@ -1,6 +1,7 @@
 import {
   AlertSchema,
   AutotuneSchema,
+  EXPOSURE_COUNT_BATCH,
   CompanySchema,
   DynamicConfigSchema,
   EnvironmentsSchema,
@@ -83,9 +84,22 @@ export interface RawConsoleSnapshot {
   reviewSettings: StatsigReviewSettings | null;
   projectSettings: StatsigProjectSettings | null;
   overrides: StatsigOverrides | null;
+  /**
+   * Recent exposure events per gate and dynamic config (`/exposure_count`, batched, all
+   * environments together), for the usage column and cutover (PLAN §14). Null when the route was
+   * not readable; an id the response left out counts as zero.
+   */
+  exposureCounts: { gates: Record<string, ExposureCount>; dynamicConfigs: Record<string, ExposureCount> } | null;
+  /** `/gates/{id}/checks` for the gates with no exposures in 7 days: whether production still checks them. */
+  gateChecks: Record<string, boolean | null>;
   schemaIssues: SchemaIssue[];
   /** Endpoints that failed without failing the crawl (missing plan feature, 403 scope, …). */
   skipped: { endpoint: string; reason: string }[];
+}
+
+export interface ExposureCount {
+  pastDay: number | null;
+  past7Days: number | null;
 }
 
 export interface CrawlProgress {
@@ -118,6 +132,12 @@ export interface CrawlOptions {
    * blocklist) are fetched on request later (Source warnings), when a big-segment migration needs them.
    */
   eagerIdListMax?: number;
+  /**
+   * `/gates/{id}/checks` is one request per gate, so it is read only for gates with no exposures
+   * in 7 days, and for at most this many of them (default 200: under a quarter of the 15-minute
+   * budget). The rest are reported as skipped and show "unknown".
+   */
+  maxGateChecks?: number;
 }
 
 export class CrawlAuthError extends Error {
@@ -231,6 +251,52 @@ export async function crawlConsoleProject(
     }
   }
 
+  // 4. Usage: exposure counts for live gates and configs, 25 ids per kind per call; then the
+  //    production-checks flag for gates that showed no exposures (exposure logging may be off).
+  const liveGates = r.gates.filter((g) => g.status !== 'Archived' && g.archivedAt == null).map((g) => g.id);
+  const liveConfigs = r.dynamicConfigs.filter((c) => c.status !== 'Archived').map((c) => c.id);
+  let exposureCounts: RawConsoleSnapshot['exposureCounts'] = null;
+  const gateChecks: Record<string, boolean | null> = {};
+  if (liveGates.length || liveConfigs.length) {
+    const batches = Math.max(Math.ceil(liveGates.length / EXPOSURE_COUNT_BATCH), Math.ceil(liveConfigs.length / EXPOSURE_COUNT_BATCH));
+    total += batches;
+    const counts = { gates: {} as Record<string, ExposureCount>, dynamicConfigs: {} as Record<string, ExposureCount> };
+    let readable = true;
+    for (let b = 0; b < batches && readable; b++) {
+      const gates = liveGates.slice(b * EXPOSURE_COUNT_BATCH, (b + 1) * EXPOSURE_COUNT_BATCH);
+      const dynamicConfigs = liveConfigs.slice(b * EXPOSURE_COUNT_BATCH, (b + 1) * EXPOSURE_COUNT_BATCH);
+      const res = await optional('/exposure_count', null, () => client.getExposureCounts({ gates, dynamicConfigs }, signal));
+      if (!res) {
+        // A 403/404 on the first batch means the route is not available to this key: stop asking.
+        readable = false;
+        break;
+      }
+      for (const id of gates) counts.gates[id] = { pastDay: 0, past7Days: 0 };
+      for (const id of dynamicConfigs) counts.dynamicConfigs[id] = { pastDay: 0, past7Days: 0 };
+      for (const e of res.gates ?? []) if (e.id in counts.gates) counts.gates[e.id] = { pastDay: e.pastDay ?? null, past7Days: e.past7Days ?? null };
+      for (const e of res.dynamicConfigs ?? []) if (e.id in counts.dynamicConfigs) counts.dynamicConfigs[e.id] = { pastDay: e.pastDay ?? null, past7Days: e.past7Days ?? null };
+    }
+    if (readable) {
+      exposureCounts = counts;
+      const quiet = liveGates.filter((id) => counts.gates[id]?.past7Days === 0);
+      const maxChecks = opts.maxGateChecks ?? 200;
+      const asked = quiet.slice(0, maxChecks);
+      total += asked.length;
+      let checksReadable = true;
+      for (const id of asked) {
+        if (!checksReadable) {
+          gateChecks[id] = null;
+          continue;
+        }
+        const res = await optional(`/gates/${id}/checks`, null, () => client.getGateChecks(id, signal));
+        if (!res) checksReadable = false;
+        gateChecks[id] = res ? (res.has_production_checks_in_last_7_days ?? null) : null;
+      }
+      for (const id of quiet.slice(maxChecks)) gateChecks[id] = null;
+      if (quiet.length > maxChecks) skipped.push({ endpoint: '/gates/{id}/checks', reason: `deferred: ${quiet.length - maxChecks} more gates without exposures were not checked (limit ${maxChecks} per sync)` });
+    }
+  }
+
   return {
     kind: 'console_api',
     fetchedAt: new Date().toISOString(),
@@ -239,6 +305,8 @@ export async function crawlConsoleProject(
     teams,
     metricSources,
     idLists,
+    exposureCounts,
+    gateChecks,
     schemaIssues,
     skipped,
   };

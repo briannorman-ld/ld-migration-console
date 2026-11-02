@@ -21,7 +21,7 @@ export interface SnapshotDiff {
 }
 
 /** Fields that change on every save and say nothing about behaviour. */
-const VOLATILE = new Set(['lastModifiedTime', 'version', 'checksPerHour', 'uid', 'source', 'createdTime']);
+const VOLATILE = new Set(['lastModifiedTime', 'version', 'checksPerHour', 'usage', 'uid', 'source', 'createdTime']);
 
 /**
  * Entity-level diff between two snapshots of the same source (PLAN §4.2 "Regular re-uploads",

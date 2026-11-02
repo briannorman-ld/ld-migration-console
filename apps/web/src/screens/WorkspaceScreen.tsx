@@ -717,7 +717,8 @@ export function WorkspaceScreen({
               ]}
               onMigrate={() =>
                 setMigrate({
-                  selection: toSelection(selected),
+                  // Items set aside ("Don't migrate") never reach a plan, even from an older selection.
+                  selection: toSelection([...selected].filter((uid) => !m.exclusions.has(uid))),
                   ldEnvs: [
                     ...new Set(
                       visible
@@ -778,6 +779,7 @@ export function WorkspaceScreen({
                 m,
                 env,
                 decisions: allDecisions,
+                ...(m ? { exclusions: new Set(m.exclusions.keys()) } : {}),
                 monitoring: { attention: monitoring.attention, rows: monitoring.rows.length, loaded: monitoring.loaded },
                 interruptedRuns: interrupted.length,
               }}

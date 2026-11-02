@@ -163,6 +163,19 @@ export interface MonitorStateRecord {
 }
 
 /**
+ * A StatSig item the user set aside: it stays in the explorers, but "Select all", the guide's
+ * step counts and the plan leave it out until the mark is removed. Typical reason: no checks in
+ * the past 7 days (the usage column), or a gate that will be hard-coded instead of migrated.
+ */
+export interface ExclusionRecord {
+  workspaceId: string;
+  /** Entity uid (`<sourceId>/<kind>/<id>`). */
+  uid: string;
+  reason?: string;
+  markedAt: string;
+}
+
+/**
  * The workspace's tokens, AES-GCM encrypted (PLAN §3.4). The only place a token ever reaches
  * disk, and only as this blob. `device` is the non-extractable key of a device vault: the browser
  * can use it to decrypt the blob but cannot export it. A passphrase vault has no `device`.
@@ -189,6 +202,7 @@ export class MigratorDb extends Dexie {
   monitorItems!: Dexie.Table<MonitorItemRecord, [string, string, string]>;
   monitorState!: EntityTable<MonitorStateRecord, "workspaceId">;
   vaults!: EntityTable<VaultRecord, "workspaceId">;
+  exclusions!: Dexie.Table<ExclusionRecord, [string, string]>;
 
   // The IndexedDB name predates the app's rename and stays: changing it would orphan every
   // user's local workspaces.
@@ -226,6 +240,10 @@ export class MigratorDb extends Dexie {
     // Remember on this device: encrypted token vault per workspace (PLAN §3.4).
     this.version(6).stores({
       vaults: "workspaceId",
+    });
+    // Items set aside ("Don't migrate"), per workspace.
+    this.version(7).stores({
+      exclusions: "[workspaceId+uid], workspaceId",
     });
   }
 }

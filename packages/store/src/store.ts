@@ -4,6 +4,7 @@ import type { RunRecord } from "@sslm/executor";
 import {
   MigratorDb,
   type CapabilityRecord,
+  type ExclusionRecord,
   type IdListHashesRecord,
   type IdListRecord,
   type MonitorItemRecord,
@@ -148,9 +149,11 @@ export class WorkspaceStore {
       this.db.monitorItems,
       this.db.monitorState,
       this.db.vaults,
+      this.db.exclusions,
     ];
     await this.db.transaction("rw", tables, async () => {
       await this.db.vaults.delete(id);
+      await this.db.exclusions.where("workspaceId").equals(id).delete();
       await this.db.monitorSamples.where("workspaceId").equals(id).delete();
       await this.db.monitorItems.where("workspaceId").equals(id).delete();
       await this.db.monitorState.delete(id);
@@ -476,6 +479,25 @@ export class WorkspaceStore {
    * Only the encrypted blob is accepted here; assertNoSecrets refuses anything that looks like a
    * raw token. `device` is the non-extractable key of a device vault (a passphrase vault has none).
    */
+  // --- Items set aside ("Don't migrate") -----------------------------------------------------
+
+  listExclusions(workspaceId: string): Promise<ExclusionRecord[]> {
+    return this.db.exclusions.where("workspaceId").equals(workspaceId).toArray();
+  }
+
+  /** Mark items as not to be migrated (replacing an earlier mark on the same uid). */
+  async setExclusions(workspaceId: string, items: { uid: string; reason?: string }[], markedAt = now()): Promise<void> {
+    const recs: ExclusionRecord[] = items.map((i) => ({ workspaceId, uid: i.uid, markedAt, ...(i.reason?.trim() ? { reason: i.reason.trim() } : {}) }));
+    assertNoSecrets(recs);
+    await this.db.exclusions.bulkPut(recs);
+    await this.touch(workspaceId);
+  }
+
+  async deleteExclusions(workspaceId: string, uids: string[]): Promise<void> {
+    await this.db.exclusions.bulkDelete(uids.map((uid) => [workspaceId, uid] as [string, string]));
+    await this.touch(workspaceId);
+  }
+
   async saveVault(workspaceId: string, blob: VaultBlob, device?: CryptoKey): Promise<void> {
     const rec: VaultRecord = { workspaceId, updatedAt: now(), blob, ...(device ? { device } : {}) };
     assertNoSecrets({ ...rec, device: undefined });

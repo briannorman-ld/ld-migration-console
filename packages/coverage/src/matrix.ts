@@ -225,8 +225,9 @@ export const COVERAGE: CoverageEntry[] = [
     statsig: 'Gate measurement (Pulse on a gate), diagnostics, exposure counts',
     ld: 'Flag insights, experiments on a flag',
     status: 'none',
-    how: 'Historical gate measurements stay in StatSig; LD starts measuring once traffic arrives.',
-    detail: 'Check counts and exposure counts from StatSig are used by the console for readiness and cutover reporting, not written to LD.',
+    how: 'Historical gate measurements stay in StatSig; LD starts measuring once traffic arrives. Exposure counts and production checks from the past 7 days are read on every sync and shown as a Usage column, so gates nobody evaluates any more can be set aside ("Don\u2019t migrate") instead of migrated.',
+    detail: 'Check counts and exposure counts from StatSig are used by the console for readiness, pruning and cutover reporting, not written to LD. Exposure counts come from SDK exposure events, so a gate evaluated with exposure logging off can look unused; the console says "unused" only when the production-checks flag agrees. Config-spec sources carry none of this.',
+    edgeCases: ['14.11'],
     docs: { statsig: `${SS}/feature-flags/view-exposures`, ld: `${LD}/home/flags/flag-insights` },
   },
   {

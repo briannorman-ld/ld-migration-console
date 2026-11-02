@@ -142,14 +142,18 @@ export function createStatsigConsoleHandlers(opts: MockStatsigOptions): HttpHand
     route('/settings/reviews', ({ d }) => single(d.reviewSettings)),
     route('/settings/project', ({ d }) => single(d.projectSettings)),
     route('/overrides', ({ d }) => single(d.overrides)),
+    // Ids arrive as repeated keys (`gates=a&gates=b`), at most 25 per kind, as the OpenAPI `oneOf` says.
     route('/exposure_count', ({ url, d }) => {
-      const ids = (url.searchParams.get('ids') ?? '').split(',').filter(Boolean).slice(0, 25);
-      const counts = (items: JsonObject[]) =>
-        items.filter((x) => ids.includes(x.id as string)).map((x) => {
-          const perHour = typeof x.checksPerHour === 'number' ? x.checksPerHour : 0;
-          return { id: x.id as string, pastDay: perHour * 24, past7Days: perHour * 24 * 7 };
-        });
-      return single({ gates: counts(d.gates), experiments: counts(d.experiments), dynamicConfigs: counts(d.dynamicConfigs) });
+      const counts = (key: string, items: JsonObject[]) => {
+        const ids = url.searchParams.getAll(key).flatMap((v) => v.split(',')).filter(Boolean).slice(0, 25);
+        return items
+          .filter((x) => ids.includes(x.id as string))
+          .map((x) => {
+            const perHour = typeof x.checksPerHour === 'number' ? x.checksPerHour : 0;
+            return { id: x.id as string, pastDay: perHour * 24, past7Days: perHour * 24 * 7 };
+          });
+      };
+      return single({ gates: counts('gates', d.gates), experiments: counts('experiments', d.experiments), dynamicConfigs: counts('dynamicConfigs', d.dynamicConfigs) });
     }),
     // Anything else under the base URL: a 404 like the real API, rather than falling through.
     http.get(`${base}/*`, () => HttpResponse.json({ status: 404, message: 'Not found' }, { status: 404 })),

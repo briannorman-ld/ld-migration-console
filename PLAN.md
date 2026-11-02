@@ -687,6 +687,7 @@ LD and StatSig only return *current* counts, so the history is built from sample
   - `checksPerHour`, `/exposure_count` (`pastDay` / `past7Days`, batched 25 IDs per call)
   - `/gates/{id}/checks` → `has_production_checks_in_last_7_days`
   - Console API sources only. Spec-only sources show "unknown"; the user can attach a Console key later.
+  - **Read on every Console sync** (added 2026-11-02): exposure counts for every live gate and config (25 ids per kind per call), then the checks flag for gates with no exposures (at most 200 per sync). Stored as `Gate.usage` / `Config.usage` (volatile for drift). The Gates and Dynamic configs explorers show a **Usage, 7 d** column with a **No exposures in 7 days** filter; "unused" is claimed only when the exposure count and the production-checks flag agree, because exposure counts come from SDK exposure events. Items the user marks **Don't migrate** (per workspace, `exclusions` table, with a reason) stay listed but leave "Select all", the guide's counts and every plan until unmarked. Edge case 14.11.
 - **LD side:**
   - `GET /flag-statuses/{p}/{env}` → `new`, `active`, `inactive`, `launched`, plus `lastRequested`
   - beta `GET /usage/evaluations/{p}/{env}/{flag}` for per-variation counts

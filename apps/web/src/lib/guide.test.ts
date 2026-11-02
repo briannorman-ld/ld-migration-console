@@ -15,7 +15,7 @@ describe('guide: where an item stands', () => {
   });
 
   it('describes a tally for the step line', () => {
-    const t: Tally = { kind: 'gate', total: 12, inSync: 3, changed: 2, notMigrated: 5, blocked: 2, skipped: 0, toMigrate: [], ldUnknown: false };
+    const t: Tally = { kind: 'gate', total: 12, inSync: 3, changed: 2, notMigrated: 5, blocked: 2, skipped: 0, setAside: 0, toMigrate: [], ldUnknown: false };
     expect(describeTally(t, 'gate')).toBe('3 of 12 in sync · 2 changed since · 5 not migrated · 2 wait for decisions');
     expect(describeTally({ ...t, total: 0 }, 'gate')).toBe('No gates in this environment.');
     expect(describeTally({ ...t, ldUnknown: true }, 'gate')).toMatch(/^reading LaunchDarkly…/);

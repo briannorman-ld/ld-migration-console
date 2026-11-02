@@ -1,8 +1,9 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { http, HttpResponse } from 'msw';
 import { buildAcmeDataset } from '@sslm/demo-fixtures';
 import { countsByKind, effectiveTargeting } from '@sslm/canonical';
 import { CrawlAuthError, crawlConsoleProject, normalizeConsoleSnapshot, CrawlTransientError } from '../src/index.ts';
-import { mockProject, server, testClient } from './msw-server.ts';
+import { mockProject, server, TEST_BASE, testClient } from './msw-server.ts';
 
 beforeAll(() => server.listen({ onUnhandledFrame: 'error' }));
 afterEach(() => server.resetHandlers());
@@ -39,6 +40,40 @@ describe('Console API adapter against the simulated StatSig', () => {
     expect(requested).not.toContain('/metrics/list');
     // Left out by choice is not a skipped fetch (only the usual deferred big ID lists appear).
     expect(raw.skipped.map((x) => x.endpoint).filter((e) => !e.endsWith('/id_list'))).toEqual([]);
+  });
+
+  it('reads recent usage: exposure counts in batches of 25, then production checks for gates with none (PLAN §14)', async () => {
+    const d = mockProject('web');
+    const requested: string[] = [];
+    const { client, issues } = testClient('web');
+    const raw = await crawlConsoleProject(client, issues, { onProgress: (p) => requested.push(p.endpoint) });
+    const snap = normalizeConsoleSnapshot(raw, { source: SOURCE, takenAt: '2026-10-01T00:00:00.000Z' });
+    const live = d.gates.filter((g) => g.status !== 'Archived').length;
+    expect(requested.filter((e) => e === '/exposure_count')).toHaveLength(Math.ceil(live / 25));
+    // The mock derives exposures from checksPerHour: a busy gate has them, a dead one has none.
+    const busy = snap.gates.find((g) => g.id === 'new_checkout_flow')!;
+    expect(busy.usage).toEqual({ exposuresPastDay: 48_000 * 24, exposuresPast7Days: 48_000 * 24 * 7 });
+    const dead = snap.gates.find((g) => g.id === 'stale_reviews_widget')!;
+    expect(dead.usage).toEqual({ exposuresPastDay: 0, exposuresPast7Days: 0, productionChecksPast7Days: false });
+    expect(requested).toContain('/gates/stale_reviews_widget/checks');
+    expect(requested).not.toContain('/gates/new_checkout_flow/checks');
+    // Archived gates are not asked about; configs get counts but no checks flag.
+    expect(snap.gates.find((g) => g.id === 'legacy_wishlist')!.usage).toBeUndefined();
+    expect(snap.configs.find((c) => c.id === 'checkout_config')!.usage).toEqual({ exposuresPastDay: 800 * 24, exposuresPast7Days: 800 * 24 * 7 });
+  });
+
+  it('a key without access to /exposure_count leaves usage unknown and warns once', async () => {
+    mockProject('web');
+    server.use(http.get(`${TEST_BASE('web')}/exposure_count`, () => HttpResponse.json({ status: 403, message: 'Forbidden' }, { status: 403 })));
+    const requested: string[] = [];
+    const { client, issues } = testClient('web');
+    const raw = await crawlConsoleProject(client, issues, { onProgress: (p) => requested.push(p.endpoint) });
+    const snap = normalizeConsoleSnapshot(raw, { source: SOURCE, takenAt: '2026-10-01T00:00:00.000Z' });
+    expect(requested.filter((e) => e === '/exposure_count')).toHaveLength(1);
+    expect(raw.skipped.filter((x) => x.endpoint === '/exposure_count')).toHaveLength(1);
+    expect(requested.some((e) => e.endsWith('/checks'))).toBe(false);
+    expect(snap.gates.find((g) => g.id === 'stale_reviews_widget')!.usage).toEqual({ exposuresPastDay: null, exposuresPast7Days: null });
+    expect(snap.warnings.some((w) => w.code === 'fetch_skipped' && w.path === '/exposure_count')).toBe(true);
   });
 
   it('crawls and normalizes acme-web', async () => {

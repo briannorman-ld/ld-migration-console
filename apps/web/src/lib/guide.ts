@@ -95,6 +95,8 @@ export interface Tally {
   /** Open blocking decisions stop these until answered. */
   blocked: number;
   skipped: number;
+  /** Set aside by the user ("Don't migrate"): listed, not counted in `total`, never planned from here. */
+  setAside: number;
   /** Uids worth planning now: not in sync, not skipped (blocked ones included; the plan shows why). */
   toMigrate: string[];
   /** LD's list for this environment has not been read yet: in-sync counts are unknown. */
@@ -108,6 +110,8 @@ export interface GuideInput {
   m: (MappingInputs & { ld: LdSession; connected: boolean }) | null;
   /** The source environment chosen in the header. */
   env: string;
+  /** Uids the user set aside ("Don't migrate"): left out of every tally's work. */
+  exclusions?: ReadonlySet<string>;
   /** Every decision in the workspace, open and decided. */
   decisions: DecisionInstance[];
   monitoring: { attention: number; rows: number; loaded: boolean };
@@ -171,7 +175,7 @@ export interface GuideModel {
   current: StepKey;
 }
 
-const emptyTally = (kind: EntityKind): Tally => ({ kind, total: 0, inSync: 0, changed: 0, notMigrated: 0, blocked: 0, skipped: 0, toMigrate: [], ldUnknown: false });
+const emptyTally = (kind: EntityKind): Tally => ({ kind, total: 0, inSync: 0, changed: 0, notMigrated: 0, blocked: 0, skipped: 0, setAside: 0, toMigrate: [], ldUnknown: false });
 
 type Standing = 'in_sync' | 'changed' | 'not_migrated' | 'blocked' | 'skipped';
 
@@ -183,7 +187,11 @@ export function classify(r: { skipped?: string; unresolved: DecisionPoint[] }, i
   return inLd.status === 'changed' ? 'changed' : 'not_migrated';
 }
 
-function add(t: Tally, uid: string, standing: Standing): void {
+function add(t: Tally, uid: string, standing: Standing | 'set_aside'): void {
+  if (standing === 'set_aside') {
+    t.setAside++;
+    return;
+  }
   t.total++;
   if (standing === 'in_sync') t.inSync++;
   else if (standing === 'changed') t.changed++;
@@ -203,6 +211,7 @@ export function currentStep(done: Record<StepKey, boolean>): StepKey {
 
 export function computeGuide(input: GuideInput): GuideModel {
   const { sources, snapshots, m, env, decisions } = input;
+  const setAside = (uid: string) => input.exclusions?.has(uid) ?? false;
   const connected = !!m?.connected;
   const connecting = !connected && ldConnecting(m?.ld);
   const envs = [...new Set(snapshots.flatMap((s) => s.environments.map((e) => e.name)))];
@@ -264,7 +273,7 @@ export function computeGuide(input: GuideInput): GuideModel {
         const r = mapPromptFor(snapshot, p, m);
         const existing = ldAiConfigs?.find((a) => a.key === r.key && ownsSegment({ key: a.key, tags: a.tags ?? [] }, snapshot.source.alias));
         const fp = existing ? parseFooter(existing.description)?.fp : undefined;
-        add(prompts, p.uid, classify(r, { status: !existing ? 'absent' : fp === r.statsigFingerprint ? 'in_sync' : 'changed' }));
+        add(prompts, p.uid, setAside(p.uid) ? 'set_aside' : classify(r, { status: !existing ? 'absent' : fp === r.statsigFingerprint ? 'in_sync' : 'changed' }));
       }
       for (const alert of snapshot.alerts ?? []) alerts.push({ alias: snapshot.source.alias, alert });
       const target = { statsig: env, ld: ldEnv };
@@ -276,7 +285,7 @@ export function computeGuide(input: GuideInput): GuideModel {
         noteDeps(r.dependencies);
         const existing = ldSegments?.find((s) => s.key === r.segmentKey && ownsSegment({ key: s.key, tags: s.tags ?? [] }, snapshot.source.alias));
         const fp = existing ? parseFooter(existing.description)?.fp : undefined;
-        add(segments, seg.uid, classify(r, { status: !existing ? 'absent' : fp === r.statsigFingerprint ? 'in_sync' : 'changed' }));
+        add(segments, seg.uid, setAside(seg.uid) ? 'set_aside' : classify(r, { status: !existing ? 'absent' : fp === r.statsigFingerprint ? 'in_sync' : 'changed' }));
       }
       const flagStanding = (r: { flagKey: string; statsigFingerprint: string; decisionSetHash: string; skipped?: string; unresolved: DecisionPoint[]; dependencies: { kind: string; key: string; entityId?: string }[] }, id: string) => {
         noteDeps(r.dependencies);
@@ -284,9 +293,9 @@ export function computeGuide(input: GuideInput): GuideModel {
         const st = migrationStatus(f && ldFlagState(f), ldEnv, r, { id, source: snapshot.source.alias }).status;
         return classify(r, { status: st === 'in_sync' ? 'in_sync' : st === 'statsig_changed' || st === 'decisions_changed' ? 'changed' : 'absent' });
       };
-      for (const g of snapshot.gates) if (!g.archived) add(gates, g.uid, flagStanding(mapGateFor(snapshot, g, target, m), g.id));
-      for (const c of snapshot.configs) if (!c.archived) add(configs, c.uid, flagStanding(mapConfigFor(snapshot, c, target, m), c.id));
-      for (const a of snapshot.autotunes) if (!a.archived) add(autotunes, a.uid, flagStanding(mapAutotuneFor(snapshot, a, target, m), a.id));
+      for (const g of snapshot.gates) if (!g.archived) add(gates, g.uid, setAside(g.uid) ? 'set_aside' : flagStanding(mapGateFor(snapshot, g, target, m), g.id));
+      for (const c of snapshot.configs) if (!c.archived) add(configs, c.uid, setAside(c.uid) ? 'set_aside' : flagStanding(mapConfigFor(snapshot, c, target, m), c.id));
+      for (const a of snapshot.autotunes) if (!a.archived) add(autotunes, a.uid, setAside(a.uid) ? 'set_aside' : flagStanding(mapAutotuneFor(snapshot, a, target, m), a.id));
       for (const kind of ['experiment', 'layer', 'holdout'] as const) {
         const n = snapshot[`${kind}s` as 'experiments' | 'layers' | 'holdouts'].filter((x) => !x.archived).length;
         if (n) endInSource.set(kind, (endInSource.get(kind) ?? 0) + n);
@@ -396,13 +405,14 @@ export function computePeople(snapshots: CanonicalSnapshot[], m: GuideInput['m']
 
 /** "3 of 12 in sync · 7 to migrate · 2 wait for decisions", for a step summary. */
 export function describeTally(t: Tally, noun: string): string {
-  if (t.total === 0) return `No ${noun}s in this environment.`;
+  if (t.total === 0) return t.setAside ? `No ${noun}s to migrate in this environment; ${t.setAside} set aside.` : `No ${noun}s in this environment.`;
   const parts = [
     t.ldUnknown ? 'reading LaunchDarkly…' : `${t.inSync} of ${t.total} in sync`,
     t.changed ? `${t.changed} changed since` : '',
     t.notMigrated ? `${t.notMigrated} not migrated` : '',
     t.blocked ? `${t.blocked} wait${t.blocked === 1 ? 's' : ''} for decisions` : '',
     t.skipped ? `${t.skipped} skipped` : '',
+    t.setAside ? `${t.setAside} set aside` : '',
   ].filter(Boolean);
   return parts.join(' · ');
 }

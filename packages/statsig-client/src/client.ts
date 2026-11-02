@@ -1,6 +1,6 @@
 import { HttpError, Transport, UnreachableError, type TransportOptions } from '@sslm/http';
 import type { z } from 'zod';
-import { IdListSchema, PaginationSchema, ProjectSchema, RuleSchema, type StatsigIdList, type StatsigProject, type StatsigRule } from './schemas.ts';
+import { ExposureCountSchema, GateChecksSchema, IdListSchema, PaginationSchema, ProjectSchema, RuleSchema, type StatsigExposureCounts, type StatsigGateChecks, type StatsigIdList, type StatsigProject, type StatsigRule } from './schemas.ts';
 
 export const STATSIG_API_VERSION = '20240601';
 export const STATSIG_CONSOLE_BASE_URL = 'https://statsigapi.net/console/v1';
@@ -21,6 +21,11 @@ export const STATSIG_DEFAULT_BUDGETS = [
 
 export const PAGE_SIZE = 100;
 const MAX_PAGES = 1000;
+/** `/exposure_count` takes at most this many IDs per kind per call (`maxItems: 25`). */
+export const EXPOSURE_COUNT_BATCH = 25;
+
+/** Query values; an array is sent as a repeated key (`gates=a&gates=b`), how the Console API takes its list parameters. */
+export type Query = Record<string, string | string[]>;
 
 export interface SchemaIssue {
   endpoint: string;
@@ -33,7 +38,7 @@ export interface SchemaIssue {
 /** A raw response recorded by capture-fixture mode, to build fixtures from a real project later. */
 export interface CapturedResponse {
   path: string;
-  query: Record<string, string>;
+  query: Query;
   status: number;
   body: unknown;
 }
@@ -92,14 +97,14 @@ export class StatsigConsoleClient {
   }
 
   /** Single-object endpoint: returns `data`. */
-  async get<S extends z.ZodType>(path: string, schema: S, query: Record<string, string> = {}, signal?: AbortSignal): Promise<z.infer<S>> {
+  async get<S extends z.ZodType>(path: string, schema: S, query: Query = {}, signal?: AbortSignal): Promise<z.infer<S>> {
     const body = await this.raw(path, query, signal);
     const data = envelopeData(body);
     return this.check(path, schema, data);
   }
 
   /** Paginated list: loops `page` with `limit` until `pagination.nextPage` is null. */
-  async list<S extends z.ZodType>(path: string, itemSchema: S, query: Record<string, string> = {}, signal?: AbortSignal): Promise<z.infer<S>[]> {
+  async list<S extends z.ZodType>(path: string, itemSchema: S, query: Query = {}, signal?: AbortSignal): Promise<z.infer<S>[]> {
     const out: z.infer<S>[] = [];
     for (let page = 1; page <= MAX_PAGES; page++) {
       const body = await this.raw(path, { ...query, page: String(page), limit: String(this.pageSize) }, signal);
@@ -136,6 +141,26 @@ export class StatsigConsoleClient {
     return { name, count: count ?? ids.length, ids };
   }
 
+  /**
+   * `/exposure_count`: recent exposure events for up to `EXPOSURE_COUNT_BATCH` IDs per kind, in one
+   * request. Callers batch; the ids are sent as repeated query keys per the OpenAPI `oneOf` (a
+   * single id arrives as a string, several as an array).
+   */
+  getExposureCounts(ids: { gates?: string[]; dynamicConfigs?: string[]; experiments?: string[] }, signal?: AbortSignal): Promise<StatsigExposureCounts> {
+    const query: Query = {};
+    for (const k of ['gates', 'dynamicConfigs', 'experiments'] as const) {
+      const list = ids[k] ?? [];
+      if (list.length > EXPOSURE_COUNT_BATCH) throw new RangeError(`/exposure_count takes at most ${EXPOSURE_COUNT_BATCH} ${k} per call (got ${list.length}).`);
+      if (list.length) query[k] = list;
+    }
+    return this.get('/exposure_count', ExposureCountSchema, query, signal);
+  }
+
+  /** `/gates/{id}/checks`: whether the gate was checked in production in the last 7 days. */
+  getGateChecks(gateId: string, signal?: AbortSignal): Promise<StatsigGateChecks> {
+    return this.get(`/gates/${encodeURIComponent(gateId)}/checks`, GateChecksSchema, {}, signal);
+  }
+
   /** `/gates/{id}/rules` returns `data.rules` or `data[].rules` depending on the version; accept both. */
   async getGateRules(gateId: string, signal?: AbortSignal): Promise<StatsigRule[]> {
     const path = `/gates/${encodeURIComponent(gateId)}/rules`;
@@ -150,8 +175,10 @@ export class StatsigConsoleClient {
   }
 
   /** GET and return the parsed body, mapping errors to StatSig-specific ones. */
-  async raw(path: string, query: Record<string, string> = {}, signal?: AbortSignal): Promise<unknown> {
-    const qs = new URLSearchParams(query).toString();
+  async raw(path: string, query: Query = {}, signal?: AbortSignal): Promise<unknown> {
+    const params = new URLSearchParams();
+    for (const [k, v] of Object.entries(query)) for (const x of Array.isArray(v) ? v : [v]) params.append(k, x);
+    const qs = params.toString();
     const url = `${this.baseUrl}${path}${qs ? `?${qs}` : ''}`;
     try {
       const res = await this.transport.request({

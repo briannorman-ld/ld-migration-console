@@ -1,6 +1,7 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useEffect, useMemo, useState } from 'react';
 import type { CanonicalSnapshot } from '@sslm/canonical';
+import type { ExclusionRecord } from '@sslm/store';
 import { type DecisionPoint, type DecisionType, type MappingProfile, type Resolution, acceptsOption } from '@sslm/mapper';
 import { DEMO_ENV_HINTS, DEMO_WORKSPACE_ID } from './demo.ts';
 import { useLdSession, type LdSession } from './ld.ts';
@@ -18,6 +19,10 @@ export interface MigrationContext extends MappingInputs {
   setPolicy: (type: DecisionType, optionKey: string | null) => Promise<void>;
   clear: (ids: string[]) => Promise<void>;
   saveProfile: (p: MappingProfile) => Promise<void>;
+  /** Items set aside ("Don't migrate"), by uid. They stay listed but leave "Select all", the guide counts and plans. */
+  exclusions: ReadonlyMap<string, ExclusionRecord>;
+  exclude: (uids: string[], reason?: string) => Promise<void>;
+  include: (uids: string[]) => Promise<void>;
 }
 
 /** Everything the mapper needs, live from IndexedDB and the LD session. `null` until loaded. */
@@ -33,12 +38,14 @@ export function useMigration(workspaceId: string, snapshots: CanonicalSnapshot[]
   const profile = useLiveQuery(() => store.getProfile(workspaceId), [workspaceId]);
   const resolutionList = useLiveQuery(() => store.listResolutions(workspaceId), [workspaceId]);
   const idListRecs = useLiveQuery(() => store.listIdLists(workspaceId), [workspaceId]);
+  const exclusionRecs = useLiveQuery(() => store.listExclusions(workspaceId), [workspaceId]);
   // Time conditions are evaluated against the time the workspace was opened (deterministic per session).
   const [now] = useState(() => new Date().toISOString());
 
   return useMemo(() => {
-    if (!profile || !resolutionList || !idListRecs) return null;
+    if (!profile || !resolutionList || !idListRecs || !exclusionRecs) return null;
     const resolutions = new Map(resolutionList.map((r) => [r.id, r]));
+    const exclusions = new Map(exclusionRecs.map((r) => [r.uid, r]));
     return {
       ld,
       connected: ld.status === 'connected' && !!ld.matrix,
@@ -61,8 +68,11 @@ export function useMigration(workspaceId: string, snapshots: CanonicalSnapshot[]
       },
       clear: (ids) => store.deleteResolutions(workspaceId, ids),
       saveProfile: (p) => store.saveProfile(workspaceId, p),
+      exclusions,
+      exclude: (uids, reason) => store.setExclusions(workspaceId, uids.map((uid) => (reason ? { uid, reason } : { uid }))),
+      include: (uids) => store.deleteExclusions(workspaceId, uids),
     };
-  }, [profile, resolutionList, idListRecs, ld, ldEnvs, now, workspaceId]);
+  }, [profile, resolutionList, idListRecs, exclusionRecs, ld, ldEnvs, now, workspaceId]);
 }
 
 /**

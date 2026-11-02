@@ -20,6 +20,7 @@ import {
   type SegmentType,
   type SnapshotWarning,
   type SourceRef,
+  type Usage,
 } from '@sslm/canonical';
 import type { StatsigCondition, StatsigOverrides, StatsigRule } from '@sslm/statsig-client';
 import type { RawConsoleSnapshot } from './crawl.ts';
@@ -76,6 +77,7 @@ export function normalizeConsoleSnapshot(raw: RawConsoleSnapshot, opts: Normaliz
       status: (g.status ?? undefined) as GateStatus | undefined,
       lifecycle: { type: g.type ?? undefined, typeReason: g.typeReason ?? undefined },
       checksPerHour: g.checksPerHour ?? null,
+      ...usageEntry(usageOf(raw, 'gates', g.id)),
       holdoutIds: g.holdoutIDs ?? [],
     };
     snap.gates.push(gate);
@@ -99,6 +101,7 @@ export function normalizeConsoleSnapshot(raw: RawConsoleSnapshot, opts: Normaliz
       schema: c.schema ?? null,
       lifecycle: { type: c.type ?? undefined, typeReason: c.typeReason ?? undefined },
       checksPerHour: c.checksPerHour ?? null,
+      ...usageEntry(usageOf(raw, 'dynamicConfigs', c.id)),
       holdoutIds: c.holdoutIDs ?? [],
     };
     snap.configs.push(config);
@@ -413,3 +416,17 @@ function owner(o: Meta['owner']) {
   if (!o) return undefined;
   return { id: o.ownerID ?? undefined, type: o.ownerType ?? undefined, name: o.ownerName ?? undefined, email: o.ownerEmail ?? undefined };
 }
+
+/**
+ * Recent traffic for one gate or config (PLAN §14). Null counts when `/exposure_count` was not
+ * readable; the production-checks flag only where the crawl asked for it (gates with no exposures).
+ */
+function usageOf(raw: RawConsoleSnapshot, kind: 'gates' | 'dynamicConfigs', id: string): Usage | undefined {
+  if (raw.exposureCounts && !(id in raw.exposureCounts[kind])) return undefined; // not asked for (archived)
+  const counts = raw.exposureCounts?.[kind][id];
+  const usage: Usage = { exposuresPastDay: counts?.pastDay ?? null, exposuresPast7Days: counts?.past7Days ?? null };
+  if (kind === 'gates' && id in (raw.gateChecks ?? {})) usage.productionChecksPast7Days = raw.gateChecks[id] ?? null;
+  return usage;
+}
+
+const usageEntry = (u: Usage | undefined): { usage?: Usage } => (u ? { usage: u } : {});

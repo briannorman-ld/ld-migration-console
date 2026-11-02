@@ -298,3 +298,25 @@ describe("monitoring tables (M5)", () => {
     await expect(s.saveMonitorState({ workspaceId: ws.id, lastCheckedAt: "x", statuses: {}, alertKeys: [], ...({ token: "sdk-123" } as object) })).rejects.toBeInstanceOf(SecretInStoreError);
   });
 });
+
+describe("exclusions (items set aside)", () => {
+  it("marks, replaces and unmarks items per workspace, and deletes them with the workspace", async () => {
+    const s = store();
+    const ws = await s.createWorkspace({ name: "Set aside" });
+    const other = await s.createWorkspace({ name: "Other" });
+    await s.setExclusions(ws.id, [{ uid: "web/gate/stale_reviews_widget", reason: "No checks in 7 days" }, { uid: "web/gate/old_cart_drawer", reason: "  " }], "2026-11-02T10:00:00Z");
+    await s.setExclusions(other.id, [{ uid: "web/gate/stale_reviews_widget" }], "2026-11-02T10:00:00Z");
+    expect((await s.listExclusions(ws.id)).sort((a, b) => a.uid.localeCompare(b.uid))).toEqual([
+      { workspaceId: ws.id, uid: "web/gate/old_cart_drawer", markedAt: "2026-11-02T10:00:00Z" },
+      { workspaceId: ws.id, uid: "web/gate/stale_reviews_widget", reason: "No checks in 7 days", markedAt: "2026-11-02T10:00:00Z" },
+    ]);
+    // A second mark on the same uid replaces the first.
+    await s.setExclusions(ws.id, [{ uid: "web/gate/stale_reviews_widget", reason: "Hard-coded instead" }], "2026-11-02T11:00:00Z");
+    expect((await s.listExclusions(ws.id)).find((x) => x.uid === "web/gate/stale_reviews_widget")).toMatchObject({ reason: "Hard-coded instead", markedAt: "2026-11-02T11:00:00Z" });
+    await s.deleteExclusions(ws.id, ["web/gate/old_cart_drawer"]);
+    expect((await s.listExclusions(ws.id)).map((x) => x.uid)).toEqual(["web/gate/stale_reviews_widget"]);
+    await s.deleteWorkspace(ws.id);
+    expect(await s.listExclusions(ws.id)).toEqual([]);
+    expect(await s.listExclusions(other.id)).toHaveLength(1);
+  });
+});
