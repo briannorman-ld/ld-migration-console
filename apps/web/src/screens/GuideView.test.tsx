@@ -5,11 +5,11 @@ import type { GuideInput } from '../lib/guide.ts';
 import type { MigrationContext } from '../lib/useMigration.ts';
 
 const inviteLdMembers = vi.fn<(workspaceId: string, people: { email: string; name?: string }[], role: string) => Promise<void>>(async () => undefined);
-const createLdTeam = vi.fn(async () => undefined);
+const createLdTeam = vi.fn<(workspaceId: string, team: { key: string; name: string; description?: string; memberIDs: string[] }) => Promise<void>>(async () => undefined);
 vi.mock('../lib/ld.ts', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../lib/ld.ts')>()),
   inviteLdMembers: (...a: Parameters<typeof inviteLdMembers>) => inviteLdMembers(...a),
-  createLdTeam: (...a: unknown[]) => createLdTeam(...(a as [])),
+  createLdTeam: (...a: Parameters<typeof createLdTeam>) => createLdTeam(...a),
   refreshLdState: async () => undefined,
 }));
 
@@ -41,14 +41,17 @@ const snapshot = {
   holdouts: [],
   autotunes: [],
   prompts: [],
-  teams: [{ id: 't1', name: 'Checkout', memberEmails: ['bob@acme.example', 'gone@acme.example'] }],
+  teams: [
+    { id: 't1', name: 'Checkout', memberEmails: ['bob@acme.example', 'gone@acme.example'] },
+    { id: 't2', name: 'Search', description: 'Search team', memberEmails: ['priya@acme.example'] },
+  ],
   alerts: [],
 } as never;
 
-function setup() {
+function setup(over: { canCreateTeams?: boolean } = {}) {
   const saveProfile = vi.fn(() => Promise.resolve());
   const m = {
-    ld: { status: 'connected', projectKey: 'shop', members: [{ _id: 'mem-bob', email: 'bob@acme.example' }], teams: [] },
+    ld: { status: 'connected', projectKey: 'shop', members: [{ _id: 'mem-bob', email: 'bob@acme.example' }], teams: [], ...(over.canCreateTeams ? { matrix: { capabilities: [{ key: 'teams', status: 'available' }], environments: [] } } : {}) },
     connected: true,
     capabilities: { prerequisites: 'unknown', contextKinds: 'unknown', existingContextKinds: ['user'] },
     profile: { version: 1, sources: {}, attributes: {}, policies: {} },
@@ -77,10 +80,28 @@ describe('GuideView: teams and people', () => {
     const people = steps.findIndex((t) => t.startsWith('People'));
     expect(teams).toBeGreaterThan(-1);
     expect(people).toBe(teams + 1);
+    // Members and teams are account-level in LD: both steps say so in the header and inside.
+    expect(screen.getAllByText('account-wide')).toHaveLength(2);
+    expect(screen.getAllByRole('button', { name: /account-wide/ }).map((b) => (b.textContent ?? '').replace(/^\d+/, '').split('account-wide')[0])).toEqual(['Teams', 'People']);
     fireEvent.click(screen.getByRole('button', { name: /^Teams/ }));
+    expect(screen.getByText(/Teams belong to your LaunchDarkly/).textContent).toMatch(/not to the project “shop”/);
     expect(screen.getByText('Checkout')).toBeTruthy(); // the team row
     expect(screen.getByText(/Teams are an LD Enterprise feature/)).toBeTruthy(); // this token's matrix lacks the teams capability
-    expect(screen.queryByText(/not in LaunchDarkly\./)).toBeNull(); // no owner rows in the Teams step
+    expect(screen.queryByRole('button', { name: /Create all/ })).toBeNull();
+    expect(screen.queryByText(/people are not in LaunchDarkly\./)).toBeNull(); // no owner rows in the Teams step
+  });
+
+  it('creates every missing team with one click when the token may create teams', async () => {
+    setup({ canCreateTeams: true });
+    fireEvent.click(screen.getByRole('button', { name: /^Teams/ }));
+    expect(screen.getByText('2 teams are not in LaunchDarkly.')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Create all 2 teams' }));
+    await screen.findByRole('button', { name: 'Create all 2 teams' }); // the model is static here, so the row stays until LD state refreshes
+    expect(createLdTeam).toHaveBeenCalledTimes(2);
+    expect(createLdTeam.mock.calls.map((c) => c[1])).toEqual([
+      { key: 'checkout', name: 'Checkout', memberIDs: ['mem-bob'] },
+      { key: 'search', name: 'Search', description: 'Search team', memberIDs: [] },
+    ]);
   });
 
   it('invites everyone only after the word is typed, listing every address first', () => {
@@ -89,6 +110,7 @@ describe('GuideView: teams and people', () => {
     expect(screen.getByText('2 people are not in LaunchDarkly.')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /Invite all 2 people/ }));
     const dialog = screen.getByRole('dialog', { name: 'Invite 2 people to LaunchDarkly' });
+    expect(within(dialog).getByText(/join your whole LaunchDarkly account/)).toBeTruthy();
     expect(within(dialog).getByText('gone@acme.example')).toBeTruthy();
     expect(within(dialog).getByText('priya@acme.example')).toBeTruthy();
     const confirm = within(dialog).getByRole('button', { name: 'Invite 2 people' }) as HTMLButtonElement;

@@ -21,6 +21,12 @@ import { ldFlagState, mapAutotuneFor, mapConfigFor, mapGateFor, mapPromptFor, ma
 export type StepKey = 'connect' | 'environment' | 'teams' | 'people' | 'contexts' | 'segments' | 'flags' | 'experiments' | 'cutover';
 export const STEP_ORDER: StepKey[] = ['connect', 'environment', 'teams', 'people', 'contexts', 'segments', 'flags', 'experiments', 'cutover'];
 
+/**
+ * Steps whose writes land on the LaunchDarkly *account*, shared by every project in it, rather
+ * than in the target project: members (invites) and teams. The view marks these loudly.
+ */
+export const ACCOUNT_WIDE_STEPS: ReadonlySet<StepKey> = new Set<StepKey>(['teams', 'people']);
+
 export const STEP_TITLE: Record<StepKey, string> = {
   connect: 'Connect',
   environment: 'Choose an environment',

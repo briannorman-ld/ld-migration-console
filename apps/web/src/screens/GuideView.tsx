@@ -4,7 +4,7 @@ import { optionLabel, sanitizeKey, teamKeyFor, type MappingProfile } from '@sslm
 import type { SourceRecord, WorkspaceRecord } from '@sslm/store';
 import { DecisionCard } from '../components/DecisionCard.tsx';
 import { Badge, Button, Callout, Card, cx, Input, Modal, Select, Spinner } from '../components/ui.tsx';
-import { computeGuide, describeTally, STEP_ORDER, STEP_TITLE, type GuideInput, type GuideModel, type OwnerRow, type StepKey, type Tally, type TeamRow } from '../lib/guide.ts';
+import { ACCOUNT_WIDE_STEPS, computeGuide, describeTally, STEP_ORDER, STEP_TITLE, type GuideInput, type GuideModel, type OwnerRow, type StepKey, type Tally, type TeamRow } from '../lib/guide.ts';
 import { KIND_LABEL } from '../lib/kinds.ts';
 import { createLdEnvironment, createLdTeam, inviteLdMembers, refreshLdState, reprobe, requireLdApprovals, setDefaultRandomizationUnit, type LdInviteRole } from '../lib/ld.ts';
 import type { MigrationSelection } from '../lib/migration.ts';
@@ -70,7 +70,8 @@ export function GuideView({
       </div>
       <ol className="space-y-3">
         {STEP_ORDER.map((k, i) => (
-          <Step key={k} n={i + 1} title={STEP_TITLE[k]} done={g.done[k]} current={g.current === k} open={isOpen(k)} onToggle={() => setOpened((o) => ({ ...o, [k]: !isOpen(k) }))} summary={summaryFor(k, g, input)}>
+          <Step key={k} n={i + 1} title={STEP_TITLE[k]} done={g.done[k]} current={g.current === k} open={isOpen(k)} onToggle={() => setOpened((o) => ({ ...o, [k]: !isOpen(k) }))} summary={summaryFor(k, g, input)} accountWide={ACCOUNT_WIDE_STEPS.has(k)}>
+            {ACCOUNT_WIDE_STEPS.has(k) && <AccountWide projectKey={input.m?.ld.projectKey} what={k === 'teams' ? 'Teams' : 'Members and invitations'} />}
             {k === 'connect' && <Connect g={g} input={input} nav={nav} />}
             {k === 'environment' && <Environment workspaceId={workspaceId} g={g} m={m} onEnvChange={onEnvChange} nav={nav} />}
             {k === 'teams' && <Teams workspaceId={workspaceId} g={g} m={m} />}
@@ -125,7 +126,21 @@ function summaryFor(k: StepKey, g: GuideModel, input: GuideInput): string {
   }
 }
 
-function Step({ n, title, done, current, open, onToggle, summary, children }: { n: number; title: string; done: boolean; current: boolean; open: boolean; onToggle: () => void; summary: string; children: ReactNode }) {
+/**
+ * Most of the migration writes into one LD project. Members and teams belong to the account and
+ * are shared by every project in it, so those steps say so in their header and again inside,
+ * where the buttons are.
+ */
+function AccountWide({ projectKey, what }: { projectKey?: string; what: string }) {
+  return (
+    <Callout tone="amber">
+      <span className="font-semibold">Account-wide.</span> {what} belong to your LaunchDarkly <em>account</em>, not to the project{projectKey ? ` “${projectKey}”` : ''}: what you create or
+      invite here is visible in every project of the account.
+    </Callout>
+  );
+}
+
+function Step({ n, title, done, current, open, onToggle, summary, accountWide, children }: { n: number; title: string; done: boolean; current: boolean; open: boolean; onToggle: () => void; summary: string; accountWide?: boolean; children: ReactNode }) {
   return (
     <li>
       <Card className={cx('overflow-hidden', current && 'border-accent ring-1 ring-accent/40')}>
@@ -136,6 +151,11 @@ function Step({ n, title, done, current, open, onToggle, summary, children }: { 
           <span className="min-w-0 flex-1">
             <span className="flex items-center gap-2">
               <span className="font-semibold">{title}</span>
+              {accountWide && (
+                <Badge tone="amber" title="Writes to the LaunchDarkly account, shared by every project, not just the target project">
+                  account-wide
+                </Badge>
+              )}
               {current && !done && <Badge tone="blue">you are here</Badge>}
             </span>
             <span className="block truncate text-xs text-fg-muted">{summary}</span>
@@ -306,6 +326,12 @@ function useAccountWrites(m: MigrationContext | null) {
 function Teams({ workspaceId, g, m }: { workspaceId: string; g: GuideModel; m: MigrationContext | null }) {
   const { busy, error, run, saveProfile } = useAccountWrites(m);
   const p = g.people;
+  const missing = p.teams.filter((t) => t.status === 'missing');
+  const create = (t: TeamRow) => createLdTeam(workspaceId, { key: teamKeyFor(t.name), name: t.name, ...(t.description ? { description: t.description } : {}), memberIDs: t.ldMemberIds });
+  // One at a time, so a failure stops at the team that failed and the ones before it stay created.
+  const createAll = async () => {
+    for (const t of missing) await create(t);
+  };
   return (
     <>
       <p className="text-fg-muted">
@@ -320,8 +346,8 @@ function Teams({ workspaceId, g, m }: { workspaceId: string; g: GuideModel; m: M
               key={t.name}
               t={t}
               canCreate={p.canCreateTeams}
-              busy={busy === `team:${t.name}`}
-              onCreate={() => void run(`team:${t.name}`, () => createLdTeam(workspaceId, { key: teamKeyFor(t.name), name: t.name, ...(t.description ? { description: t.description } : {}), memberIDs: t.ldMemberIds }))}
+              busy={busy === `team:${t.name}` || busy === 'team:all'}
+              onCreate={() => void run(`team:${t.name}`, () => create(t))}
               onSkip={(skip) => saveProfile((prof) => void (prof.teams = { ...(prof.teams ?? {}), [t.name]: skip ? null : teamKeyFor(t.name) }))}
               onUnskip={() =>
                 saveProfile((prof) => {
@@ -332,7 +358,18 @@ function Teams({ workspaceId, g, m }: { workspaceId: string; g: GuideModel; m: M
           ))}
         </ul>
       )}
-      {g.connected && !p.canCreateTeams && p.teams.some((t) => t.status === 'missing') && <p className="text-xs text-fg-muted">Teams are an LD Enterprise feature{p.teamsReadable ? '' : ' and this token cannot read them'}: create them in LaunchDarkly by hand, or skip them here.</p>}
+      {g.connected && missing.length > 0 && p.canCreateTeams && (
+        <div className="flex flex-wrap items-center gap-2 rounded-md border border-line p-3 text-xs">
+          <span className="font-medium">
+            {missing.length} team{missing.length === 1 ? ' is' : 's are'} not in LaunchDarkly.
+          </span>
+          <Button className="py-1 text-xs" disabled={!!busy} onClick={() => void run('team:all', createAll)}>
+            {busy === 'team:all' ? <Spinner /> : null} Create all {missing.length} team{missing.length === 1 ? '' : 's'}
+          </Button>
+          <span className="text-fg-muted">Each team gets the members that already exist in LD; nobody is emailed.</span>
+        </div>
+      )}
+      {g.connected && !p.canCreateTeams && missing.length > 0 && <p className="text-xs text-fg-muted">Teams are an LD Enterprise feature{p.teamsReadable ? '' : ' and this token cannot read them'}: create them in LaunchDarkly by hand, or skip them here.</p>}
       {g.connected && p.teams.length === 0 && <p className="text-xs text-fg-muted">The sources carry no teams: nothing to create.</p>}
       {error && <Callout tone="red">{error}</Callout>}
     </>
@@ -449,9 +486,12 @@ function InviteAllModal({ people, role, onClose, onConfirm }: { people: OwnerRow
   return (
     <Modal title={`Invite ${people.length} ${people.length === 1 ? 'person' : 'people'} to LaunchDarkly`} onClose={onClose}>
       <div className="space-y-3 text-sm">
+        <Callout tone="amber">
+          <span className="font-semibold">Account-wide.</span> These people join your whole LaunchDarkly account, with access to every project in it as <code className="font-mono">{role}</code>, not just
+          the project you are migrating into.
+        </Callout>
         <p className="text-fg-muted">
-          LaunchDarkly will email an invitation to each address below, as <code className="font-mono text-fg">{role}</code>. Invitations cannot be unsent from here; each person becomes an account
-          member when they accept.
+          LaunchDarkly will email an invitation to each address below. Invitations cannot be unsent from here; each person becomes an account member when they accept.
         </p>
         <ul className="max-h-48 space-y-0.5 overflow-y-auto rounded-md border border-line p-2 font-mono text-xs">
           {people.map((o) => (
