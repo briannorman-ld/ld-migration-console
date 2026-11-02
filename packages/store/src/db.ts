@@ -10,6 +10,15 @@ import type { VaultBlob } from "./vault.ts";
  * fetched ID lists. Later milestones add waves and cutover samples the same way.
  */
 
+/**
+ * How LD account members and teams are managed (guide step 1). `launchdarkly`: the console may
+ * invite members and create teams. `scim`: an identity provider provisions members over SCIM;
+ * the console creates teams but never invites. `scim_team_sync`: Okta provisions members and
+ * teams (Group Push); the console only reports what is missing. Undefined = not answered yet,
+ * treated as `launchdarkly`.
+ */
+export type AccountAccess = "launchdarkly" | "scim" | "scim_team_sync";
+
 export interface WorkspaceRecord {
   id: string;
   name: string;
@@ -31,6 +40,8 @@ export interface WorkspaceRecord {
    * opted out. A passphrase vault is `device` with a passphrase-derived key.
    */
   tokenStorage?: "device" | "memory";
+  /** See AccountAccess. Account-level, so once per workspace. */
+  accountAccess?: AccountAccess;
 }
 
 export interface SourceRecord extends SourceDescriptor {

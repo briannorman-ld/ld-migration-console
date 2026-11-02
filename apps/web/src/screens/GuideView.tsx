@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { EntityKind } from '@sslm/canonical';
 import { optionLabel, sanitizeKey, teamKeyFor, type MappingProfile } from '@sslm/mapper';
-import type { SourceRecord, WorkspaceRecord } from '@sslm/store';
+import type { AccountAccess, SourceRecord, WorkspaceRecord } from '@sslm/store';
 import { DecisionCard } from '../components/DecisionCard.tsx';
 import { Badge, Button, Callout, Card, cx, Input, Modal, Select, Spinner } from '../components/ui.tsx';
-import { ACCOUNT_WIDE_STEPS, computeGuide, describeTally, STEP_ORDER, STEP_TITLE, type GuideInput, type GuideModel, type OwnerRow, type StepKey, type Tally, type TeamRow } from '../lib/guide.ts';
+import { ACCESS_LABEL, ACCOUNT_WIDE_STEPS, computeGuide, describeTally, LOOP_STEP, STEP_ORDER, STEP_TITLE, teamKeysFor, type GuideInput, type GuideModel, type OwnerRow, type StepKey, type Tally, type TeamRow } from '../lib/guide.ts';
 import { KIND_LABEL } from '../lib/kinds.ts';
-import { createLdEnvironment, createLdTeam, inviteLdMembers, refreshLdState, reprobe, requireLdApprovals, setDefaultRandomizationUnit, type LdInviteRole } from '../lib/ld.ts';
+import { createLdEnvironment, createLdTeam, inviteLdMembers, refreshLdPeople, refreshLdState, reprobe, requireLdApprovals, setDefaultRandomizationUnit, type LdInviteRole } from '../lib/ld.ts';
+import { store } from '../lib/store.ts';
 import type { MigrationSelection } from '../lib/migration.ts';
 import type { MigrationContext } from '../lib/useMigration.ts';
 
@@ -43,7 +44,7 @@ export function GuideView({
   onMigrate: (selection: MigrationSelection, ldEnvs: string[]) => void;
   nav: GuideNav;
 }) {
-  const g = computeGuide(input);
+  const g = computeGuide({ ...input, ...(workspace.accountAccess ? { access: workspace.accountAccess } : {}) });
   const [opened, setOpened] = useState<Partial<Record<StepKey, boolean>>>({});
   const isOpen = (k: StepKey) => opened[k] ?? k === g.current;
 
@@ -64,15 +65,15 @@ export function GuideView({
       <div>
         <h2 className="font-display text-xl font-semibold tracking-tight">Migration guide</h2>
         <p className="mt-1 text-sm text-fg-muted">
-          One environment at a time, in dependency order: context kinds first, then segments, then the flags that use them, then experiments. Each step runs only what you confirm;
-          repeat from step 2 for the next environment.
+          Account first (teams, then the people who join them), then one environment at a time in dependency order: context kinds, then segments, then the flags that use them, then
+          experiments. Each step runs only what you confirm; repeat from step {STEP_ORDER.indexOf(LOOP_STEP) + 1} for the next environment.
         </p>
       </div>
       <ol className="space-y-3">
         {STEP_ORDER.map((k, i) => (
           <Step key={k} n={i + 1} title={STEP_TITLE[k]} done={g.done[k]} current={g.current === k} open={isOpen(k)} onToggle={() => setOpened((o) => ({ ...o, [k]: !isOpen(k) }))} summary={summaryFor(k, g, input)} accountWide={ACCOUNT_WIDE_STEPS.has(k)}>
             {ACCOUNT_WIDE_STEPS.has(k) && <AccountWide projectKey={input.m?.ld.projectKey} what={k === 'teams' ? 'Teams' : 'Members and invitations'} />}
-            {k === 'connect' && <Connect g={g} input={input} nav={nav} />}
+            {k === 'connect' && <Connect workspaceId={workspaceId} workspace={workspace} g={g} input={input} nav={nav} />}
             {k === 'environment' && <Environment workspaceId={workspaceId} g={g} m={m} onEnvChange={onEnvChange} nav={nav} />}
             {k === 'teams' && <Teams workspaceId={workspaceId} g={g} m={m} />}
             {k === 'people' && <People workspaceId={workspaceId} g={g} m={m} nav={nav} />}
@@ -111,7 +112,7 @@ function summaryFor(k: StepKey, g: GuideModel, input: GuideInput): string {
     case 'people': {
       const missing = g.people.owners.filter((o) => o.status === 'missing').length;
       if (!g.people.owners.length) return 'No owners in the sources';
-      return `${g.people.owners.length} owner${g.people.owners.length === 1 ? '' : 's'}${missing ? ` (${missing} not in LD)` : ''}`;
+      return `${g.people.owners.length} owner${g.people.owners.length === 1 ? '' : 's'}${missing ? ` (${missing} ${g.people.access === 'launchdarkly' ? 'not in LD' : 'not provisioned yet'})` : ''}`;
     }
     case 'contexts':
       return g.contexts.unitTypes.length === 0 ? 'No unit types in this environment' : g.contexts.open.length ? `${g.contexts.open.length} unit type${g.contexts.open.length === 1 ? '' : 's'} need${g.contexts.open.length === 1 ? 's' : ''} a context kind` : `${g.contexts.unitTypes.length} unit type${g.contexts.unitTypes.length === 1 ? '' : 's'} mapped`;
@@ -168,10 +169,11 @@ function Step({ n, title, done, current, open, onToggle, summary, accountWide, c
   );
 }
 
-function Connect({ g, input, nav }: { g: GuideModel; input: GuideInput; nav: GuideNav }) {
+function Connect({ workspaceId, workspace, g, input, nav }: { workspaceId: string; workspace: WorkspaceRecord; g: GuideModel; input: GuideInput; nav: GuideNav }) {
+  const access = workspace.accountAccess;
   return (
     <>
-      <p className="text-fg-muted">A source project to read from and the LaunchDarkly project to write to. Nothing is written until step 4.</p>
+      <p className="text-fg-muted">A source project to read from, the LaunchDarkly project to write to, and how the LaunchDarkly account's members and teams are managed. Nothing is written until you ask for it in a later step.</p>
       <ul className="space-y-1">
         <li className="flex items-center gap-2">
           <Mark ok={g.synced > 0} /> {g.synced > 0 ? `${g.synced} source${g.synced === 1 ? '' : 's'} synced: ${input.sources.map((s) => s.label).join(', ')}` : 'No source synced yet'}
@@ -194,7 +196,28 @@ function Connect({ g, input, nav }: { g: GuideModel; input: GuideInput; nav: Gui
             {g.connected || g.connecting ? 'LaunchDarkly' : 'Connect LaunchDarkly'}
           </Button>
         </li>
+        <li className="flex flex-wrap items-center gap-2">
+          <Mark ok={!!access} />
+          <label className="flex flex-wrap items-center gap-2">
+            Members and teams are managed
+            <Select aria-label="How members and teams are managed" className="py-1 text-xs" value={access ?? ''} onChange={(e) => void store.updateWorkspace(workspaceId, { accountAccess: e.target.value as AccountAccess })}>
+              <option value="" disabled>
+                choose…
+              </option>
+              {(Object.keys(ACCESS_LABEL) as AccountAccess[]).map((k) => (
+                <option key={k} value={k}>
+                  {ACCESS_LABEL[k].label}
+                </option>
+              ))}
+            </Select>
+          </label>
+        </li>
       </ul>
+      <p className="text-xs text-fg-muted">
+        {access
+          ? ACCESS_LABEL[access].note
+          : 'With SSO and SCIM provisioning, members (and with Okta team sync, teams) come from your identity provider; the console must not invite or create them. Say so here and the Teams and People steps wait for the provider instead.'}
+      </p>
     </>
   );
 }
@@ -335,10 +358,24 @@ function Teams({ workspaceId, g, m }: { workspaceId: string; g: GuideModel; m: M
   return (
     <>
       <p className="text-fg-muted">
-        StatSig teams become LaunchDarkly teams with the members that already exist in LD. A flag whose owner is not an LD member can take its team as maintainer, so teams come before
-        people. Creating a team sends no email.
+        {p.access === 'scim_team_sync'
+          ? 'Okta team sync is on, so LaunchDarkly teams are created and filled only by Okta Group Push. The console lists the groups to push and matches them by name; nothing is created from here.'
+          : 'StatSig teams become LaunchDarkly teams with the members that already exist in LD. Teams come first so invitations can place people straight into them, and a flag whose owner is not an LD member can take its team as maintainer. Creating a team sends no email.'}
       </p>
       {!g.connected && <Callout tone="blue">Connect LaunchDarkly (step 1) to see which teams it already has.</Callout>}
+      {g.connected && p.access === 'scim_team_sync' && missing.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 rounded-md border border-line p-3 text-xs">
+          <span className="font-medium">
+            {missing.length} team{missing.length === 1 ? ' is' : 's are'} not in LaunchDarkly yet.
+          </span>
+          <Button variant="secondary" className="py-1 text-xs" disabled={!!busy} onClick={() => void run('team:recheck', () => refreshLdPeople(workspaceId))}>
+            {busy === 'team:recheck' ? <Spinner /> : null} Re-check
+          </Button>
+          <span className="text-fg-muted">
+            In Okta, push a group for each: <code className="font-mono">{missing.map((t) => t.name).join('</code>, <code className="font-mono">')}</code>. Team sync links an existing LD team of the same name. Skip the ones you do not want in LD.
+          </span>
+        </div>
+      )}
       {g.connected && missing.length > 0 && p.canCreateTeams && (
         <div className="flex flex-wrap items-center gap-2 rounded-md border border-line p-3 text-xs">
           <span className="font-medium">
@@ -369,7 +406,7 @@ function Teams({ workspaceId, g, m }: { workspaceId: string; g: GuideModel; m: M
           ))}
         </ul>
       )}
-      {g.connected && !p.canCreateTeams && missing.length > 0 && <p className="text-xs text-fg-muted">Teams are an LD Enterprise feature{p.teamsReadable ? '' : ' and this token cannot read them'}: create them in LaunchDarkly by hand, or skip them here.</p>}
+      {g.connected && !p.canCreateTeams && p.access !== 'scim_team_sync' && missing.length > 0 && <p className="text-xs text-fg-muted">Teams are an LD Enterprise feature{p.teamsReadable ? '' : ' and this token cannot read them'}: create them in LaunchDarkly by hand, or skip them here.</p>}
       {g.connected && p.teams.length === 0 && <p className="text-xs text-fg-muted">The sources carry no teams: nothing to create.</p>}
       {error && <Callout tone="red">{error}</Callout>}
     </>
@@ -393,12 +430,18 @@ function People({ workspaceId, g, m, nav }: { workspaceId: string; g: GuideModel
       else prof.maintainers[email] = choice;
     });
   const members = m?.ld.members ?? [];
-  const invitee = (o: OwnerRow) => ({ email: o.email, ...(o.name ? { name: o.name } : {}) });
+  const provisioned = p.access !== 'launchdarkly';
+  // Teams were created on the previous step, so an invitation can place the person into them at once.
+  const invitee = (o: OwnerRow) => {
+    const teamKeys = teamKeysFor(o, p.teams);
+    return { email: o.email, ...(o.name ? { name: o.name } : {}), ...(teamKeys.length ? { teamKeys } : {}) };
+  };
   return (
     <>
       <p className="text-fg-muted">
-        A LaunchDarkly maintainer must be a member of the account, so each StatSig owner is matched by email before any flag is written. Owners without an LD member can be invited (LD
-        emails them; they become maintainers on the next sync), handed to their team from the previous step, or left unassigned.
+        {provisioned
+          ? 'A LaunchDarkly maintainer must be a member of the account. Members come from your identity provider over SCIM, so nobody is invited from here: owners are matched by email as they are provisioned, and until then their items can take the team as maintainer or go without one.'
+          : 'A LaunchDarkly maintainer must be a member of the account, so each StatSig owner is matched by email before any flag is written. Owners without an LD member can be invited (LD emails them, they join the teams created in the previous step, and they become maintainers on the next sync), handed to their team, or left unassigned.'}
       </p>
       {!g.connected && <Callout tone="blue">Connect LaunchDarkly (step 1) to match owners against its members.</Callout>}
       {g.connected && !p.membersReadable && (
@@ -407,7 +450,21 @@ function People({ workspaceId, g, m, nav }: { workspaceId: string; g: GuideModel
           members, or leave every owner unassigned below.
         </Callout>
       )}
-      {g.connected && missing.length > 0 && (
+      {g.connected && provisioned && missing.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 rounded-md border border-line p-3 text-xs">
+          <span className="font-medium">
+            {missing.length} {missing.length === 1 ? 'person is' : 'people are'} not provisioned yet.
+          </span>
+          <Button variant="secondary" className="py-1 text-xs" disabled={!!busy} onClick={() => void run('people:recheck', () => refreshLdPeople(workspaceId))}>
+            {busy === 'people:recheck' ? <Spinner /> : null} Re-check
+          </Button>
+          <Button variant="secondary" className="py-1 text-xs" disabled={!!busy} onClick={() => saveProfile((prof) => void (prof.maintainers = { ...(prof.maintainers ?? {}), ...Object.fromEntries(missing.map((o) => [o.email, 'unassigned' as const])) }))}>
+            Leave all {missing.length} unassigned
+          </Button>
+          <span className="text-fg-muted">Have your identity provider assign these people to LaunchDarkly, then re-check. Inviting from here would create members outside SCIM.</span>
+        </div>
+      )}
+      {g.connected && !provisioned && missing.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 rounded-md border border-line p-3 text-xs">
           <span className="font-medium">
             {missing.length} {missing.length === 1 ? 'person is' : 'people are'} not in LaunchDarkly.
@@ -452,6 +509,7 @@ function People({ workspaceId, g, m, nav }: { workspaceId: string; g: GuideModel
       {confirmAll && (
         <InviteAllModal
           people={missing}
+          teams={p.teams}
           role={role}
           onClose={() => setConfirmAll(false)}
           onConfirm={() => {
@@ -480,7 +538,7 @@ export const INVITE_ALL_PHRASE = 'invite';
  * Typed confirmation before inviting everyone: the full list of addresses, the role, and the
  * word to type. A click on the wrong button must not email a whole organization.
  */
-function InviteAllModal({ people, role, onClose, onConfirm }: { people: OwnerRow[]; role: LdInviteRole; onClose: () => void; onConfirm: () => void }) {
+function InviteAllModal({ people, teams, role, onClose, onConfirm }: { people: OwnerRow[]; teams: TeamRow[]; role: LdInviteRole; onClose: () => void; onConfirm: () => void }) {
   const [typed, setTyped] = useState('');
   const matches = typed.trim().toLowerCase() === INVITE_ALL_PHRASE;
   return (
@@ -491,13 +549,15 @@ function InviteAllModal({ people, role, onClose, onConfirm }: { people: OwnerRow
           the project you are migrating into.
         </Callout>
         <p className="text-fg-muted">
-          LaunchDarkly will email an invitation to each address below. Invitations cannot be unsent from here; each person becomes an account member when they accept.
+          LaunchDarkly will email an invitation to each address below. Invitations cannot be unsent from here; each person becomes an account member when they accept, and joins the teams
+          listed next to them right away.
         </p>
         <ul className="max-h-48 space-y-0.5 overflow-y-auto rounded-md border border-line p-2 font-mono text-xs">
           {people.map((o) => (
             <li key={o.email}>
               {o.email}
               {o.name ? <span className="text-fg-muted"> · {o.name}</span> : null}
+              {teamKeysFor(o, teams).length ? <span className="text-fg-muted"> → {teamKeysFor(o, teams).join(', ')}</span> : null}
             </li>
           ))}
         </ul>

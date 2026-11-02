@@ -305,7 +305,11 @@ export type LdInviteRole = 'reader' | 'writer' | 'admin' | 'no_access';
  * the member exists (as `_pendingInvite`) at once, so the next mapping finds them as maintainers.
  * A member who already exists makes LD reject the whole request, so those are left out here.
  */
-export async function inviteLdMembers(workspaceId: string, people: { email: string; name?: string }[], role: LdInviteRole): Promise<void> {
+/**
+ * Invite owners as LD members (People step). `teamKeys` puts each person into their teams at
+ * invite time, which is why teams are created first; the keys must exist in LD already.
+ */
+export async function inviteLdMembers(workspaceId: string, people: { email: string; name?: string; teamKeys?: string[] }[], role: LdInviteRole): Promise<void> {
   const s = sessions.get(workspaceId);
   const c = client(workspaceId);
   const have = new Set((s?.members ?? []).map((m) => m.email.toLowerCase()));
@@ -313,7 +317,7 @@ export async function inviteLdMembers(workspaceId: string, people: { email: stri
     .filter((p) => !have.has(p.email.toLowerCase()))
     .map((p) => {
       const [firstName, ...rest] = (p.name ?? '').trim().split(/\s+/).filter(Boolean);
-      return { email: p.email, role, ...(firstName ? { firstName } : {}), ...(rest.length ? { lastName: rest.join(' ') } : {}) };
+      return { email: p.email, role, ...(firstName ? { firstName } : {}), ...(rest.length ? { lastName: rest.join(' ') } : {}), ...(p.teamKeys?.length ? { teamKeys: [...p.teamKeys].sort() } : {}) };
     });
   if (!members.length) return;
   try {

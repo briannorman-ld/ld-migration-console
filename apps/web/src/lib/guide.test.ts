@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { DecisionPoint } from '@sslm/mapper';
-import { classify, computeGuide, computePeople, currentStep, describeTally, STEP_ORDER, type GuideInput, type Tally } from './guide.ts';
+import { classify, computeGuide, computePeople, currentStep, describeTally, STEP_ORDER, teamKeysFor, type GuideInput, type Tally } from './guide.ts';
 
 const blocking = { severity: 'blocking' } as DecisionPoint;
 const choice = { severity: 'choice' } as DecisionPoint;
@@ -26,9 +26,10 @@ describe('guide: the current step', () => {
   it('is the first step not done, in dependency order, and cut over once all are', () => {
     const none = Object.fromEntries(STEP_ORDER.map((k) => [k, false])) as Record<(typeof STEP_ORDER)[number], boolean>;
     expect(currentStep(none)).toBe('connect');
-    expect(currentStep({ ...none, connect: true })).toBe('environment');
-    expect(currentStep({ ...none, connect: true, environment: true })).toBe('teams');
-    expect(currentStep({ ...none, connect: true, environment: true, teams: true })).toBe('people');
+    // Account-level steps first, so the per-environment loop (from `environment`) never walks back through them.
+    expect(currentStep({ ...none, connect: true })).toBe('teams');
+    expect(currentStep({ ...none, connect: true, teams: true })).toBe('people');
+    expect(currentStep({ ...none, connect: true, teams: true, people: true })).toBe('environment');
     expect(currentStep({ ...none, connect: true, environment: true, teams: true, people: true })).toBe('contexts');
     expect(currentStep({ ...none, connect: true, environment: true, teams: true, people: true, contexts: true })).toBe('segments');
     expect(currentStep({ ...none, connect: true, environment: true, teams: true, people: true, contexts: true, segments: true })).toBe('flags');
@@ -133,5 +134,27 @@ describe('guide: people and teams (PLAN §8.3)', () => {
     const decided = m({ profile: { version: 1, sources: {}, attributes: {}, policies: {}, maintainers: { 'gone@acme.example': 'unassigned', 'priya@acme.example': 'unassigned' }, teams: { Checkout: null, Search: null } } });
     expect(computeGuide({ ...base, m: decided }).done.teams).toBe(true);
     expect(computeGuide({ ...base, m: decided }).done.people).toBe(true);
+  });
+
+  it('an identity provider that provisions the account turns invites (and with Okta team sync, team creation) off; Connect waits for the answer', () => {
+    const caps = { membersReadable: true, teamsReadable: true, canInvite: true, canCreateTeams: true };
+    expect(computePeople([snapshot], m(), caps)).toMatchObject({ access: 'launchdarkly', accessAnswered: false, canInvite: true, canCreateTeams: true });
+    expect(computePeople([snapshot], m(), { ...caps, access: 'launchdarkly' })).toMatchObject({ accessAnswered: true, canInvite: true, canCreateTeams: true });
+    expect(computePeople([snapshot], m(), { ...caps, access: 'scim' })).toMatchObject({ canInvite: false, canCreateTeams: true });
+    expect(computePeople([snapshot], m(), { ...caps, access: 'scim_team_sync' })).toMatchObject({ canInvite: false, canCreateTeams: false });
+    const base: GuideInput = { sources: [], snapshots: [snapshot], m: m(), env: '', decisions: [], monitoring: { attention: 0, rows: 0, loaded: false }, interruptedRuns: 0 };
+    expect(computeGuide(base).done.connect).toBe(false);
+    expect(computeGuide({ ...base, access: 'scim' }).done.connect).toBe(true);
+  });
+
+  it('an invitation carries the LD keys of the teams the owner is in, when those teams exist', () => {
+    const teams = [
+      { name: 'Checkout', memberEmails: ['bob@acme.example', 'Gone@acme.example'], items: 2, status: 'exists' as const, ldKey: 'checkout', ldMemberIds: [] },
+      { name: 'Search', memberEmails: [], items: 1, status: 'missing' as const, ldMemberIds: [] },
+      { name: 'Platform', memberEmails: [], items: 0, status: 'exists' as const, ldKey: 'platform', ldMemberIds: [] },
+    ];
+    expect(teamKeysFor({ email: 'gone@acme.example', team: 'Platform' }, teams)).toEqual(['checkout', 'platform']); // member of one, items in another
+    expect(teamKeysFor({ email: 'priya@acme.example', team: 'Search' }, teams)).toEqual([]); // Search is not in LD yet
+    expect(teamKeysFor({ email: 'nobody@acme.example' }, teams)).toEqual([]);
   });
 });

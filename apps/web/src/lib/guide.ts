@@ -2,11 +2,13 @@
  * The guided migration (the workspace's landing page). One environment at a time, in the order
  * the pieces depend on each other:
  *
- *   connect → environment → teams → people → contexts → segments → flags → experiments → cut over
+ *   connect → teams → people → environment → contexts → segments → flags → experiments → cut over
  *
- * Teams and people come before anything is written because a maintainer must be an LD member
- * (and a team must exist to be one); they are separate steps so teams can be created without
- * inviting anyone yet. Context kinds come next because every rule, rollout and target refers to them; segments before
+ * Teams and people are account-level and come first: a maintainer must be an LD member, a team
+ * must exist to be one, and an invitation can place a person into teams only if the teams exist.
+ * They are separate steps so teams can be created without inviting anyone yet, and both bow out
+ * when an identity provider provisions the account (AccountAccess). Everything from the
+ * environment on repeats per environment. Context kinds come first in that loop because every rule, rollout and target refers to them; segments before
  * flags because flags reference segments; experiments and bandits after the flags they wrap. The
  * model here is pure: it tallies what each step still needs from the mapping results and LD
  * state, and the view renders it. Nothing is written.
@@ -14,12 +16,27 @@
 import { parseFooter, type Alert, type CanonicalSnapshot, type EntityKind } from '@sslm/canonical';
 import { kindFor, teamKeyForName, type DecisionPoint } from '@sslm/mapper';
 import { migrationStatus, ownsSegment } from '@sslm/planner';
-import type { SourceRecord } from '@sslm/store';
+import type { AccountAccess, SourceRecord } from '@sslm/store';
 import { ldConnecting, type LdSession } from './ld.ts';
 import { ldFlagState, mapAutotuneFor, mapConfigFor, mapGateFor, mapPromptFor, mapSegmentFor, type DecisionInstance, type MappingInputs } from './migration.ts';
 
 export type StepKey = 'connect' | 'environment' | 'teams' | 'people' | 'contexts' | 'segments' | 'flags' | 'experiments' | 'cutover';
-export const STEP_ORDER: StepKey[] = ['connect', 'environment', 'teams', 'people', 'contexts', 'segments', 'flags', 'experiments', 'cutover'];
+export const STEP_ORDER: StepKey[] = ['connect', 'teams', 'people', 'environment', 'contexts', 'segments', 'flags', 'experiments', 'cutover'];
+
+/** The step the per-environment loop starts from. */
+export const LOOP_STEP: StepKey = 'environment';
+
+export const ACCESS_LABEL: Record<AccountAccess, { label: string; note: string }> = {
+  launchdarkly: { label: 'In LaunchDarkly', note: 'The console creates teams and invites people from the Teams and People steps. LaunchDarkly emails each invitation.' },
+  scim: {
+    label: 'Identity provider with SCIM (members); teams in LaunchDarkly',
+    note: 'Your identity provider creates and removes members, so nobody is invited from here: the People step lists the owners not provisioned yet and waits. Teams are still created from the Teams step, with the members that already exist.',
+  },
+  scim_team_sync: {
+    label: 'Okta with SCIM and team sync (members and teams)',
+    note: 'Okta provisions members and, through Group Push, teams. Nothing is created or invited from here: the Teams step lists the group names to push (team sync links an existing team of the same name) and the People step waits for provisioning.',
+  },
+};
 
 /**
  * Steps whose writes land on the LaunchDarkly *account*, shared by every project in it, rather
@@ -57,6 +74,16 @@ export interface OwnerRow {
   memberId?: string;
   teamKey?: string;
   pendingInvite?: boolean;
+}
+
+/**
+ * LD team keys an invitation should carry for an owner: the teams they belong to in the source
+ * (and the team their items sit in), restricted to teams that exist in LD. Sorted, for stable
+ * requests.
+ */
+export function teamKeysFor(owner: Pick<OwnerRow, 'email' | 'team'>, teams: readonly TeamRow[]): string[] {
+  const keys = teams.filter((t) => t.ldKey && (t.memberEmails.some((e) => e.toLowerCase() === owner.email) || t.name === owner.team)).map((t) => t.ldKey!);
+  return [...new Set(keys)].sort();
 }
 
 /** A StatSig team and its LD counterpart. */
@@ -110,6 +137,8 @@ export interface GuideInput {
   m: (MappingInputs & { ld: LdSession; connected: boolean }) | null;
   /** The source environment chosen in the header. */
   env: string;
+  /** How members and teams are managed (workspace setting); undefined = not answered yet. */
+  access?: AccountAccess;
   /** Uids the user set aside ("Don't migrate"): left out of every tally's work. */
   exclusions?: ReadonlySet<string>;
   /** Every decision in the workspace, open and decided. */
@@ -137,10 +166,14 @@ export interface GuideModel {
     /** The LD member list was read (capability `members`). False: owners cannot be matched. */
     membersReadable: boolean;
     teamsReadable: boolean;
-    /** Capability `invite_members` is not known to be denied. */
+    /** Capability `invite_members` is not known to be denied, and members are managed in LD (not provisioned by an IdP). */
     canInvite: boolean;
-    /** Capability `teams` is available. */
+    /** Capability `teams` is available, and teams are not synced from Okta. */
     canCreateTeams: boolean;
+    /** The workspace's answer, `launchdarkly` while unanswered. */
+    access: AccountAccess;
+    /** The question on the Connect step has been answered. */
+    accessAnswered: boolean;
   };
   contexts: {
     /** Unit types seen in sources that take part in this environment. */
@@ -252,7 +285,7 @@ export function computeGuide(input: GuideInput): GuideModel {
     contexts.defaultUnit = { unitType, kind, isDefault: m.ld.defaultRandomizationUnit === kind || (!m.ld.defaultRandomizationUnit && kind === 'user'), readable: !!m.ld.randomizationUnits };
   }
 
-  const people = computePeople(snapshots, m, { membersReadable: !!m?.directory?.membersReadable, teamsReadable: !!m?.directory?.teamsReadable, canInvite: !!m && !denied('invite_members'), canCreateTeams: cap('teams') === 'available' });
+  const people = computePeople(snapshots, m, { membersReadable: !!m?.directory?.membersReadable, teamsReadable: !!m?.directory?.teamsReadable, canInvite: !!m && !denied('invite_members'), canCreateTeams: cap('teams') === 'available', ...(input.access ? { access: input.access } : {}) });
 
   const segments = emptyTally('segment');
   const gates = emptyTally('gate');
@@ -319,7 +352,7 @@ export function computeGuide(input: GuideInput): GuideModel {
   });
 
   const done: Record<StepKey, boolean> = {
-    connect: snapshots.length > 0 && connected,
+    connect: snapshots.length > 0 && connected && people.accessAnswered,
     environment: ldEnvs.length > 0,
     teams: connected && people.teams.every((t) => t.status !== 'missing'),
     people: connected && people.owners.every((o) => o.status !== 'missing'),
@@ -356,7 +389,8 @@ export function computeGuide(input: GuideInput): GuideModel {
  * Owners and teams across every source. An owner is one email, however many sources and items;
  * the status comes from the profile's choice first, then from the LD member directory.
  */
-export function computePeople(snapshots: CanonicalSnapshot[], m: GuideInput['m'], caps: { membersReadable: boolean; teamsReadable: boolean; canInvite: boolean; canCreateTeams: boolean }): GuideModel['people'] {
+export function computePeople(snapshots: CanonicalSnapshot[], m: GuideInput['m'], caps: { membersReadable: boolean; teamsReadable: boolean; canInvite: boolean; canCreateTeams: boolean; access?: AccountAccess }): GuideModel['people'] {
+  const access: AccountAccess = caps.access ?? 'launchdarkly';
   const owners = new Map<string, OwnerRow & { teams: Map<string, number> }>();
   const teamItems = new Map<string, number>();
   const teamNames = new Map<string, { description?: string; memberEmails: string[] }>();
@@ -400,7 +434,17 @@ export function computePeople(snapshots: CanonicalSnapshot[], m: GuideInput['m']
       return row;
     })
     .sort((a, b) => b.items - a.items || a.name.localeCompare(b.name));
-  return { owners: ownerRows, teams: teamRows, ...caps };
+  return {
+    owners: ownerRows,
+    teams: teamRows,
+    membersReadable: caps.membersReadable,
+    teamsReadable: caps.teamsReadable,
+    // An IdP that provisions members must not be bypassed by a console invite; Okta team sync owns the teams too.
+    canInvite: caps.canInvite && access === 'launchdarkly',
+    canCreateTeams: caps.canCreateTeams && access !== 'scim_team_sync',
+    access,
+    accessAnswered: caps.access !== undefined,
+  };
 }
 
 /** "3 of 12 in sync · 7 to migrate · 2 wait for decisions", for a step summary. */

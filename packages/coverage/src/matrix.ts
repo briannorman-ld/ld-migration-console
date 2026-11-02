@@ -153,7 +153,7 @@ export const COVERAGE: CoverageEntry[] = [
     statsig: 'Users, roles, SSO/SCIM',
     ld: 'Members, roles, SSO/SCIM',
     status: 'none',
-    how: 'Account administration is set up in LD directly; the console only reads StatSig users to resolve owner names.',
+    how: 'Account administration is set up in LD directly; the console only reads StatSig users to resolve owner names. The guide asks once whether members and teams are managed in LD or provisioned by an identity provider (SCIM, Okta team sync) and then invites or creates nothing the provider owns.',
     docs: { statsig: `${SS}/access-management/introduction`, ld: `${LD}/home/account/members` },
   },
 

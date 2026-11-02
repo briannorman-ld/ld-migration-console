@@ -4,14 +4,18 @@ import type { WorkspaceRecord } from '@sslm/store';
 import type { GuideInput } from '../lib/guide.ts';
 import type { MigrationContext } from '../lib/useMigration.ts';
 
-const inviteLdMembers = vi.fn<(workspaceId: string, people: { email: string; name?: string }[], role: string) => Promise<void>>(async () => undefined);
+const inviteLdMembers = vi.fn<(workspaceId: string, people: { email: string; name?: string; teamKeys?: string[] }[], role: string) => Promise<void>>(async () => undefined);
 const createLdTeam = vi.fn<(workspaceId: string, team: { key: string; name: string; description?: string; memberIDs: string[] }) => Promise<void>>(async () => undefined);
+const refreshLdPeople = vi.fn(async () => undefined);
+const updateWorkspace = vi.fn(async () => undefined);
 vi.mock('../lib/ld.ts', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../lib/ld.ts')>()),
   inviteLdMembers: (...a: Parameters<typeof inviteLdMembers>) => inviteLdMembers(...a),
   createLdTeam: (...a: Parameters<typeof createLdTeam>) => createLdTeam(...a),
+  refreshLdPeople: () => refreshLdPeople(),
   refreshLdState: async () => undefined,
 }));
+vi.mock('../lib/store.ts', () => ({ store: { updateWorkspace: (...a: unknown[]) => updateWorkspace(...(a as [])) } }));
 
 const { GuideView, INVITE_ALL_PHRASE } = await import('./GuideView.tsx');
 
@@ -48,21 +52,28 @@ const snapshot = {
   alerts: [],
 } as never;
 
-function setup(over: { canCreateTeams?: boolean } = {}) {
+function setup(over: { canCreateTeams?: boolean; access?: WorkspaceRecord['accountAccess']; ldTeams?: { key: string; name: string }[] } = {}) {
   const saveProfile = vi.fn(() => Promise.resolve());
   const m = {
     ld: { status: 'connected', projectKey: 'shop', members: [{ _id: 'mem-bob', email: 'bob@acme.example' }], teams: [], ...(over.canCreateTeams ? { matrix: { capabilities: [{ key: 'teams', status: 'available' }], environments: [] } } : {}) },
     connected: true,
     capabilities: { prerequisites: 'unknown', contextKinds: 'unknown', existingContextKinds: ['user'] },
     profile: { version: 1, sources: {}, attributes: {}, policies: {} },
-    directory: { members: [{ id: 'mem-bob', email: 'bob@acme.example' }], teams: [], membersReadable: true, teamsReadable: true },
+    directory: { members: [{ id: 'mem-bob', email: 'bob@acme.example' }], teams: over.ldTeams ?? [], membersReadable: true, teamsReadable: true },
     resolutionList: [],
     saveProfile,
   } as unknown as MigrationContext;
   const input: GuideInput = { sources: [], snapshots: [snapshot], m, env: '', decisions: [], monitoring: { attention: 0, rows: 0, loaded: false }, interruptedRuns: 0 };
   const nav = { connections: vi.fn(), ld: vi.fn(), mapping: vi.fn(), unitTypes: vi.fn(), decisions: vi.fn(), resource: vi.fn(), runs: vi.fn(), monitoring: vi.fn(), coverage: vi.fn() } as never;
-  render(<GuideView workspaceId="w1" workspace={{ id: 'w1', name: 'Shop' } as WorkspaceRecord} m={m} input={input} onEnvChange={vi.fn()} onMigrate={vi.fn()} nav={nav} />);
+  render(<GuideView workspaceId="w1" workspace={{ id: 'w1', name: 'Shop', ...(over.access ? { accountAccess: over.access } : {}) } as WorkspaceRecord} m={m} input={input} onEnvChange={vi.fn()} onMigrate={vi.fn()} nav={nav} />);
   return { saveProfile };
+}
+
+
+/** Expand a step by its title; the current step is already open, so clicking it would collapse it. */
+function openStep(title: RegExp) {
+  const b = screen.getByRole('button', { name: title });
+  if (b.getAttribute('aria-expanded') !== 'true') fireEvent.click(b);
 }
 
 describe('GuideView: teams and people', () => {
@@ -70,6 +81,16 @@ describe('GuideView: teams and people', () => {
     cleanup();
     inviteLdMembers.mockClear();
     createLdTeam.mockClear();
+    refreshLdPeople.mockClear();
+    updateWorkspace.mockClear();
+  });
+
+  it('asks on Connect how members and teams are managed, and saves the answer on the workspace', () => {
+    setup();
+    const q = screen.getByLabelText('How members and teams are managed') as HTMLSelectElement;
+    expect(q.value).toBe('');
+    fireEvent.change(q, { target: { value: 'scim' } });
+    expect(updateWorkspace).toHaveBeenCalledWith('w1', { accountAccess: 'scim' });
   });
 
   it('keeps teams and people as separate steps, teams first, so teams can be created before anyone is invited', () => {
@@ -78,12 +99,14 @@ describe('GuideView: teams and people', () => {
     const steps = screen.getAllByRole('button', { expanded: false }).map((b) => (b.textContent ?? '').replace(/^\d+/, ''));
     const teams = steps.findIndex((t) => t.startsWith('Teams'));
     const people = steps.findIndex((t) => t.startsWith('People'));
+    const environment = steps.findIndex((t) => t.startsWith('Choose an environment'));
     expect(teams).toBeGreaterThan(-1);
     expect(people).toBe(teams + 1);
+    expect(environment).toBe(people + 1); // account steps first, then the per-environment loop
     // Members and teams are account-level in LD: both steps say so in the header and inside.
     expect(screen.getAllByText('account-wide')).toHaveLength(2);
     expect(screen.getAllByRole('button', { name: /account-wide/ }).map((b) => (b.textContent ?? '').replace(/^\d+/, '').split('account-wide')[0])).toEqual(['Teams', 'People']);
-    fireEvent.click(screen.getByRole('button', { name: /^Teams/ }));
+    openStep(/^Teams/);
     expect(screen.getByText(/Teams belong to your LaunchDarkly/).textContent).toMatch(/not to the project “shop”/);
     expect(screen.getByText('Checkout')).toBeTruthy(); // the team row
     expect(screen.getByText(/Teams are an LD Enterprise feature/)).toBeTruthy(); // this token's matrix lacks the teams capability
@@ -93,7 +116,7 @@ describe('GuideView: teams and people', () => {
 
   it('creates every missing team with one click when the token may create teams', async () => {
     setup({ canCreateTeams: true });
-    fireEvent.click(screen.getByRole('button', { name: /^Teams/ }));
+    openStep(/^Teams/);
     const teamsBar = screen.getByText('2 teams are not in LaunchDarkly.');
     // The bulk action sits above the team list.
     expect(teamsBar.compareDocumentPosition(screen.getByText('Checkout')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -108,7 +131,7 @@ describe('GuideView: teams and people', () => {
 
   it('invites everyone only after the word is typed, listing every address first', () => {
     setup();
-    fireEvent.click(screen.getByRole('button', { name: /^People/ }));
+    openStep(/^People/);
     const peopleBar = screen.getByText('2 people are not in LaunchDarkly.');
     // The bulk action sits above the owners table.
     expect(peopleBar.compareDocumentPosition(screen.getByText('StatSig owner').closest('table')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -133,9 +156,47 @@ describe('GuideView: teams and people', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
+  it('puts invited people into the teams created on the previous step', () => {
+    setup({ ldTeams: [{ key: 'checkout', name: 'Checkout' }] });
+    openStep(/^People/);
+    fireEvent.click(screen.getByRole('button', { name: /Invite all 2 people/ }));
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByText('gone@acme.example').textContent).toMatch(/→ checkout/);
+    fireEvent.change(within(dialog).getByLabelText('Confirmation'), { target: { value: INVITE_ALL_PHRASE } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Invite 2 people' }));
+    expect(inviteLdMembers.mock.calls[0]![1]).toEqual([
+      { email: 'gone@acme.example', name: 'Jordan Former', teamKeys: ['checkout'] },
+      { email: 'priya@acme.example', name: 'Priya Raman' }, // Search is not in LD yet
+    ]);
+  });
+
+  it('with SCIM provisioning nobody is invited from here: the People step waits and re-checks', () => {
+    setup({ access: 'scim', canCreateTeams: true });
+    openStep(/^People/);
+    expect(screen.queryByRole('button', { name: /Invite all/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Invite' })).toBeNull();
+    expect(screen.getByText('2 people are not provisioned yet.')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Re-check' }));
+    expect(refreshLdPeople).toHaveBeenCalledTimes(1);
+    // Teams are still created from here under plain SCIM.
+    openStep(/^Teams/);
+    expect(screen.getByRole('button', { name: 'Create all 2 teams' })).toBeTruthy();
+  });
+
+  it('with Okta team sync, teams are not created either: the step lists the groups to push', () => {
+    setup({ access: 'scim_team_sync', canCreateTeams: true });
+    openStep(/^Teams/);
+    expect(screen.queryByRole('button', { name: /Create all/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Create “/ })).toBeNull();
+    expect(screen.getByText('2 teams are not in LaunchDarkly yet.')).toBeTruthy();
+    expect(screen.getByText(/push a group for each/).textContent).toMatch(/Checkout.*Search/);
+    fireEvent.click(screen.getByRole('button', { name: 'Re-check' }));
+    expect(refreshLdPeople).toHaveBeenCalledTimes(1);
+  });
+
   it('cancelling the confirmation invites nobody', () => {
     setup();
-    fireEvent.click(screen.getByRole('button', { name: /^People/ }));
+    openStep(/^People/);
     fireEvent.click(screen.getByRole('button', { name: /Invite all 2 people/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(screen.queryByRole('dialog')).toBeNull();
