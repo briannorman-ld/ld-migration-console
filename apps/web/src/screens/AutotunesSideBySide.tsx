@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState } from 'react';
+import { Fragment, useMemo, useState, type Dispatch, type SetStateAction } from 'react';
 import { matchAcrossSources, type Autotune, type CanonicalSnapshot } from '@sslm/canonical';
 import { LD_INSTANCES } from '@sslm/ld-client';
 import type { AutotuneMapResult, AutotuneState, DecisionType } from '@sslm/mapper';
@@ -51,6 +51,8 @@ export function AutotunesSideBySide({
   onMigrate,
   nav,
   readOnly = false,
+  selected,
+  setSelected,
 }: {
   sources: SourceRecord[];
   snapshots: Record<string, CanonicalSnapshot | undefined>;
@@ -59,11 +61,13 @@ export function AutotunesSideBySide({
   onMigrate: (autotuneUids: string[], ldEnvs: string[]) => void;
   nav: ExplorerNav;
   readOnly?: boolean;
+  /** The workspace-wide selection (lib/selection.ts): ticks here add to it, so a pick survives switching views. */
+  selected: Set<string>;
+  setSelected: Dispatch<SetStateAction<Set<string>>>;
 }) {
   const [q, setQ] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
   const [open, setOpen] = useState<string>();
-  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [targetEnvs, setTargetEnvs] = useState<string[] | null>(null);
   const { ld } = m;
   const snaps = useMemo(() => sources.map((s) => snapshots[s.id]!).filter(Boolean), [sources, snapshots]);
@@ -129,8 +133,16 @@ export function AutotunesSideBySide({
   const mappedHere = [...new Set(sources.map((s) => ldEnvOf(s.id, env)).filter((x): x is string => !!x))];
   const envChoice = targetEnvs ?? mappedHere;
   const blocking = (rs: Row[]) => rs.reduce((n, r) => n + r.result.unresolved.filter((d) => d.severity === 'blocking').length, 0);
-  const steps = readinessSteps({ m, env, mappedHere, hasSnapshot: snaps.length > 0, kindLabel: 'autotunes', selected: selected.size, blockingSelected: blocking(selectedRows), blockingAll: blocking(visible), nav });
-  const migrate = () => onMigrate([...selected], envChoice);
+  const steps = readinessSteps({ m, env, mappedHere, hasSnapshot: snaps.length > 0, kindLabel: 'autotunes', selected: selectedRows.length, blockingSelected: blocking(selectedRows), blockingAll: blocking(visible), nav });
+  const migrate = () => onMigrate(selectedRows.map((r) => r.autotune.uid), envChoice);
+  // Only this explorer's items: other kinds stay selected across views.
+  const selectAll = () =>
+    setSelected((x) => {
+      const n = new Set(x);
+      for (const r of selectable) if (allSelected) n.delete(r.autotune.uid); else n.add(r.autotune.uid);
+      return n;
+    });
+  const clearOwn = () => setSelected((x) => new Set([...x].filter((uid) => !rows.some((r) => r.autotune.uid === uid))));
   const toggle = (uid: string) =>
     setSelected((x) => {
       const n = new Set(x);
@@ -163,7 +175,7 @@ export function AutotunesSideBySide({
             <option value="changed">Changed since sync</option>
           </Select>
           <Input placeholder="Filter by name" value={q} onChange={(e) => setQ(e.target.value)} className="w-48" aria-label="Filter autotunes" />
-          {!readOnly && <MigrateButton steps={steps} onClick={migrate} label={selected.size ? `Migrate ${selected.size} autotune${selected.size === 1 ? '' : 's'}…` : 'Migrate…'} />}
+          {!readOnly && <MigrateButton steps={steps} onClick={migrate} label={selectedRows.length ? `Migrate ${selectedRows.length} autotune${selectedRows.length === 1 ? '' : 's'}…` : 'Migrate…'} />}
         </div>
       </div>
       {!readOnly && <ReadinessLine steps={steps} />}
@@ -178,7 +190,7 @@ export function AutotunesSideBySide({
             <tr>
               <th className="w-9 px-3 py-2">
                 {!readOnly && (
-                  <input type="checkbox" aria-label="Select all" title={`Select all ${selectable.length.toLocaleString()} matching autotunes`} checked={allSelected} onChange={() => setSelected(allSelected ? new Set() : new Set(selectable.map((r) => r.autotune.uid)))} />
+                  <input type="checkbox" aria-label="Select all" title={`Select all ${selectable.length.toLocaleString()} matching autotunes`} checked={allSelected} onChange={selectAll} />
                 )}
               </th>
               <th className="w-[36%] px-3 py-2">StatSig</th>
@@ -282,14 +294,15 @@ export function AutotunesSideBySide({
       </Card>
       <PagerBar pager={pager} label="autotunes" className="mt-2" />
 
-      {selected.size > 0 && !readOnly && (
+      {selectedRows.length > 0 && !readOnly && (
         <div className="fixed right-0 bottom-0 left-72 z-40 border-t border-line bg-surface/95 px-5 py-3 shadow-raised backdrop-blur">
           <div className="flex flex-wrap items-start gap-x-6 gap-y-3">
             <div className="flex items-center gap-3 pt-1">
               <span className="text-sm font-medium">
-                {selected.size.toLocaleString()} autotune{selected.size === 1 ? '' : 's'} selected
+                {selectedRows.length.toLocaleString()} autotune{selectedRows.length === 1 ? '' : 's'} selected
+                {selected.size > selectedRows.length && <span className="font-normal text-fg-muted"> · {selected.size.toLocaleString()} in all</span>}
               </span>
-              <button className="text-sm text-fg-muted hover:text-fg" onClick={() => setSelected(new Set())}>
+              <button className="text-sm text-fg-muted hover:text-fg" onClick={clearOwn}>
                 Clear
               </button>
             </div>

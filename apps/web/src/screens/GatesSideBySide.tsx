@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
 import {
   matchAcrossSources,
   overridesForEnvironment,
@@ -121,6 +121,8 @@ export function FlagSideBySide({
   onOpenMapping,
   nav,
   readOnly = false,
+  selected,
+  setSelected,
 }: {
   kind: FlagKind;
   sources: SourceRecord[];
@@ -133,13 +135,15 @@ export function FlagSideBySide({
   nav?: ExplorerNav;
   /** Viewing a past snapshot: no selection, no migration, no answering decisions. */
   readOnly?: boolean;
+  /** The workspace-wide selection (lib/selection.ts): ticks here add to it, so a pick survives switching views. */
+  selected: Set<string>;
+  setSelected: Dispatch<SetStateAction<Set<string>>>;
 }) {
   const [q, setQ] = useState("");
   const [showArchived, setShowArchived] = useState(false);
   const [filter, setFilter] = useState<StatusFilter>("all");
   const [decisionType, setDecisionType] = useState<DecisionType | "all">("all");
   const [open, setOpen] = useState<string>();
-  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [targetEnvs, setTargetEnvs] = useState<string[] | null>(null);
   const { ld } = m;
   const words = LABEL[kind];
@@ -312,7 +316,7 @@ export function FlagSideBySide({
     mappedHere,
     hasSnapshot: snaps.length > 0,
     kindLabel: words.many,
-    selected: selected.size,
+    selected: selectedRows.length,
     blockingSelected: blockingIn(selectedRows),
     blockingAll: blockingIn(visible),
     nav: nav ?? {
@@ -322,7 +326,15 @@ export function FlagSideBySide({
       decisions: onOpenMapping,
     },
   });
-  const migrate = () => onMigrate([...selected], envChoice);
+  const migrate = () => onMigrate(selectedRows.map((r) => r.gate.uid), envChoice);
+  // Only this explorer's items: other kinds stay selected across views.
+  const selectAll = () =>
+    setSelected((x) => {
+      const n = new Set(x);
+      for (const r of selectable) if (allSelected) n.delete(r.gate.uid); else n.add(r.gate.uid);
+      return n;
+    });
+  const clearOwn = () => setSelected((x) => new Set([...x].filter((uid) => !rows.some((r) => r.gate.uid === uid))));
 
   return (
     <div className="pb-20">
@@ -390,8 +402,8 @@ export function FlagSideBySide({
               steps={steps}
               onClick={migrate}
               label={
-                selected.size
-                  ? `Migrate ${selected.size.toLocaleString()} ${selected.size === 1 ? words.one : words.many}…`
+                selectedRows.length
+                  ? `Migrate ${selectedRows.length.toLocaleString()} ${selectedRows.length === 1 ? words.one : words.many}…`
                   : "Migrate…"
               }
             />
@@ -407,7 +419,7 @@ export function FlagSideBySide({
           </Callout>
         </div>
       )}
-      {decisionType !== "all" && selected.size === 0 && !readOnly && (
+      {decisionType !== "all" && selectedRows.length === 0 && !readOnly && (
         <div className="mb-3">
           <Callout tone="blue">
             Showing the {visible.length.toLocaleString()}{" "}
@@ -441,13 +453,7 @@ export function FlagSideBySide({
                     aria-label="Select all"
                     title={`Select all ${selectable.length.toLocaleString()} matching ${words.many}`}
                     checked={allSelected}
-                    onChange={() =>
-                      setSelected(
-                        allSelected
-                          ? new Set()
-                          : new Set(selectable.map((r) => r.gate.uid)),
-                      )
-                    }
+                    onChange={selectAll}
                   />
                 )}
               </th>
@@ -621,17 +627,18 @@ export function FlagSideBySide({
       </Card>
       <PagerBar pager={pager} label={words.many} className="mt-2" />
 
-      {selected.size > 0 && !readOnly && (
+      {selectedRows.length > 0 && !readOnly && (
         <div className="fixed right-0 bottom-0 left-72 z-40 border-t border-line bg-surface/95 px-5 py-3 shadow-raised backdrop-blur">
           <div className="flex flex-wrap items-start gap-x-6 gap-y-3">
             <div className="flex items-center gap-3 pt-1">
               <span className="text-sm font-medium">
-                {selected.size.toLocaleString()}{" "}
-                {selected.size === 1 ? words.one : words.many} selected
+                {selectedRows.length.toLocaleString()}{" "}
+                {selectedRows.length === 1 ? words.one : words.many} selected
+                {selected.size > selectedRows.length && <span className="font-normal text-fg-muted"> · {selected.size.toLocaleString()} in all</span>}
               </span>
               <button
                 className="text-sm text-fg-muted hover:text-fg"
-                onClick={() => setSelected(new Set())}
+                onClick={clearOwn}
               >
                 Clear
               </button>

@@ -50,6 +50,8 @@ import { FlagSideBySide } from "./GatesSideBySide.tsx";
 import { LdPanel } from "./LdPanel.tsx";
 import { LdSourceSideBySide, type LdSourceResource } from "./LdSourceSideBySide.tsx";
 import { MappingView } from "./MappingView.tsx";
+import { SelectionBar, viewFor } from "../components/SelectionBar.tsx";
+import { loadSelection, saveSelection, toSelection } from "../lib/selection.ts";
 import { GuideView } from "./GuideView.tsx";
 import { MigrateModal } from "./MigrateModal.tsx";
 import { MonitoringView } from "./MonitoringView.tsx";
@@ -144,6 +146,9 @@ export function WorkspaceScreen({
     selection: MigrationSelection;
     ldEnvs: string[];
   }>();
+  // Everything ticked across the explorers (lib/selection.ts); kept for the tab per workspace.
+  const [selected, setSelected] = useState<Set<string>>(() => loadSelection(workspaceId));
+  useEffect(() => saveSelection(workspaceId, selected), [workspaceId, selected]);
   const runs = useLiveQuery(() => store.listRuns(workspaceId), [workspaceId]);
 
   const runSync = async (s: SourceRecord) => {
@@ -651,6 +656,33 @@ export function WorkspaceScreen({
         </nav>
 
         <main className="min-w-0 flex-1 overflow-y-auto p-5">
+          {!viewingPast && m && (
+            <SelectionBar
+              selected={selected}
+              env={env}
+              ldEnvs={[
+                ...new Set(
+                  visible
+                    .map((s) => m.profile.sources[s.id]?.envMapping[env])
+                    .filter((x): x is string => !!x),
+                ),
+              ]}
+              onMigrate={() =>
+                setMigrate({
+                  selection: toSelection(selected),
+                  ldEnvs: [
+                    ...new Set(
+                      visible
+                        .map((s) => m.profile.sources[s.id]?.envMapping[env])
+                        .filter((x): x is string => !!x),
+                    ),
+                  ],
+                })
+              }
+              onClear={() => setSelected(new Set())}
+              onOpen={(k) => setView(viewFor(k))}
+            />
+          )}
           {interrupted.length > 0 && view.kind !== "runs" && (
             <div className="mb-3">
               <Callout>
@@ -733,6 +765,8 @@ export function WorkspaceScreen({
                   }
                   onOpenMapping={() => setView({ kind: "mapping" })}
                   nav={explorerNav}
+                  selected={selected}
+                  setSelected={setSelected}
                 />
               )
             ) : view.resource === "autotune" ? (
@@ -747,6 +781,8 @@ export function WorkspaceScreen({
                     setMigrate({ selection: { gates: [], autotunes }, ldEnvs })
                   }
                   nav={explorerNav}
+                  selected={selected}
+                  setSelected={setSelected}
                 />
               )
             ) : (
@@ -770,6 +806,8 @@ export function WorkspaceScreen({
                 setMigrate({ selection: { gates: [], autotunes: [], ...sel }, ldEnvs })
               }
               nav={explorerNav}
+              selected={selected}
+              setSelected={setSelected}
             />
           )}
           {viewingPast &&

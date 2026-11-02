@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState } from 'react';
+import { Fragment, useMemo, useState, type Dispatch, type SetStateAction } from 'react';
 import type { CanonicalSnapshot, NeutralFlag, NeutralSegment } from '@sslm/canonical';
 import { optionLabel, type DecisionType, type NeutralFlagMapResult, type NeutralSegmentMapResult } from '@sslm/mapper';
 import { migrationStatus, ownsSegment, type MigrationStatus } from '@sslm/planner';
@@ -55,6 +55,8 @@ export function LdSourceSideBySide({
   onMigrate,
   nav,
   readOnly = false,
+  selected,
+  setSelected,
 }: {
   resource: LdSourceResource;
   sources: SourceRecord[];
@@ -65,12 +67,14 @@ export function LdSourceSideBySide({
   onMigrate: (selection: { flags: string[]; segments: string[] }, ldEnvs: string[]) => void;
   nav: ExplorerNav;
   readOnly?: boolean;
+  /** The workspace-wide selection (lib/selection.ts): ticks here add to it, so a pick survives switching views. */
+  selected: Set<string>;
+  setSelected: Dispatch<SetStateAction<Set<string>>>;
 }) {
   const [q, setQ] = useState('');
   const [showArchived, setShowArchived] = useState(false);
   const [filter, setFilter] = useState<Filter>('all');
   const [open, setOpen] = useState<string>();
-  const [selected, setSelected] = useState<Set<string>>(new Set());
   const words = WORDS[resource];
   const ldSources = useMemo(() => sources.filter((s) => s.kind === 'launchdarkly' && snapshots[s.id]?.neutral), [sources, snapshots]);
   const ldFlags = useMemo(() => new Map((m.ld.flags?.items ?? []).map((f) => [f.key, f])), [m.ld.flags]);
@@ -140,7 +144,7 @@ export function LdSourceSideBySide({
   const selectedRows = rows.filter((r) => selected.has(r.entity.uid));
   const blockingIn = (rs: Row[]) => rs.reduce((n, r) => n + r.result.unresolved.filter((d) => d.severity === 'blocking').length, 0);
   const mappedHere = [...new Set(ldSources.map((s) => ldEnvOf(s.id, env)).filter((x): x is string => !!x))];
-  const steps = readinessSteps({ m, env, mappedHere, hasSnapshot: ldSources.length > 0, kindLabel: words.many, selected: selected.size, blockingSelected: blockingIn(selectedRows), blockingAll: blockingIn(visible), nav });
+  const steps = readinessSteps({ m, env, mappedHere, hasSnapshot: ldSources.length > 0, kindLabel: words.many, selected: selectedRows.length, blockingSelected: blockingIn(selectedRows), blockingAll: blockingIn(visible), nav });
   const toggle = (uid: string) =>
     setSelected((x) => {
       const n = new Set(x);
@@ -149,9 +153,16 @@ export function LdSourceSideBySide({
       return n;
     });
   const migrate = () => {
-    const uids = [...selected];
+    const uids = selectedRows.map((r) => r.entity.uid);
     onMigrate(resource === 'flag' ? { flags: uids, segments: [] } : { flags: [], segments: uids }, mappedHere);
   };
+  // Only this explorer's items: other kinds stay selected across views.
+  const selectAll = () =>
+    setSelected((x) => {
+      const n = new Set(x);
+      for (const r of selectable) if (allSelected) n.delete(r.entity.uid); else n.add(r.entity.uid);
+      return n;
+    });
 
   if (ldSources.length === 0) return <Callout tone="blue">No LaunchDarkly source is attached. Add one under Connections to compare a source LD project with the target.</Callout>;
 
@@ -182,7 +193,7 @@ export function LdSourceSideBySide({
             <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} /> archived
           </label>
           <Input placeholder="Filter by key or name" value={q} onChange={(e) => setQ(e.target.value)} className="w-48" aria-label={`Filter ${words.many}`} />
-          {!readOnly && <MigrateButton steps={steps} onClick={migrate} label={selected.size ? `Migrate ${selected.size.toLocaleString()} ${selected.size === 1 ? words.one : words.many}…` : 'Migrate…'} />}
+          {!readOnly && <MigrateButton steps={steps} onClick={migrate} label={selectedRows.length ? `Migrate ${selectedRows.length.toLocaleString()} ${selectedRows.length === 1 ? words.one : words.many}…` : 'Migrate…'} />}
         </div>
       </div>
       {!readOnly && <ReadinessLine steps={steps} />}
@@ -202,7 +213,7 @@ export function LdSourceSideBySide({
                     type="checkbox"
                     aria-label="Select all"
                     checked={allSelected}
-                    onChange={() => setSelected(allSelected ? new Set() : new Set(selectable.map((r) => r.entity.uid)))}
+                    onChange={selectAll}
                   />
                 )}
               </th>
