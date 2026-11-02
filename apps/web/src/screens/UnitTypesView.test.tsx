@@ -73,11 +73,35 @@ describe('UnitTypesView', () => {
     const { saveProfile } = setup({ deviceID: 'hardware' });
     fireEvent.change(screen.getByLabelText('Where companyID goes'), { target: { value: 'attribute' } });
     expect(saveProfile).toHaveBeenLastCalledWith(expect.objectContaining({ sources: { 's-mobile': { envMapping: {}, unitTypeKinds: { deviceID: 'hardware', companyID: 'attribute:companyID' } } } }));
-    expect((screen.getByLabelText('User attribute for companyID') as HTMLInputElement).value).toBe('companyID');
+    expect((screen.getByLabelText('Attribute for companyID') as HTMLInputElement).value).toBe('companyID');
+    expect((screen.getByLabelText('Context kind carrying companyID') as HTMLInputElement).value).toBe('user');
     // deviceID is configured, so it shows as "will be created" and has a Reset.
     expect(screen.getByText('will be created')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Reset' }));
     expect(saveProfile).toHaveBeenLastCalledWith(expect.objectContaining({ sources: { 's-mobile': { envMapping: {}, unitTypeKinds: {} } } }));
+  });
+
+  it('puts a unit type on an attribute of another context kind, existing or created for another unit type', () => {
+    const { saveProfile } = setup({ deviceID: 'hardware' });
+    fireEvent.change(screen.getByLabelText('Where companyID goes'), { target: { value: 'attribute' } });
+    const kind = screen.getByLabelText('Context kind carrying companyID') as HTMLInputElement;
+    // The kinds offered: user, LD's kinds, and the kinds other unit types create (hardware for deviceID).
+    expect([...document.querySelectorAll('#ld-context-kinds-s-mobile-companyID option')].map((o) => (o as HTMLOptionElement).value)).toEqual(['user', 'company', 'device', 'hardware']);
+    fireEvent.change(kind, { target: { value: 'not a kind' } });
+    fireEvent.blur(kind);
+    expect(screen.getByText(/Not a valid context kind key/)).toBeTruthy();
+    fireEvent.change(kind, { target: { value: 'hardware' } });
+    fireEvent.keyDown(kind, { key: 'Enter' });
+    expect(saveProfile).toHaveBeenLastCalledWith(expect.objectContaining({ sources: { 's-mobile': { envMapping: {}, unitTypeKinds: { deviceID: 'hardware', companyID: 'attribute:hardware/companyID' } } } }));
+    // Configured that way, the standing says the kind is created with the attribute on it.
+    cleanup();
+    setup({ deviceID: 'hardware', companyID: 'attribute:hardware/companyID' });
+    const row = () => screen.getByText('companyID', { selector: 'span.font-mono' }).closest('tr')!.textContent!;
+    expect(row()).toMatch(/attribute\s*companyID\s*of kind\s*hardware.*the kind will be created/);
+    cleanup();
+    setup({ companyID: 'attribute:device/companyID' });
+    expect(row()).toMatch(/attribute\s*companyID\s*of kind\s*device/);
+    expect(row()).not.toMatch(/will be created/);
   });
 
   it('shows the answer given per item so far, and offers to connect LD when disconnected', () => {

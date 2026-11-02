@@ -1,12 +1,13 @@
 /**
  * The Unit types page (PLAN §9, §10.3): every StatSig unit type a source declares or uses, where
  * it is used, and where it goes in LaunchDarkly. The choice is kept in the mapping profile
- * (`SourceProfile.unitTypeKinds`): a context kind key, or `attribute:<name>` to keep the unit type
- * as an attribute of the `user` context. A configured unit type raises no `unit_type_kind`
- * decision (the mapper reads the same entry through `configuredUnit`).
+ * (`SourceProfile.unitTypeKinds`): a context kind key, or `attribute:<name>` / `attribute:<kind>/<name>`
+ * to keep the unit type as an attribute of the `user` context or of any other kind (existing, or
+ * created by the migration). A configured unit type raises no `unit_type_kind` decision (the
+ * mapper reads the same entry through `configuredUnit`).
  */
 import type { CanonicalSnapshot, EntityKind, Rule } from '@sslm/canonical';
-import { attributeOption, configuredUnit, defaultKindFor, isValidAttributeName, isValidContextKindKey, kindFromChoice, type MappingProfile, type Resolution, type UnitTarget } from '@sslm/mapper';
+import { attributeOption, attributeTarget, configuredUnit, defaultKindFor, isValidAttributeName, isValidContextKindKey, kindFromChoice, type MappingProfile, type Resolution, type UnitTarget } from '@sslm/mapper';
 
 /** Resource kinds that are keyed by a unit type (`idType`), in display order. */
 export const KEYED_KINDS = ['gate', 'config', 'segment', 'experiment', 'layer', 'holdout', 'autotune'] as const satisfies readonly EntityKind[];
@@ -102,26 +103,42 @@ export function describeUsage(u: UnitTypeUsage): string {
 
 export type UnitTypeMode = 'kind' | 'attribute';
 
-/** The page's reading of one profile value: which mode and which key or attribute name. */
-export function parseChoice(value: string | undefined, unitType: string): { mode: UnitTypeMode; key: string; configured: boolean } {
-  if (value?.startsWith('attribute:')) return { mode: 'attribute', key: value.slice('attribute:'.length), configured: true };
-  if (value) return { mode: 'kind', key: value, configured: true };
-  return { mode: 'kind', key: defaultKindFor(unitType), configured: false };
+export interface UnitChoice {
+  mode: UnitTypeMode;
+  /** The context kind key (`kind` mode) or the attribute name (`attribute` mode). */
+  key: string;
+  /** `attribute` mode: the context kind that carries the attribute (`user` by default). */
+  contextKind: string;
+  configured: boolean;
+}
+
+/** The page's reading of one profile value: which mode, which key or attribute name, and on which kind. Lenient, so an invalid value is shown with its error rather than dropped. */
+export function parseChoice(value: string | undefined, unitType: string): UnitChoice {
+  if (value?.startsWith('attribute:')) {
+    const rest = value.slice('attribute:'.length);
+    const slash = rest.indexOf('/');
+    return { mode: 'attribute', key: slash === -1 ? rest : rest.slice(slash + 1), contextKind: slash === -1 ? 'user' : rest.slice(0, slash), configured: true };
+  }
+  if (value) return { mode: 'kind', key: value, contextKind: value, configured: true };
+  const k = defaultKindFor(unitType);
+  return { mode: 'kind', key: k, contextKind: k, configured: false };
 }
 
 /** The profile value for a choice made on the page; `null` clears the entry (back to the default). */
-export function choiceValue(mode: UnitTypeMode, key: string): string | null {
+export function choiceValue(mode: UnitTypeMode, key: string, contextKind = 'user'): string | null {
   const k = key.trim();
   if (!k) return null;
-  return mode === 'attribute' ? attributeOption(k) : k;
+  return mode === 'attribute' ? attributeOption(k, contextKind.trim() || 'user') : k;
 }
 
 /** Why a typed key or attribute name cannot be saved, or `undefined` when it can. */
-export function choiceError(mode: UnitTypeMode, key: string, unitType: string): string | undefined {
+export function choiceError(mode: UnitTypeMode, key: string, unitType: string, contextKind = 'user'): string | undefined {
   const k = key.trim();
   if (!k) return undefined;
   if (mode === 'attribute') {
-    if (/^userid$/i.test(unitType)) return 'userID is the key of the user context, not one of its attributes.';
+    if (/^userid$/i.test(unitType)) return 'userID is the key of the user context, not an attribute.';
+    const ck = contextKind.trim();
+    if (ck && !isValidContextKindKey(ck)) return 'Not a valid context kind key: letters, digits, “.”, “_” and “-”; “kind” and “multi” are reserved.';
     return isValidAttributeName(k) ? undefined : 'Not a valid attribute name: “key”, “kind”, “_meta” and “anonymous” are reserved, and “/” is not allowed.';
   }
   if (!isValidContextKindKey(k)) return 'Not a valid context kind key: letters, digits, “.”, “_” and “-”; “kind” and “multi” are reserved.';
@@ -134,8 +151,8 @@ export type UnitTypeStanding =
   | { kind: 'exists'; target: UnitTarget }
   /** Maps to a kind the migration creates on its first run. */
   | { kind: 'creates'; target: UnitTarget }
-  /** Kept as an attribute of the user context. */
-  | { kind: 'attribute'; target: UnitTarget }
+  /** Kept as an attribute of a context kind; `kindExists` is false when the migration must create that kind first. */
+  | { kind: 'attribute'; target: UnitTarget; kindExists: boolean }
   /** Not configured here and its kind is missing: the mapper asks a `unit_type_kind` decision per item (answer so far, if any). */
   | { kind: 'asks'; target: UnitTarget; decided?: string };
 
@@ -147,7 +164,7 @@ export function unitTypeStanding(profile: MappingProfile, resolutions: Iterable<
   const configured = configuredUnit(profile, sourceId, unitType);
   const proposed = defaultKindFor(unitType);
   if (configured) {
-    if (configured.attribute !== 'key') return { kind: 'attribute', target: configured };
+    if (configured.attribute !== 'key') return { kind: 'attribute', target: configured, kindExists: configured.contextKind === 'user' || existingKinds.includes(configured.contextKind) };
     return existingKinds.includes(configured.contextKind) || configured.contextKind === 'user' ? { kind: 'exists', target: configured } : { kind: 'creates', target: configured };
   }
   const target: UnitTarget = { contextKind: proposed, attribute: 'key' };
@@ -157,7 +174,8 @@ export function unitTypeStanding(profile: MappingProfile, resolutions: Iterable<
     if (r.type !== 'unit_type_kind' || r.scope !== 'resource' || !r.id.startsWith(prefix)) continue;
     const ut = r.id.slice(prefix.length).replace(/:kind$/, '');
     if (key(ut) !== key(unitType)) continue;
-    return { kind: 'asks', target, decided: r.optionKey.startsWith('attribute:') ? r.optionKey : kindFromChoice(r.optionKey, proposed) };
+    const attr = attributeTarget(r.optionKey);
+    return { kind: 'asks', target, decided: attr ? attributeOption(attr.attribute, attr.contextKind) : kindFromChoice(r.optionKey, proposed) };
   }
   return { kind: 'asks', target };
 }
@@ -189,13 +207,25 @@ export function acrossSources(profile: MappingProfile, perSource: { sourceId: st
   for (const s of perSource) {
     for (const ut of s.unitTypes) {
       const target = configuredUnit(profile, s.sourceId, ut) ?? { contextKind: defaultKindFor(ut), attribute: 'key' };
-      const kind = target.attribute === 'key' ? target.contextKind : `user.${target.attribute}`;
+      const kind = target.attribute === 'key' ? target.contextKind : `${target.contextKind}.${target.attribute}`;
       const row = rows.get(key(ut)) ?? { name: ut, targets: [] };
       row.targets.push({ sourceId: s.sourceId, label: s.label, kind });
       rows.set(key(ut), row);
     }
   }
   return [...rows.values()].filter((r) => r.targets.length > 1).map((r) => ({ ...r, differ: new Set(r.targets.map((t) => t.kind)).size > 1 }));
+}
+
+/**
+ * Context kinds the page offers for a choice: `user`, the kinds LD already has, and every kind
+ * another unit type in the workspace keys or carries an attribute on (so the migration creates
+ * it). Sorted, `user` first.
+ */
+export function knownKinds(profile: MappingProfile, perSource: { sourceId: string; unitTypes: readonly string[] }[], existingKinds: readonly string[]): string[] {
+  const kinds = new Set<string>(existingKinds);
+  for (const s of perSource) for (const ut of s.unitTypes) kinds.add(configuredUnit(profile, s.sourceId, ut)?.contextKind ?? defaultKindFor(ut));
+  kinds.delete('user');
+  return ['user', ...[...kinds].sort()];
 }
 
 /** Unit types of a source that still ask per item: the nav badge and the guide's nudge. */

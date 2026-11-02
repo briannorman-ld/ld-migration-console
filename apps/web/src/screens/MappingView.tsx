@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { CanonicalSnapshot } from '@sslm/canonical';
-import { defaultKindFor, sanitizeKey, type MappingProfile } from '@sslm/mapper';
+import { configuredUnit, defaultKindFor, sanitizeKey, type MappingProfile } from '@sslm/mapper';
 import type { SourceRecord } from '@sslm/store';
 import { Badge, Button, Callout, Card, Select, Spinner } from '../components/ui.tsx';
 import { createLdEnvironment } from '../lib/ld.ts';
@@ -128,7 +128,8 @@ export function MappingView({ workspaceId, sources, snapshots, m, onConnect, onU
                 <ul className="space-y-1 text-sm">
                   {snap.unitTypes.map((u) => {
                     const v = Object.entries(sp.unitTypeKinds).find(([k]) => k.toLowerCase() === u.name.toLowerCase())?.[1];
-                    const target = v?.startsWith('attribute:') ? `user attribute ${v.slice('attribute:'.length)}` : (v ?? defaultKindFor(u.name));
+                    const t = configuredUnit(m.profile, s.id, u.name);
+                    const target = t ? (t.attribute === 'key' ? t.contextKind : `${t.contextKind} attribute ${t.attribute}`) : defaultKindFor(u.name);
                     return (
                       <li key={u.name} className="flex items-center gap-2">
                         <span className="font-mono">{u.name}</span>
@@ -144,7 +145,7 @@ export function MappingView({ workspaceId, sources, snapshots, m, onConnect, onU
                   <button type="button" className="text-link hover:underline" onClick={onUnitTypes}>
                     Unit types
                   </button>{' '}
-                  page: a context kind (created during the migration if LD lacks it) or an attribute of the user context. Custom unit IDs are never folded into “user”.
+                  page: the key of a context kind (created during the migration if LD lacks it) or an attribute of a context kind. Custom unit IDs are never folded into “user”.
                 </p>
               </div>
             </div>

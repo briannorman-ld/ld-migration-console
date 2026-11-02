@@ -1,5 +1,5 @@
 import { fingerprint } from '@sslm/canonical';
-import { isValidAttributeName, isValidContextKindKey, kindFromChoice } from './profile.ts';
+import { attributeTarget, isValidContextKindKey, unitFromChoice } from './profile.ts';
 import type { AppliedDecision, DecisionOption, DecisionPoint, DecisionSubject, DecisionType, MappingProfile, Resolution, Severity, StaleDecision } from './types.ts';
 
 export interface DecisionSpec {
@@ -35,7 +35,8 @@ export type Lookup = { status: 'resolved'; optionKey: string; via: AppliedDecisi
  */
 /**
  * Whether an answer is one this decision takes: a listed option, or, for `unit_type_kind`, a
- * `create:<key>` the user typed for a kind under a valid LD key (the card's free-text answer).
+ * `create:<key>` the user typed for a kind under a valid LD key (the card's free-text answer) or
+ * an `attribute:` target the Unit types page can set (an attribute of `user` or of any kind).
  */
 export function acceptsOption(dp: Pick<DecisionPoint, 'type' | 'options'>, optionKey: string): boolean {
   if (dp.options.some((o) => o.key === optionKey)) return true;
@@ -43,7 +44,7 @@ export function acceptsOption(dp: Pick<DecisionPoint, 'type' | 'options'>, optio
   if (dp.type === 'maintainer_unknown') return /^(member|team):.+/.test(optionKey);
   if (dp.type !== 'unit_type_kind') return false;
   if (optionKey.startsWith('create:')) return isValidContextKindKey(optionKey.slice('create:'.length));
-  if (optionKey.startsWith('attribute:')) return isValidAttributeName(optionKey.slice('attribute:'.length));
+  if (optionKey.startsWith('attribute:')) return attributeTarget(optionKey) !== undefined;
   return false;
 }
 
@@ -129,15 +130,17 @@ export function optionLabel(d: Pick<DecisionPoint, 'type' | 'options'>, optionKe
   const o = d.options.find((x) => x.key === optionKey);
   if (o) return o.label;
   if (d.type === 'unit_type_kind' && optionKey.startsWith('create:')) return `Create context kind “${optionKey.slice('create:'.length)}”`;
-  if (d.type === 'unit_type_kind' && optionKey.startsWith('attribute:')) return `Keep “${optionKey.slice('attribute:'.length)}” as an attribute of the user context`;
+  const attr = d.type === 'unit_type_kind' ? attributeTarget(optionKey) : undefined;
+  if (attr) return `Keep “${attr.attribute}” as an attribute of the ${attr.contextKind} context`;
   if (d.type === 'maintainer_unknown' && optionKey.startsWith('member:')) return `Assign LD member ${optionKey.slice('member:'.length)}`;
   if (d.type === 'maintainer_unknown' && optionKey.startsWith('team:')) return `Assign the team “${optionKey.slice('team:'.length)}”`;
   return optionKey;
 }
 
 /**
- * Context kinds that other `unit_type_kind` answers in this workspace already create or map to,
- * by kind key → the unit types that chose it. A unit type decided later can pick one of these
+ * Context kinds that other `unit_type_kind` answers in this workspace already create or map to
+ * (as their key, or as the kind that carries their attribute), by kind key → the unit types that
+ * chose it. A unit type decided later can pick one of these
  * instead of creating a second kind for the same concept (`planKey` and `plan_id` → `plan`).
  * Read from the resolutions and the profile; the mapper stays pure.
  */
@@ -153,9 +156,11 @@ export function plannedContextKinds(resolutions: ReadonlyMap<string, Resolution>
     if (r.type !== 'unit_type_kind' || r.scope !== 'resource') continue;
     // Decision ids are `unit_type_kind:<sourceId>/unit_type/<unitType>:kind`.
     const unitType = r.id.match(/\/unit_type\/([^:]+):kind$/)?.[1] ?? r.id;
-    add(kindFromChoice(r.optionKey, ''), unitType);
+    add(unitFromChoice(r.optionKey, '').contextKind, unitType);
   }
-  for (const sp of Object.values(profile.sources)) for (const [unitType, kind] of Object.entries(sp.unitTypeKinds)) add(kind, unitType);
+  for (const sp of Object.values(profile.sources)) {
+    for (const [unitType, v] of Object.entries(sp.unitTypeKinds)) add(v.startsWith('attribute:') ? (attributeTarget(v)?.contextKind ?? '') : v, unitType);
+  }
   return out;
 }
 

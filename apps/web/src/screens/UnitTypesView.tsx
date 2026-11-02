@@ -4,7 +4,7 @@ import { type MappingProfile } from '@sslm/mapper';
 import type { SourceRecord } from '@sslm/store';
 import { Badge, Button, Callout, Card, Input, Select, Spinner } from '../components/ui.tsx';
 import { SOURCE_BADGE } from '../lib/kinds.ts';
-import { acrossSources, choiceError, choiceValue, describeUsage, parseChoice, sharedKinds, unitTypeStanding, unitTypeUsage, type UnitTypeMode, type UnitTypeStanding } from '../lib/unitTypes.ts';
+import { acrossSources, choiceError, choiceValue, describeUsage, knownKinds, parseChoice, sharedKinds, unitTypeStanding, unitTypeUsage, type UnitTypeMode, type UnitTypeStanding } from '../lib/unitTypes.ts';
 import type { MigrationContext } from '../lib/useMigration.ts';
 
 /**
@@ -28,17 +28,17 @@ export function UnitTypesView({ sources, snapshots, m, onConnect, onDecisions }:
     });
   const existing = m.capabilities.existingContextKinds;
   const withSnap = sources.flatMap((s) => (snapshots[s.id] ? [{ source: s, snapshot: snapshots[s.id]! }] : []));
-  const across = acrossSources(
-    m.profile,
-    withSnap.map(({ source, snapshot }) => ({ sourceId: source.id, label: source.label, unitTypes: unitTypeUsage(snapshot).map((u) => u.name) })),
-  );
+  const perSource = withSnap.map(({ source, snapshot }) => ({ sourceId: source.id, label: source.label, unitTypes: unitTypeUsage(snapshot).map((u) => u.name) }));
+  const across = acrossSources(m.profile, perSource);
+  const kinds = knownKinds(m.profile, perSource, existing);
   return (
     <div className="max-w-5xl space-y-5">
       <div>
         <h2 className="font-display text-xl font-semibold tracking-tight">Unit types</h2>
         <p className="mt-1 text-sm text-fg-muted">
           StatSig buckets and targets by unit types; LaunchDarkly by context kinds. Choose once per unit type where its IDs go: the key of a context kind (created by the migration if LD lacks
-          it), or an attribute of the <code>user</code> context. A custom unit ID is never the key of the <code>user</code> context. Unit types left on their default ask per item on the{' '}
+          it), or an attribute of a context kind: <code>user</code>, a kind LD already has, or one this migration creates for another unit type. A custom unit ID is never the key of the{' '}
+          <code>user</code> context. Unit types left on their default ask per item on the{' '}
           <button type="button" className="text-link hover:underline" onClick={onDecisions}>
             Decisions
           </button>{' '}
@@ -94,7 +94,7 @@ export function UnitTypesView({ sources, snapshots, m, onConnect, onDecisions }:
                       allowAttribute={!isLd && !/^userid$/i.test(u.name)}
                       value={Object.entries(m.profile.sources[s.id]?.unitTypeKinds ?? {}).find(([k]) => k.toLowerCase() === u.name.toLowerCase())?.[1]}
                       standing={unitTypeStanding(m.profile, m.resolutionList, s.id, u.name, existing)}
-                      existing={existing}
+                      kinds={kinds}
                       canCreate={m.capabilities.contextKinds !== 'not_permitted' && m.capabilities.contextKinds !== 'unavailable'}
                       connected={m.connected}
                       onChange={(v) => set(s.id, u.name, v)}
@@ -155,7 +155,7 @@ export function UnitTypesView({ sources, snapshots, m, onConnect, onDecisions }:
 const STANDING: Record<UnitTypeStanding['kind'], { tone: 'green' | 'blue' | 'amber' | 'slate'; label: string }> = {
   exists: { tone: 'green', label: 'exists in LD' },
   creates: { tone: 'blue', label: 'will be created' },
-  attribute: { tone: 'slate', label: 'user attribute' },
+  attribute: { tone: 'slate', label: 'attribute' },
   asks: { tone: 'amber', label: 'asks per item' },
 };
 
@@ -168,7 +168,7 @@ function UnitTypeRow({
   allowAttribute,
   value,
   standing,
-  existing,
+  kinds,
   canCreate,
   connected,
   onChange,
@@ -181,7 +181,8 @@ function UnitTypeRow({
   allowAttribute: boolean;
   value?: string;
   standing: UnitTypeStanding;
-  existing: string[];
+  /** Context kinds to offer: `user`, LD's existing kinds, and kinds other unit types create. */
+  kinds: string[];
   canCreate: boolean;
   connected: boolean;
   onChange: (value: string | null) => void;
@@ -189,25 +190,28 @@ function UnitTypeRow({
   const parsed = parseChoice(value, unitType);
   const [mode, setMode] = useState<UnitTypeMode>(parsed.mode);
   const [draft, setDraft] = useState(parsed.configured ? parsed.key : '');
+  const [kindDraft, setKindDraft] = useState(parsed.mode === 'attribute' ? parsed.contextKind : 'user');
   const shown = draft || (mode === 'attribute' ? unitType : parsed.mode === 'kind' ? parsed.key : '');
-  const error = choiceError(mode, shown, unitType);
-  const commit = (m: UnitTypeMode, k: string) => {
-    if (choiceError(m, k, unitType)) return;
-    const v = choiceValue(m, k);
+  const shownKind = kindDraft.trim() || 'user';
+  const error = choiceError(mode, shown, unitType, shownKind);
+  const commit = (m: UnitTypeMode, k: string, ck: string) => {
+    if (choiceError(m, k, unitType, ck)) return;
+    const v = choiceValue(m, k, ck);
     if (v !== value) onChange(v);
   };
   const changeMode = (m: UnitTypeMode) => {
     setMode(m);
     const k = m === 'attribute' ? unitType : parseChoice(undefined, unitType).key;
     setDraft(k);
-    commit(m, k);
+    commit(m, k, shownKind);
   };
   const reset = () => {
     setMode('kind');
     setDraft('');
+    setKindDraft('user');
     if (value) onChange(null);
   };
-  const listId = `ld-context-kinds-${sourceId}`;
+  const listId = `ld-context-kinds-${sourceId}-${unitType}`;
   const badge = STANDING[standing.kind];
   return (
     <tr>
@@ -228,13 +232,30 @@ function UnitTypeRow({
           {allowAttribute ? (
             <Select aria-label={`Where ${unitType} goes`} className="py-1 text-xs" value={mode} onChange={(e) => changeMode(e.target.value as UnitTypeMode)}>
               <option value="kind">Key of context kind</option>
-              <option value="attribute">Attribute of user</option>
+              <option value="attribute">Attribute of context kind</option>
             </Select>
           ) : (
             <span className="text-xs text-fg-muted">Key of context kind</span>
           )}
+          {mode === 'attribute' && (
+            <>
+              <Input
+                aria-label={`Context kind carrying ${unitType}`}
+                className="w-32 py-1 font-mono text-xs"
+                placeholder="user"
+                value={kindDraft}
+                spellCheck={false}
+                autoComplete="off"
+                list={listId}
+                onChange={(e) => setKindDraft(e.target.value)}
+                onBlur={() => commit(mode, shown, shownKind)}
+                onKeyDown={(e) => e.key === 'Enter' && commit(mode, shown, shownKind)}
+              />
+              <span className="font-mono text-xs text-fg-muted">.</span>
+            </>
+          )}
           <Input
-            aria-label={mode === 'attribute' ? `User attribute for ${unitType}` : `Context kind for ${unitType}`}
+            aria-label={mode === 'attribute' ? `Attribute for ${unitType}` : `Context kind for ${unitType}`}
             className="w-40 py-1 font-mono text-xs"
             placeholder={mode === 'attribute' ? unitType : parseChoice(undefined, unitType).key}
             value={draft}
@@ -242,16 +263,16 @@ function UnitTypeRow({
             autoComplete="off"
             list={mode === 'kind' ? listId : undefined}
             onChange={(e) => setDraft(e.target.value)}
-            onBlur={() => commit(mode, shown)}
-            onKeyDown={(e) => e.key === 'Enter' && commit(mode, shown)}
+            onBlur={() => commit(mode, shown, shownKind)}
+            onKeyDown={(e) => e.key === 'Enter' && commit(mode, shown, shownKind)}
           />
-          {mode === 'kind' && (
-            <datalist id={listId}>
-              {existing.map((k) => (
+          <datalist id={listId}>
+            {kinds
+              .filter((k) => mode === 'attribute' || k !== 'user')
+              .map((k) => (
                 <option key={k} value={k} />
               ))}
-            </datalist>
-          )}
+          </datalist>
           {value && (
             <Button variant="ghost" className="py-1 text-xs" onClick={reset} title="Back to the default: the mapper proposes a kind and asks per item if LD lacks it">
               Reset
@@ -266,7 +287,8 @@ function UnitTypeRow({
           <span className="text-xs text-fg-muted">
             {standing.kind === 'attribute' && (
               <>
-                user attribute <code className="font-mono">{standing.target.attribute}</code>
+                attribute <code className="font-mono">{standing.target.attribute}</code> of kind <code className="font-mono">{standing.target.contextKind}</code>
+                {standing.kindExists ? (connected || standing.target.contextKind === 'user' ? '' : ' (LD not connected)') : !canCreate ? ' — the kind is missing and this token cannot create kinds; an admin must' : connected ? ' — the kind will be created' : ' — the kind will be created (LD not connected)'}
               </>
             )}
             {standing.kind === 'exists' && (

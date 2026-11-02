@@ -62,9 +62,23 @@ export function createKindOption(key: string): string {
   return `create:${key}`;
 }
 
-/** The `unit_type_kind` option key that keeps a unit type as an attribute of the `user` context. */
-export function attributeOption(name: string): string {
-  return `attribute:${name}`;
+/**
+ * The `unit_type_kind` option key (and profile value) that keeps a unit type as an attribute of a
+ * context: `attribute:<name>` on the `user` context, `attribute:<kind>/<name>` on any other kind.
+ * `/` separates the two because neither a kind key nor an attribute name may contain it.
+ */
+export function attributeOption(name: string, contextKind = 'user'): string {
+  return contextKind === 'user' ? `attribute:${name}` : `attribute:${contextKind}/${name}`;
+}
+
+/** The target an `attribute:` option or profile value names; undefined when it is not one LD would accept. */
+export function attributeTarget(choice: string): UnitTarget | undefined {
+  if (!choice.startsWith('attribute:')) return undefined;
+  const rest = choice.slice('attribute:'.length);
+  const slash = rest.indexOf('/');
+  const contextKind = slash === -1 ? 'user' : rest.slice(0, slash);
+  const attribute = slash === -1 ? rest : rest.slice(slash + 1);
+  return isValidContextKindKey(contextKind) && isValidAttributeName(attribute) ? { contextKind, attribute } : undefined;
 }
 
 export function isValidAttributeName(name: string): boolean {
@@ -74,8 +88,9 @@ export function isValidAttributeName(name: string): boolean {
 
 /**
  * Where a unit type's IDs live in LD: the key of a context kind (`attribute: 'key'`), or an
- * attribute of the `user` context. Rules match on it, rollouts bucket by it, and ID overrides
- * become targets (key) or a targeting rule (attribute: LD targets individuals only by key).
+ * attribute of a context kind (`user`, an existing kind, or one the migration creates). Rules
+ * match on it, rollouts bucket by it, and ID overrides become targets (key) or a targeting rule
+ * (attribute: LD targets individuals only by key).
  */
 export interface UnitTarget {
   contextKind: string;
@@ -83,10 +98,7 @@ export interface UnitTarget {
 }
 
 export function unitFromChoice(choice: string, proposed: string): UnitTarget {
-  if (choice.startsWith('attribute:')) {
-    const a = choice.slice('attribute:'.length);
-    return isValidAttributeName(a) ? { contextKind: 'user', attribute: a } : { contextKind: proposed, attribute: 'key' };
-  }
+  if (choice.startsWith('attribute:')) return attributeTarget(choice) ?? { contextKind: proposed, attribute: 'key' };
   return { contextKind: kindFromChoice(choice, proposed), attribute: 'key' };
 }
 
@@ -114,20 +126,18 @@ export function configuredValue(profile: MappingProfile, sourceId: string, unitT
 
 /**
  * Where the profile (the Unit types page) sends a unit type: a context kind key, or
- * `attribute:<name>` to keep it as an attribute of the `user` context. A value LD would not
- * accept counts as not configured, so the mapper falls back to the default and asks.
+ * `attribute:<name>` / `attribute:<kind>/<name>` to keep it as an attribute of the `user` context
+ * or of another kind. A value LD would not accept counts as not configured, so the mapper falls
+ * back to the default and asks.
  */
 export function configuredUnit(profile: MappingProfile, sourceId: string, unitType: string): UnitTarget | undefined {
   const v = configuredValue(profile, sourceId, unitType);
   if (!v) return undefined;
-  if (v.startsWith('attribute:')) {
-    const a = v.slice('attribute:'.length);
-    return isValidAttributeName(a) ? { contextKind: 'user', attribute: a } : undefined;
-  }
+  if (v.startsWith('attribute:')) return attributeTarget(v);
   return isValidContextKindKey(v) ? { contextKind: v, attribute: 'key' } : undefined;
 }
 
-/** The context kind a unit type maps to by profile or by default (`user` when kept as a user attribute). */
+/** The context kind a unit type maps to by profile or by default (the attribute's kind when kept as an attribute). */
 export function kindFor(profile: MappingProfile, sourceId: string, unitType: string): string {
   return configuredUnit(profile, sourceId, unitType)?.contextKind ?? defaultKindFor(unitType);
 }

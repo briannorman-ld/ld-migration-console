@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { emptySnapshot, type CanonicalSnapshot, type Config, type Gate, type Segment } from '@sslm/canonical';
 import type { MappingProfile, Resolution } from '@sslm/mapper';
-import { acrossSources, choiceError, choiceValue, describeUsage, parseChoice, sharedKinds, unitTypeStanding, unitTypeUsage, unsettledUnitTypes } from './unitTypes.ts';
+import { acrossSources, choiceError, choiceValue, describeUsage, knownKinds, parseChoice, sharedKinds, unitTypeStanding, unitTypeUsage, unsettledUnitTypes } from './unitTypes.ts';
 
 const src = { sourceId: 's-mobile', sourceKind: 'console_api' as const, alias: 'mobile' };
 const base = { source: src, completeness: { missing: [] }, tags: [], environments: null, passPercentage: 100, archived: false };
@@ -45,12 +45,15 @@ describe('unit types: where each is used', () => {
 });
 
 describe('unit types: the choice', () => {
-  it('reads and writes profile values: a kind key, or attribute:<name>; empty clears', () => {
-    expect(parseChoice(undefined, 'companyID')).toEqual({ mode: 'kind', key: 'company', configured: false });
-    expect(parseChoice('account', 'companyID')).toEqual({ mode: 'kind', key: 'account', configured: true });
-    expect(parseChoice('attribute:companyID', 'companyID')).toEqual({ mode: 'attribute', key: 'companyID', configured: true });
+  it('reads and writes profile values: a kind key, attribute:<name> on user, or attribute:<kind>/<name>; empty clears', () => {
+    expect(parseChoice(undefined, 'companyID')).toEqual({ mode: 'kind', key: 'company', contextKind: 'company', configured: false });
+    expect(parseChoice('account', 'companyID')).toEqual({ mode: 'kind', key: 'account', contextKind: 'account', configured: true });
+    expect(parseChoice('attribute:companyID', 'companyID')).toEqual({ mode: 'attribute', key: 'companyID', contextKind: 'user', configured: true });
+    expect(parseChoice('attribute:account/companyID', 'companyID')).toEqual({ mode: 'attribute', key: 'companyID', contextKind: 'account', configured: true });
     expect(choiceValue('kind', ' account ')).toBe('account');
     expect(choiceValue('attribute', 'companyID')).toBe('attribute:companyID');
+    expect(choiceValue('attribute', 'companyID', 'user')).toBe('attribute:companyID');
+    expect(choiceValue('attribute', 'companyID', ' account ')).toBe('attribute:account/companyID');
     expect(choiceValue('kind', '  ')).toBeNull();
   });
 
@@ -64,6 +67,10 @@ describe('unit types: the choice', () => {
     expect(choiceError('attribute', 'companyID', 'companyID')).toBeUndefined();
     expect(choiceError('attribute', 'key', 'companyID')).toMatch(/reserved/);
     expect(choiceError('attribute', 'anything', 'userID')).toMatch(/userID is the key/);
+    // The attribute may sit on any kind, as long as LD would accept the kind's key.
+    expect(choiceError('attribute', 'companyID', 'companyID', 'account')).toBeUndefined();
+    expect(choiceError('attribute', 'companyID', 'companyID', 'not a kind')).toMatch(/Not a valid context kind key/);
+    expect(choiceError('attribute', 'companyID', 'companyID', 'multi')).toMatch(/Not a valid context kind key/);
   });
 });
 
@@ -78,7 +85,11 @@ describe('unit types: standing', () => {
     expect(unitTypeStanding(profile(), [res('companyID', 'attribute:companyID')], 's-mobile', 'companyID', EXISTING)).toMatchObject({ kind: 'asks', decided: 'attribute:companyID' });
     expect(unitTypeStanding(profile({ companyID: 'account' }), [], 's-mobile', 'companyID', EXISTING)).toEqual({ kind: 'creates', target: { contextKind: 'account', attribute: 'key' } });
     expect(unitTypeStanding(profile({ companyID: 'device' }), [], 's-mobile', 'companyID', EXISTING)).toEqual({ kind: 'exists', target: { contextKind: 'device', attribute: 'key' } });
-    expect(unitTypeStanding(profile({ companyID: 'attribute:companyID' }), [], 's-mobile', 'companyID', EXISTING)).toEqual({ kind: 'attribute', target: { contextKind: 'user', attribute: 'companyID' } });
+    expect(unitTypeStanding(profile({ companyID: 'attribute:companyID' }), [], 's-mobile', 'companyID', EXISTING)).toEqual({ kind: 'attribute', target: { contextKind: 'user', attribute: 'companyID' }, kindExists: true });
+    // An attribute of another kind: the kind exists in LD, or the migration creates it.
+    expect(unitTypeStanding(profile({ companyID: 'attribute:device/companyID' }), [], 's-mobile', 'companyID', EXISTING)).toEqual({ kind: 'attribute', target: { contextKind: 'device', attribute: 'companyID' }, kindExists: true });
+    expect(unitTypeStanding(profile({ companyID: 'attribute:account/companyID' }), [], 's-mobile', 'companyID', EXISTING)).toEqual({ kind: 'attribute', target: { contextKind: 'account', attribute: 'companyID' }, kindExists: false });
+    expect(unitTypeStanding(profile(), [res('companyID', 'attribute:account/companyID')], 's-mobile', 'companyID', EXISTING)).toMatchObject({ kind: 'asks', decided: 'attribute:account/companyID' });
     // The profile matches unit types case-insensitively, like StatSig.
     expect(unitTypeStanding(profile({ COMPANYID: 'account' }), [], 's-mobile', 'companyID', EXISTING)).toMatchObject({ kind: 'creates' });
   });
@@ -113,5 +124,12 @@ describe('unit types: conflicts', () => {
     expect(rows[1]!.targets.map((t) => t.kind)).toEqual(['account', 'company']);
     p.sources['s-mobile']!.unitTypeKinds.companyID = 'attribute:companyID';
     expect(acrossSources(p, [{ sourceId: 's-web', label: 'w', unitTypes: ['companyID'] }, { sourceId: 's-mobile', label: 'm', unitTypes: ['companyID'] }])[0]!.targets[1]!.kind).toBe('user.companyID');
+    p.sources['s-mobile']!.unitTypeKinds.companyID = 'attribute:account/companyID';
+    expect(acrossSources(p, [{ sourceId: 's-web', label: 'w', unitTypes: ['companyID'] }, { sourceId: 's-mobile', label: 'm', unitTypes: ['companyID'] }])[0]!.targets[1]!.kind).toBe('account.companyID');
+  });
+
+  it('offers user, the kinds LD has and every kind another unit type keys or carries an attribute on', () => {
+    const p = profile({ companyID: 'account', orgID: 'attribute:tenant/orgID' });
+    expect(knownKinds(p, [{ sourceId: 's-mobile', unitTypes: ['userID', 'stableID', 'companyID', 'deviceID', 'orgID'] }], ['user', 'device', 'org'])).toEqual(['user', 'account', 'device', 'org', 'tenant']);
   });
 });

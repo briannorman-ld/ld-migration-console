@@ -92,7 +92,7 @@ function applyCommon(choice: string, loc: Loc): Dnf | undefined {
   return undefined;
 }
 
-/** Context kind for a unit type (`user` when the unit type is kept as a user attribute). */
+/** Context kind for a unit type (the attribute's kind when the unit type is kept as an attribute). */
 export function resolveKind(ctx: ConditionContext, unitType: string): string {
   return resolveUnit(ctx, unitType).contextKind;
 }
@@ -100,8 +100,9 @@ export function resolveKind(ctx: ConditionContext, unitType: string): string {
 /**
  * Where a unit type's IDs live in LD, raising `unit_type_kind` for kinds the LD project lacks:
  * create the kind (proposed, or under a key the user typed), keep the unit type as an attribute
- * of the `user` context, use a kind another unit type's answer creates, or an existing kind.
- * A custom unit ID is never the key of the `user` context (CLAUDE.md).
+ * of the `user` context (the Unit types page can also put it on any other kind), use a kind
+ * another unit type's answer creates, or an existing kind. A custom unit ID is never the key of
+ * the `user` context (CLAUDE.md). A kind that only carries an attribute is created all the same.
  */
 export function resolveUnit(ctx: ConditionContext, unitType: string): UnitTarget {
   const cached = ctx.kindCache.get(unitType.toLowerCase());
@@ -137,7 +138,7 @@ export function resolveUnit(ctx: ConditionContext, unitType: string): UnitTarget
         subject: { sourceId: ctx.sourceId, kind: 'unit_type', uid: `${ctx.sourceId}/unit_type/${unitType}`, id: unitType },
         path: 'kind',
         title: `Context kind for unit type ${unitType}`,
-        explanation: `StatSig buckets and targets by ${unitType}. LD needs somewhere for it: its own context kind, or an attribute of the user context. A custom unit ID is never the key of the user context.`,
+        explanation: `StatSig buckets and targets by ${unitType}. LD needs somewhere for it: its own context kind, or an attribute of another context (the user context here; the Unit types page offers any kind). A custom unit ID is never the key of the user context.`,
         sourceFragment: { unitType },
         options,
         recommended: options[0]!.key,
@@ -147,13 +148,13 @@ export function resolveUnit(ctx: ConditionContext, unitType: string): UnitTarget
     unit = unitFromChoice(choice, proposed);
   }
   ctx.kindCache.set(unitType.toLowerCase(), unit);
-  if (unit.attribute === 'key' && unit.contextKind !== 'user' && !ctx.capabilities.existingContextKinds.includes(unit.contextKind)) {
+  if (unit.contextKind !== 'user' && !ctx.capabilities.existingContextKinds.includes(unit.contextKind)) {
     ctx.deps.set(`context_kind:${unit.contextKind}`, { kind: 'context_kind', key: unit.contextKind, entityId: unitType });
   }
   return unit;
 }
 
-/** A percentage rollout over a unit type: by context key, or bucketed by the user attribute it maps to. */
+/** A percentage rollout over a unit type: by context key, or bucketed by the attribute it maps to. */
 export function rolloutFor(unit: UnitTarget, variations: LdRollout['variations']): LdRollout {
   return { contextKind: unit.contextKind, ...(unit.attribute !== 'key' ? { bucketBy: unit.attribute } : {}), variations };
 }
@@ -162,9 +163,9 @@ export function rolloutFor(unit: UnitTarget, variations: LdRollout['variations']
 export type OverrideGroup = UnitTarget & { unitType: string; variation: number; values: string[] };
 
 /**
- * Overrides keyed by context key become individual targets; overrides on a unit type kept as a
- * user attribute become targeting rules placed before the flag's own rules (LD targets
- * individuals only by key). Both sorted, so the output is deterministic.
+ * Overrides keyed by context key become individual targets; overrides on a unit type kept as an
+ * attribute become targeting rules placed before the flag's own rules (LD targets individuals
+ * only by key). Both sorted, so the output is deterministic.
  */
 export function splitOverrides(ctx: ConditionContext, groups: OverrideGroup[]): { targets: DesiredTarget[]; rules: DesiredRule[] } {
   const live = groups.filter((g) => g.values.length > 0);
@@ -172,17 +173,21 @@ export function splitOverrides(ctx: ConditionContext, groups: OverrideGroup[]): 
     .filter((g) => g.attribute === 'key')
     .map((g) => ({ contextKind: g.contextKind, variation: g.variation, values: g.values }))
     .sort((a, b) => `${a.contextKind}|${a.variation}`.localeCompare(`${b.contextKind}|${b.variation}`));
-  const byAttr = live.filter((g) => g.attribute !== 'key').sort((a, b) => `${a.attribute}|${a.variation}`.localeCompare(`${b.attribute}|${b.variation}`));
+  const byAttr = live.filter((g) => g.attribute !== 'key').sort((a, b) => `${a.contextKind}|${a.attribute}|${a.variation}`.localeCompare(`${b.contextKind}|${b.attribute}|${b.variation}`));
   const rules: DesiredRule[] = byAttr.map((g) => ({
     description: `${g.unitType} overrides`,
     clauses: [{ contextKind: g.contextKind, attribute: g.attribute, op: 'in', values: g.values, negate: false }],
     variation: g.variation,
   }));
   const perAttribute = new Map<string, OverrideGroup[]>();
-  for (const g of byAttr) perAttribute.set(g.attribute, [...(perAttribute.get(g.attribute) ?? []), g]);
-  for (const [attribute, gs] of perAttribute) {
+  for (const g of byAttr) {
+    const k = `${g.contextKind}|${g.attribute}`;
+    perAttribute.set(k, [...(perAttribute.get(k) ?? []), g]);
+  }
+  for (const gs of perAttribute.values()) {
     const n = gs.reduce((c, g) => c + g.values.length, 0);
-    ctx.fidelity.push({ fidelity: 'full', message: `${n} ${gs[0]!.unitType} override${n === 1 ? '' : 's'} became ${gs.length} targeting rule${gs.length === 1 ? '' : 's'} on user attribute “${attribute}”: LD targets individuals only by context key.` });
+    const { contextKind, attribute } = gs[0]!;
+    ctx.fidelity.push({ fidelity: 'full', message: `${n} ${gs[0]!.unitType} override${n === 1 ? '' : 's'} became ${gs.length} targeting rule${gs.length === 1 ? '' : 's'} on ${contextKind} attribute “${attribute}”: LD targets individuals only by context key.` });
   }
   return { targets, rules };
 }
