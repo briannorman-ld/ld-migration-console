@@ -170,14 +170,35 @@ describe('GuideView: teams and people', () => {
     ]);
   });
 
+  it('neither account step is "you are here": the environment loop starts without teams or people set up', () => {
+    setup({ access: 'launchdarkly' });
+    const header = (title: RegExp) => screen.getByRole('button', { name: title });
+    expect(header(/^Teams/).getAttribute('aria-expanded')).toBe('false');
+    expect(header(/^People/).getAttribute('aria-expanded')).toBe('false');
+    expect(header(/^Choose an environment/).textContent).toContain('you are here');
+    openStep(/^People/);
+    expect(screen.getByText(/Members and invitations belong to your LaunchDarkly/).textContent).toMatch(/do not wait for this one/);
+  });
+
   it('with SCIM provisioning nobody is invited from here: the People step waits and re-checks', () => {
     setup({ access: 'scim', canCreateTeams: true });
+    // The header says who does the work, and that nothing is written from here; Teams is still the console's.
+    const people = screen.getByRole('button', { name: /^People/ });
+    expect(people.textContent).toContain('waiting for SCIM');
+    expect(people.textContent).toContain('3 owners · 2 waiting for SCIM');
+    expect(people.textContent).not.toContain('account-wide');
+    expect(screen.getAllByText('account-wide')).toHaveLength(1);
     openStep(/^People/);
+    expect(screen.getByText(/Provisioned by SCIM\./)).toBeTruthy();
     expect(screen.queryByRole('button', { name: /Invite all/ })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Invite' })).toBeNull();
     expect(screen.getByText('2 people are not provisioned yet.')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Re-check' }));
     expect(refreshLdPeople).toHaveBeenCalledTimes(1);
+    // The owner table waits behind a toggle: there is nothing to do per owner but the fallback.
+    expect(screen.queryByText('gone@acme.example')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Show all 3 owners' }));
+    expect(screen.getByText('gone@acme.example')).toBeTruthy();
     // Teams are still created from here under plain SCIM.
     openStep(/^Teams/);
     expect(screen.getByRole('button', { name: 'Create all 2 teams' })).toBeTruthy();
@@ -185,13 +206,21 @@ describe('GuideView: teams and people', () => {
 
   it('with Okta team sync, teams are not created either: the step lists the groups to push', () => {
     setup({ access: 'scim_team_sync', canCreateTeams: true });
+    expect(screen.queryByText('account-wide')).toBeNull();
+    expect(screen.getAllByText('waiting for Okta')).toHaveLength(2);
+    expect(screen.getByRole('button', { name: /^Teams/ }).textContent).toContain('2 teams · 2 groups to push from Okta');
     openStep(/^Teams/);
+    expect(screen.getByText(/Provisioned by Okta\./)).toBeTruthy();
     expect(screen.queryByRole('button', { name: /Create all/ })).toBeNull();
     expect(screen.queryByRole('button', { name: /Create “/ })).toBeNull();
     expect(screen.getByText('2 teams are not in LaunchDarkly yet.')).toBeTruthy();
     expect(screen.getByText(/push a group for each/).textContent).toMatch(/Checkout.*Search/);
     fireEvent.click(screen.getByRole('button', { name: 'Re-check' }));
     expect(refreshLdPeople).toHaveBeenCalledTimes(1);
+    // The team list waits behind a toggle; skipping a team still works from there.
+    expect(screen.queryByRole('button', { name: /^Skip/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Show all 2 teams' }));
+    expect(screen.getByText('Checkout')).toBeTruthy();
   });
 
   it('cancelling the confirmation invites nobody', () => {

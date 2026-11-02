@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { EntityKind } from '@sslm/canonical';
 import { optionLabel, sanitizeKey, teamKeyFor, type MappingProfile } from '@sslm/mapper';
 import type { AccountAccess, SourceRecord, WorkspaceRecord } from '@sslm/store';
 import { DecisionCard } from '../components/DecisionCard.tsx';
 import { Badge, Button, Callout, Card, cx, Input, Modal, Select, Spinner } from '../components/ui.tsx';
-import { ACCESS_LABEL, ACCOUNT_WIDE_STEPS, computeGuide, describeTally, LOOP_STEP, STEP_ORDER, STEP_TITLE, teamKeysFor, type GuideInput, type GuideModel, type OwnerRow, type StepKey, type Tally, type TeamRow } from '../lib/guide.ts';
+import { ACCESS_LABEL, ACCOUNT_WIDE_STEPS, computeGuide, describeTally, LOOP_STEP, provisionedBy, STEP_ORDER, STEP_TITLE, teamKeysFor, type GuideInput, type GuideModel, type OwnerRow, type StepKey, type Tally, type TeamRow } from '../lib/guide.ts';
 import { KIND_LABEL } from '../lib/kinds.ts';
 import { createLdEnvironment, createLdTeam, inviteLdMembers, refreshLdPeople, refreshLdState, reprobe, requireLdApprovals, setDefaultRandomizationUnit, type LdInviteRole } from '../lib/ld.ts';
 import { store } from '../lib/store.ts';
@@ -44,7 +44,7 @@ export function GuideView({
   onMigrate: (selection: MigrationSelection, ldEnvs: string[]) => void;
   nav: GuideNav;
 }) {
-  const g = computeGuide({ ...input, ...(workspace.accountAccess ? { access: workspace.accountAccess } : {}) });
+  const g = useMemo(() => computeGuide({ ...input, ...(workspace.accountAccess ? { access: workspace.accountAccess } : {}) }), [input, workspace.accountAccess]);
   const [opened, setOpened] = useState<Partial<Record<StepKey, boolean>>>({});
   const isOpen = (k: StepKey) => opened[k] ?? k === g.current;
 
@@ -65,14 +65,17 @@ export function GuideView({
       <div>
         <h2 className="font-display text-xl font-semibold tracking-tight">Migration guide</h2>
         <p className="mt-1 text-sm text-fg-muted">
-          Account first (teams, then the people who join them), then one environment at a time in dependency order: context kinds, then segments, then the flags that use them, then
-          experiments. Each step runs only what you confirm; repeat from step {STEP_ORDER.indexOf(LOOP_STEP) + 1} for the next environment.
+          Teams and the people who join them are account-level and can be done at any time: the environment steps do not wait for them, and a later sync adds the maintainers that
+          appeared. Then one environment at a time in dependency order: context kinds, then segments, then the flags that use them, then experiments. Each step runs only what you
+          confirm; repeat from step {STEP_ORDER.indexOf(LOOP_STEP) + 1} for the next environment.
         </p>
       </div>
       <ol className="space-y-3">
-        {STEP_ORDER.map((k, i) => (
-          <Step key={k} n={i + 1} title={STEP_TITLE[k]} done={g.done[k]} current={g.current === k} open={isOpen(k)} onToggle={() => setOpened((o) => ({ ...o, [k]: !isOpen(k) }))} summary={summaryFor(k, g, input)} accountWide={ACCOUNT_WIDE_STEPS.has(k)}>
-            {ACCOUNT_WIDE_STEPS.has(k) && <AccountWide projectKey={input.m?.ld.projectKey} what={k === 'teams' ? 'Teams' : 'Members and invitations'} />}
+        {STEP_ORDER.map((k, i) => {
+          const provider = ACCOUNT_WIDE_STEPS.has(k) ? provisionedBy(k, g.people.access) : undefined;
+          return (
+          <Step key={k} n={i + 1} title={STEP_TITLE[k]} done={g.done[k]} current={g.current === k} open={isOpen(k)} onToggle={() => setOpened((o) => ({ ...o, [k]: !isOpen(k) }))} summary={summaryFor(k, g, input)} accountWide={ACCOUNT_WIDE_STEPS.has(k) && !provider} {...(provider ? { waitingFor: provider } : {})}>
+            {ACCOUNT_WIDE_STEPS.has(k) && (provider ? <ProvisionedBy provider={provider} what={k === 'teams' ? 'Teams' : 'Members'} /> : <AccountWide projectKey={input.m?.ld.projectKey} what={k === 'teams' ? 'Teams' : 'Members and invitations'} />)}
             {k === 'connect' && <Connect workspaceId={workspaceId} workspace={workspace} g={g} input={input} nav={nav} />}
             {k === 'environment' && <Environment workspaceId={workspaceId} g={g} m={m} onEnvChange={onEnvChange} nav={nav} />}
             {k === 'teams' && <Teams workspaceId={workspaceId} g={g} m={m} />}
@@ -92,7 +95,8 @@ export function GuideView({
             {k === 'experiments' && <Experiments g={g} nav={nav} onMigrate={onMigrate} />}
             {k === 'cutover' && <CutOver workspaceId={workspaceId} g={g} input={input} workspace={workspace} nav={nav} doneCount={doneCount} />}
           </Step>
-        ))}
+          );
+        })}
       </ol>
     </div>
   );
@@ -105,14 +109,20 @@ function summaryFor(k: StepKey, g: GuideModel, input: GuideInput): string {
     case 'environment':
       return g.env ? (g.ldEnvs.length ? `${g.env} → LD ${g.ldEnvs.join(', ')}` : `${g.env} is not mapped to an LD environment yet`) : 'No environment chosen';
     case 'teams': {
-      const teams = g.people.teams.filter((t) => t.status === 'missing').length;
+      const missing = g.people.teams.filter((t) => t.status === 'missing').length;
       if (!g.people.teams.length) return 'No teams in the sources';
-      return `${g.people.teams.length} team${g.people.teams.length === 1 ? '' : 's'}${teams ? ` (${teams} not in LD)` : ''}`;
+      const total = `${g.people.teams.length} team${g.people.teams.length === 1 ? '' : 's'}`;
+      if (!missing) return `${total}, all in LD`;
+      const provider = provisionedBy('teams', g.people.access);
+      return provider ? `${total} · ${missing} group${missing === 1 ? '' : 's'} to push from ${provider}` : `${total} (${missing} not in LD)`;
     }
     case 'people': {
       const missing = g.people.owners.filter((o) => o.status === 'missing').length;
       if (!g.people.owners.length) return 'No owners in the sources';
-      return `${g.people.owners.length} owner${g.people.owners.length === 1 ? '' : 's'}${missing ? ` (${missing} ${g.people.access === 'launchdarkly' ? 'not in LD' : 'not provisioned yet'})` : ''}`;
+      const total = `${g.people.owners.length} owner${g.people.owners.length === 1 ? '' : 's'}`;
+      if (!missing) return `${total}, all in LD`;
+      const provider = provisionedBy('people', g.people.access);
+      return provider ? `${total} · ${missing} waiting for ${provider}` : `${total} (${missing} not in LD)`;
     }
     case 'contexts':
       return g.contexts.unitTypes.length === 0 ? 'No unit types in this environment' : g.contexts.open.length ? `${g.contexts.open.length} unit type${g.contexts.open.length === 1 ? '' : 's'} need${g.contexts.open.length === 1 ? 's' : ''} a context kind` : `${g.contexts.unitTypes.length} unit type${g.contexts.unitTypes.length === 1 ? '' : 's'} mapped`;
@@ -132,22 +142,35 @@ function summaryFor(k: StepKey, g: GuideModel, input: GuideInput): string {
  * are shared by every project in it, so those steps say so in their header and again inside,
  * where the buttons are.
  */
+/** Why the environment steps run without Teams or People finished, shown on both. */
+const NOT_BLOCKING = 'The environment steps do not wait for this one: a flag whose owner is not in LaunchDarkly yet is created without a maintainer, shows as changed once they are, and takes them as maintainer on the next sync.';
+
 function AccountWide({ projectKey, what }: { projectKey?: string; what: string }) {
   return (
     <Callout tone="amber">
       <span className="font-semibold">Account-wide.</span> {what} belong to your LaunchDarkly <em>account</em>, not to the project{projectKey ? ` “${projectKey}”` : ''}: what you create or
-      invite here is visible in every project of the account.
+      invite here is visible in every project of the account. {NOT_BLOCKING}
     </Callout>
   );
 }
 
-function Step({ n, title, done, current, open, onToggle, summary, accountWide, children }: { n: number; title: string; done: boolean; current: boolean; open: boolean; onToggle: () => void; summary: string; accountWide?: boolean; children: ReactNode }) {
+/** An identity provider creates what this step would otherwise create: the step only watches for it. */
+function ProvisionedBy({ provider, what }: { provider: string; what: string }) {
+  return (
+    <Callout tone="blue">
+      <span className="font-semibold">Provisioned by {provider}.</span> {what} are created by {provider}, not from here; this step only lists what is still missing and re-checks. {NOT_BLOCKING}
+    </Callout>
+  );
+}
+
+function Step({ n, title, done, current, open, onToggle, summary, accountWide, waitingFor, children }: { n: number; title: string; done: boolean; current: boolean; open: boolean; onToggle: () => void; summary: string; accountWide?: boolean; waitingFor?: string; children: ReactNode }) {
+  const waiting = !!waitingFor && !done;
   return (
     <li>
       <Card className={cx('overflow-hidden', current && 'border-accent ring-1 ring-accent/40')}>
         <button type="button" className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-surface-hover" onClick={onToggle} aria-expanded={open}>
-          <span aria-hidden className={cx('flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold', done ? 'bg-success-fill text-on-accent' : current ? 'bg-accent text-on-accent' : 'border border-line text-fg-muted')}>
-            {done ? '✓' : n}
+          <span aria-hidden className={cx('flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold', done ? 'bg-success-fill text-on-accent' : current ? 'bg-accent text-on-accent' : waiting ? 'border border-dashed border-line text-fg-subtle' : 'border border-line text-fg-muted')}>
+            {done ? '✓' : waiting ? '…' : n}
           </span>
           <span className="min-w-0 flex-1">
             <span className="flex items-center gap-2">
@@ -155,6 +178,11 @@ function Step({ n, title, done, current, open, onToggle, summary, accountWide, c
               {accountWide && (
                 <Badge tone="amber" title="Writes to the LaunchDarkly account, shared by every project, not just the target project">
                   account-wide
+                </Badge>
+              )}
+              {waitingFor && (
+                <Badge tone="slate" title={`${waitingFor} provisions these; nothing is written to LaunchDarkly from this step`}>
+                  {done ? `provisioned by ${waitingFor}` : `waiting for ${waitingFor}`}
                 </Badge>
               )}
               {current && !done && <Badge tone="blue">you are here</Badge>}
@@ -350,6 +378,9 @@ function Teams({ workspaceId, g, m }: { workspaceId: string; g: GuideModel; m: M
   const { busy, error, run, saveProfile } = useAccountWrites(m);
   const p = g.people;
   const missing = p.teams.filter((t) => t.status === 'missing');
+  // Under Okta team sync there is nothing to do per team but skip it, so the list waits behind a toggle.
+  const waiting = p.access === 'scim_team_sync';
+  const [showAll, setShowAll] = useState(false);
   const create = (t: TeamRow) => createLdTeam(workspaceId, { key: teamKeyFor(t.name), name: t.name, ...(t.description ? { description: t.description } : {}), memberIDs: t.ldMemberIds });
   // One at a time, so a failure stops at the team that failed and the ones before it stay created.
   const createAll = async () => {
@@ -387,7 +418,12 @@ function Teams({ workspaceId, g, m }: { workspaceId: string; g: GuideModel; m: M
           <span className="text-fg-muted">Each team gets the members that already exist in LD; nobody is emailed.</span>
         </div>
       )}
-      {g.connected && p.teams.length > 0 && (
+      {g.connected && p.teams.length > 0 && waiting && (
+        <Button variant="ghost" className="py-1 text-xs" onClick={() => setShowAll((v) => !v)} aria-expanded={showAll}>
+          {showAll ? 'Hide the teams' : `Show all ${p.teams.length} team${p.teams.length === 1 ? '' : 's'}`}
+        </Button>
+      )}
+      {g.connected && p.teams.length > 0 && (!waiting || showAll) && (
         <ul className="divide-y divide-line-soft">
           {p.teams.map((t) => (
             <TeamLine
@@ -431,6 +467,8 @@ function People({ workspaceId, g, m, nav }: { workspaceId: string; g: GuideModel
     });
   const members = m?.ld.members ?? [];
   const provisioned = p.access !== 'launchdarkly';
+  // When SCIM provisions members there is nothing to do per owner but the fallback, so the table waits behind a toggle.
+  const [showAll, setShowAll] = useState(false);
   // Teams were created on the previous step, so an invitation can place the person into them at once.
   const invitee = (o: OwnerRow) => {
     const teamKeys = teamKeysFor(o, p.teams);
@@ -489,7 +527,12 @@ function People({ workspaceId, g, m, nav }: { workspaceId: string; g: GuideModel
           <span className="text-fg-muted">Inviting sends each person an email from LaunchDarkly{p.canInvite ? '' : '; this token may not invite (Admin or createMember needed), so ask an LD admin'}.</span>
         </div>
       )}
-      {g.connected && p.owners.length > 0 && (
+      {g.connected && p.owners.length > 0 && provisioned && (
+        <Button variant="ghost" className="py-1 text-xs" onClick={() => setShowAll((v) => !v)} aria-expanded={showAll}>
+          {showAll ? 'Hide the owners' : `Show all ${p.owners.length} owner${p.owners.length === 1 ? '' : 's'}`}
+        </Button>
+      )}
+      {g.connected && p.owners.length > 0 && (!provisioned || showAll) && (
         <table className="w-full text-sm">
           <thead className="text-left text-xs text-fg-muted">
             <tr>

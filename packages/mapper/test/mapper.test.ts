@@ -1159,6 +1159,16 @@ describe('owner → maintainer (PLAN §8.3 maintainer_unknown; edge cases 1.5, 1
     expect(types(r)).not.toContain('maintainer_unknown');
   });
 
+  it('the maintainer is part of the decision-set hash, so an owner who joins LD after the flag migrated makes it show as changed', () => {
+    const withSam = mapGate(args('kill_switch_payments'));
+    const before = mapGate(args('kill_switch_payments', { directory: { members: [], teams: [], membersReadable: true, teamsReadable: true } }));
+    expect(before.shell.maintainerId).toBeUndefined();
+    expect(before.statsigFingerprint).toBe(withSam.statsigFingerprint); // nothing changed in StatSig…
+    expect(before.decisionSetHash).not.toBe(withSam.decisionSetHash); // …but the next sync has a maintainer to set
+    // Two reads with the same directory agree: the hash stays deterministic.
+    expect(mapGate(args('kill_switch_payments')).decisionSetHash).toBe(withSam.decisionSetHash);
+  });
+
   it('raises maintainer_unknown for an owner who is not a member, recommending the team when LD has it', () => {
     const r = mapGate(former({}, 'Checkout'));
     const d = r.unresolved.find((x) => x.type === 'maintainer_unknown')!;

@@ -7,8 +7,11 @@
  * Teams and people are account-level and come first: a maintainer must be an LD member, a team
  * must exist to be one, and an invitation can place a person into teams only if the teams exist.
  * They are separate steps so teams can be created without inviting anyone yet, and both bow out
- * when an identity provider provisions the account (AccountAccess). Everything from the
- * environment on repeats per environment. Context kinds come first in that loop because every rule, rollout and target refers to them; segments before
+ * when an identity provider provisions the account (AccountAccess). Neither blocks the
+ * environment steps: a flag whose owner is not in LD yet is created without a maintainer, and the
+ * maintainer is part of the decision-set hash, so the flag shows as changed and takes the
+ * maintainer on the next sync once the person (or team) exists. Everything from the environment
+ * on repeats per environment. Context kinds come first in that loop because every rule, rollout and target refers to them; segments before
  * flags because flags reference segments; experiments and bandits after the flags they wrap. The
  * model here is pure: it tallies what each step still needs from the mapping results and LD
  * state, and the view renders it. Nothing is written.
@@ -34,9 +37,20 @@ export const ACCESS_LABEL: Record<AccountAccess, { label: string; note: string }
   },
   scim_team_sync: {
     label: 'Okta with SCIM and team sync (members and teams)',
-    note: 'Okta provisions members and, through Group Push, teams. Nothing is created or invited from here: the Teams step lists the group names to push (team sync links an existing team of the same name) and the People step waits for provisioning.',
+    note: 'Okta provisions members and, through Group Push, teams. Nothing is created or invited from here: the Teams step lists the group names to push (team sync links an existing team of the same name) and the People step waits for provisioning. The environment steps do not wait for either.',
   },
 };
+
+/**
+ * Who provisions what a step would otherwise create, under the workspace's AccountAccess:
+ * undefined when the console does it from the step itself. The view shows such a step as
+ * waiting for the provider, nothing being written from it.
+ */
+export function provisionedBy(step: StepKey, access: AccountAccess): string | undefined {
+  if (step === 'teams') return access === 'scim_team_sync' ? 'Okta' : undefined;
+  if (step === 'people') return access === 'scim_team_sync' ? 'Okta' : access === 'scim' ? 'SCIM' : undefined;
+  return undefined;
+}
 
 /**
  * Steps whose writes land on the LaunchDarkly *account*, shared by every project in it, rather
@@ -238,8 +252,13 @@ function add(t: Tally, uid: string, standing: Standing | 'set_aside'): void {
 export const tallyDone = (t: Tally): boolean => !t.ldUnknown && t.toMigrate.length === 0;
 
 /** The first step that is not done; cut over is "current" once everything before it is. */
+/**
+ * The step to expand: the first unfinished one, skipping Teams and People. Those can be finished
+ * at any time (or never, when an identity provider is still provisioning): the environment steps
+ * do not wait for them, and a later sync picks up the maintainers and teams that appeared.
+ */
 export function currentStep(done: Record<StepKey, boolean>): StepKey {
-  return STEP_ORDER.find((k) => !done[k]) ?? 'cutover';
+  return STEP_ORDER.find((k) => !done[k] && !ACCOUNT_WIDE_STEPS.has(k)) ?? 'cutover';
 }
 
 export function computeGuide(input: GuideInput): GuideModel {

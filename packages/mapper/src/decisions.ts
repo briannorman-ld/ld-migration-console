@@ -70,6 +70,8 @@ export class DecisionCollector {
   readonly applied: AppliedDecision[] = [];
   readonly unresolved: DecisionPoint[] = [];
   readonly stale: StaleDecision[] = [];
+  /** Settled facts that shape the result without a decision (see `note`). */
+  private readonly facts: [string, string][] = [];
   private readonly seen = new Set<string>();
 
   constructor(
@@ -98,22 +100,33 @@ export class DecisionCollector {
     return { choice: dp.recommended ?? fallback, resolved: false };
   }
 
+  /**
+   * Record something that shaped the result without asking the user, so it counts in `setHash`
+   * and a change to it shows the item as changed on the next sync. The maintainer is one: an
+   * owner matched by email against the LD member directory, which may happen only after the
+   * flag migrated (the owner was invited or provisioned later).
+   */
+  note(key: string, value: string): void {
+    this.facts.push([key, value]);
+  }
+
   /** Checkpoint, so a translation attempt that turns out impossible leaves no stray decisions. */
-  mark(): { applied: number; unresolved: number; stale: number; seen: Set<string> } {
-    return { applied: this.applied.length, unresolved: this.unresolved.length, stale: this.stale.length, seen: new Set(this.seen) };
+  mark(): { applied: number; unresolved: number; stale: number; facts: number; seen: Set<string> } {
+    return { applied: this.applied.length, unresolved: this.unresolved.length, stale: this.stale.length, facts: this.facts.length, seen: new Set(this.seen) };
   }
 
   rollback(m: ReturnType<DecisionCollector['mark']>): void {
     this.applied.length = m.applied;
     this.unresolved.length = m.unresolved;
     this.stale.length = m.stale;
+    this.facts.length = m.facts;
     this.seen.clear();
     m.seen.forEach((s) => this.seen.add(s));
   }
 
-  /** Hash of every applied resolution: stored in provenance as `decisionSetHash` (PLAN §3.3). */
+  /** Hash of every applied resolution and noted fact: stored in provenance as `decisionSetHash` (PLAN §3.3). */
   setHash(): string {
-    return fingerprint(this.applied.map((a) => [a.decision.id, a.decision.fingerprint, a.optionKey]).sort());
+    return fingerprint([...this.applied.map((a) => [a.decision.id, a.decision.fingerprint, a.optionKey]), ...this.facts.map(([k, v]) => ['fact', k, v])].sort());
   }
 }
 

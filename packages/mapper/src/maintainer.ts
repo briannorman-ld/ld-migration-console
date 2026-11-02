@@ -49,6 +49,15 @@ export function memberIdForEmail(profile: MappingProfile, directory: LdDirectory
 }
 
 export function chooseMaintainer(ctx: MaintainerContext, entity: { owner?: Owner; team?: string | null }): MaintainerAssignment {
+  const picked = pickMaintainer(ctx, entity);
+  // The assignment goes into the decision-set hash: an owner provisioned or invited after the
+  // flag migrated turns from "no maintainer" into a member match, and the next sync applies it.
+  if (picked.maintainerId) ctx.decisions.note('maintainer', `member:${picked.maintainerId}`);
+  else if (picked.maintainerTeamKey) ctx.decisions.note('maintainer', `team:${picked.maintainerTeamKey}`);
+  return picked;
+}
+
+function pickMaintainer(ctx: MaintainerContext, entity: { owner?: Owner; team?: string | null }): MaintainerAssignment {
   const email = entity.owner?.email?.trim().toLowerCase() || undefined;
   const teamKey = teamKeyForName(ctx.profile, ctx.directory, entity.team);
   const loc = 'flag settings';

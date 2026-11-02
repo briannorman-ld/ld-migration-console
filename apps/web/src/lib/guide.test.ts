@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { DecisionPoint } from '@sslm/mapper';
-import { classify, computeGuide, computePeople, currentStep, describeTally, STEP_ORDER, teamKeysFor, type GuideInput, type Tally } from './guide.ts';
+import { classify, computeGuide, computePeople, currentStep, describeTally, STEP_ORDER, teamKeysFor, type GuideInput, type Tally, provisionedBy } from './guide.ts';
 
 const blocking = { severity: 'blocking' } as DecisionPoint;
 const choice = { severity: 'choice' } as DecisionPoint;
@@ -26,10 +26,11 @@ describe('guide: the current step', () => {
   it('is the first step not done, in dependency order, and cut over once all are', () => {
     const none = Object.fromEntries(STEP_ORDER.map((k) => [k, false])) as Record<(typeof STEP_ORDER)[number], boolean>;
     expect(currentStep(none)).toBe('connect');
-    // Account-level steps first, so the per-environment loop (from `environment`) never walks back through them.
-    expect(currentStep({ ...none, connect: true })).toBe('teams');
-    expect(currentStep({ ...none, connect: true, teams: true })).toBe('people');
+    // The account-level steps (teams, people) never hold the guide: resources migrate without them and a later sync picks up what appeared.
+    expect(currentStep({ ...none, connect: true })).toBe('environment');
+    expect(currentStep({ ...none, connect: true, teams: true })).toBe('environment');
     expect(currentStep({ ...none, connect: true, teams: true, people: true })).toBe('environment');
+    expect(currentStep({ ...none, connect: true, environment: true })).toBe('contexts');
     expect(currentStep({ ...none, connect: true, environment: true, teams: true, people: true })).toBe('contexts');
     expect(currentStep({ ...none, connect: true, environment: true, teams: true, people: true, contexts: true })).toBe('segments');
     expect(currentStep({ ...none, connect: true, environment: true, teams: true, people: true, contexts: true, segments: true })).toBe('flags');
@@ -145,6 +146,20 @@ describe('guide: people and teams (PLAN §8.3)', () => {
     const base: GuideInput = { sources: [], snapshots: [snapshot], m: m(), env: '', decisions: [], monitoring: { attention: 0, rows: 0, loaded: false }, interruptedRuns: 0 };
     expect(computeGuide(base).done.connect).toBe(false);
     expect(computeGuide({ ...base, access: 'scim' }).done.connect).toBe(true);
+  });
+
+  it('Teams and People never hold the guide: with Connect done the current step is the environment, however many owners are missing', () => {
+    const base: GuideInput = { sources: [], snapshots: [snapshot], m: m(), env: '', decisions: [], monitoring: { attention: 0, rows: 0, loaded: false }, interruptedRuns: 0 };
+    for (const access of ['launchdarkly', 'scim', 'scim_team_sync'] as const) {
+      const g = computeGuide({ ...base, access });
+      expect(g.done.teams).toBe(false);
+      expect(g.done.people).toBe(false);
+      expect(g.current).toBe('environment');
+    }
+    expect(provisionedBy('teams', 'scim')).toBeUndefined();
+    expect(provisionedBy('teams', 'scim_team_sync')).toBe('Okta');
+    expect(provisionedBy('people', 'scim')).toBe('SCIM');
+    expect(provisionedBy('people', 'launchdarkly')).toBeUndefined();
   });
 
   it('an invitation carries the LD keys of the teams the owner is in, when those teams exist', () => {
