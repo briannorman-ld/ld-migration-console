@@ -30,6 +30,7 @@ import {
   isProjectOnlySelection,
   type MigrationSelection,
 } from "../lib/migration.ts";
+import { describeRemaining, formatDuration, runProgress } from "../lib/runProgress.ts";
 import type { MigrationContext } from "../lib/useMigration.ts";
 
 const ITEM_TONE: Record<ItemStatus, "green" | "red" | "slate" | "amber"> = {
@@ -558,22 +559,25 @@ export function RunProgress({
   onCancel?: () => void;
   cancelling?: boolean;
 }) {
+  const inProgress = !!run && (run.status === "running" || run.status === "undoing");
+  const now = useTick(inProgress);
   if (!run)
     return (
       <div className="flex items-center gap-2 text-sm text-fg-muted">
         <Spinner /> Starting…
       </div>
     );
-  const done = run.steps.filter(
-    (s) => s.status !== "pending" && s.status !== "running",
-  ).length;
-  const inProgress = run.status === "running" || run.status === "undoing";
+  const p = runProgress(run, now);
+  const done = p.finished;
+  const remaining = describeRemaining(p);
   return (
     <section>
+      {/* Pinned while the step list scrolls: a 700-step run keeps its bar and estimate in view. */}
+      <div className="sticky -top-5 z-10 -mt-5 bg-surface pt-5">
       <div className="mb-2 flex items-center gap-2 text-sm">
         <h3 className="font-semibold">{title}</h3>
         <span className="text-fg-muted">
-          {done}/{run.steps.length}
+          {done}/{run.steps.length} steps · {Math.round(p.fraction * 100)}%
         </span>
         {inProgress && <Spinner />}
         {inProgress && cancelling && (
@@ -592,11 +596,29 @@ export function RunProgress({
           </Button>
         )}
       </div>
-      <div className="mb-3 h-1.5 overflow-hidden rounded bg-surface-2">
+      <div
+        className="h-2 overflow-hidden rounded bg-surface-2"
+        role="progressbar"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.round(p.fraction * 100)}
+        aria-label={title}
+      >
         <div
-          className="h-full bg-accent transition-all"
-          style={{ width: `${(done / Math.max(run.steps.length, 1)) * 100}%` }}
+          className="h-full bg-accent transition-all duration-500"
+          style={{ width: `${p.fraction * 100}%` }}
         />
+      </div>
+      <div className="mt-1 mb-3 flex flex-wrap gap-x-4 text-xs text-fg-muted" data-testid="run-timing">
+        <span>{formatDuration(p.elapsedMs)} elapsed</span>
+        {inProgress && remaining && (
+          <span>
+            {remaining}
+            {!p.measured && " (estimate; refines as steps finish)"}
+          </span>
+        )}
+        {!inProgress && run.finishedAt && <span>finished in {formatDuration(p.elapsedMs)}</span>}
+      </div>
       </div>
       <ul className="space-y-1 text-xs">
         {run.steps.map((s) => (
@@ -701,4 +723,16 @@ export function EnvChooser({ options, chosen, onChange, disabled }: { options: E
       {chosen.length === 0 && <p className="mt-1.5 text-xs text-warning">Choose at least one environment.</p>}
     </section>
   );
+}
+
+/** Re-renders once a second while a run is in flight, so elapsed and remaining time move. */
+function useTick(active: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    setNow(Date.now());
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [active]);
+  return now;
 }
