@@ -2,7 +2,7 @@ import 'fake-indexeddb/auto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { acmeSnapshot, CAPS, NOW } from '../../../../packages/mapper/test/fixtures.ts';
 import { server } from '../../../../packages/mapper/test/fixtures.ts';
-import { collectDecisions, envTargets, mapGateFor, type MappingInputs } from './migration.ts';
+import { buildPlan, collectDecisions, envTargets, mapGateFor, type MappingInputs } from './migration.ts';
 
 /**
  * The explorers, Decisions view and readiness line all map the same entities on every render.
@@ -38,5 +38,17 @@ describe('mapping memo', () => {
     expect(mapGateFor({ ...web }, gate, env, inputs)).not.toBe(first);
     // Equal content either way.
     expect(mapGateFor(web, gate, env, { ...inputs, resolutions: new Map() })).toEqual(first);
+  });
+
+  it('a plan maps through the same memo, so the modal rebuilds without mapping again', async () => {
+    const web = await acmeSnapshot('web');
+    const profile = { version: 1 as const, sources: { [web.source.sourceId]: { envMapping: { staging: 'test' }, unitTypeKinds: {} } }, attributes: {}, policies: {} };
+    const inputs: MappingInputs = { profile, resolutions: new Map(), capabilities: CAPS, directory: { members: [], teams: [], membersReadable: false, teamsReadable: false }, idLists: {}, coverage: {}, now: NOW };
+    const gate = web.gates[0]!;
+    const ld = { status: 'connected', projectKey: 'p', matrix: { projectKey: 'p', instance: 'us', capabilities: [], environments: [{ key: 'test', name: 'Test', critical: false }] }, flags: { items: [], loadedAt: NOW }, segments: { test: [] }, contextKinds: ['user'] } as never;
+    const before = mapGateFor(web, gate, { statsig: 'staging', ld: 'test' }, inputs);
+    const plan = buildPlan({ ...inputs, ld, selection: { gates: [gate.uid], autotunes: [] }, ldEnvs: ['test'], snapshots: [web] });
+    expect(plan.items.some((i) => i.uid === gate.uid)).toBe(true);
+    expect(mapGateFor(web, gate, { statsig: 'staging', ld: 'test' }, inputs)).toBe(before);
   });
 });

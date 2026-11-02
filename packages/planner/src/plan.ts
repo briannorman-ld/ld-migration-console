@@ -114,6 +114,23 @@ export interface PlanRequest {
   directory?: LdDirectory;
   ld: LdProjectState;
   now: string;
+  /**
+   * The mapper functions to use in place of @sslm/mapper's, same signatures and results. The web
+   * app passes memoized ones, so a plan reuses what the explorers mapped instead of mapping every
+   * selected item again for each environment. Left out, the pure mappers run.
+   */
+  mappers?: Partial<PlanMappers>;
+}
+
+/** The entity mappers a plan calls, by name; see `PlanRequest.mappers`. */
+export interface PlanMappers {
+  mapGate: typeof mapGate;
+  mapSegment: typeof mapSegment;
+  mapConfig: typeof mapConfig;
+  mapAutotune: typeof mapAutotune;
+  mapNeutralFlag: typeof mapNeutralFlag;
+  mapNeutralSegment: typeof mapNeutralSegment;
+  mapPrompt: typeof mapPrompt;
 }
 
 /**
@@ -308,7 +325,7 @@ export function planMigration(req: PlanRequest): Plan {
       else existing.dependency = false;
       return existing.status === 'ready' ? { ok: true, stepId: `segment:${ldEnv}:${existing.ldKey}` } : { ok: false, reason: `segment “${segmentId}” is ${existing.status}` };
     }
-    const r: SegmentMapResult = mapSegment({ canonical: { snapshot, idLists: req.idLists, ...(req.coverage ? { coverage: req.coverage } : {}) }, entity: seg, profile: req.profile, resolutions: req.resolutions, capabilities: req.capabilities, env: { statsig: statsigEnv, ld: ldEnv }, now: req.now, ...dir });
+    const r: SegmentMapResult = (req.mappers?.mapSegment ?? mapSegment)({ canonical: { snapshot, idLists: req.idLists, ...(req.coverage ? { coverage: req.coverage } : {}) }, entity: seg, profile: req.profile, resolutions: req.resolutions, capabilities: req.capabilities, env: { statsig: statsigEnv, ld: ldEnv }, now: req.now, ...dir });
     const ldSeg = req.ld.segments[ldEnv]?.get(r.segmentKey);
     const item: PlanItem = { uid: seg.uid, kind: 'segment', entityId: seg.id, sourceId: seg.source.sourceId, ldKey: r.segmentKey, ldEnv, statsigEnv, status: 'ready', dependency: requiredBy !== null, requiredBy: requiredBy ? [requiredBy] : [], fidelity: r.fidelity, decisions: [], exists: !!ldSeg };
     items.set(itemKey, item);
@@ -370,7 +387,7 @@ export function planMigration(req: PlanRequest): Plan {
     if (!statsigEnv) return finishItem(item, 'error', `no StatSig environment of ${snapshot.source.alias} is mapped to LaunchDarkly “${ldEnv}”`);
     item.statsigEnv = statsigEnv;
 
-    const r: GateMapResult = mapGate({ canonical: { snapshot, idLists: req.idLists, ...(req.coverage ? { coverage: req.coverage } : {}) }, entity: gate, profile: req.profile, resolutions: req.resolutions, capabilities: req.capabilities, env: { statsig: statsigEnv, ld: ldEnv }, now: req.now, ...dir });
+    const r: GateMapResult = (req.mappers?.mapGate ?? mapGate)({ canonical: { snapshot, idLists: req.idLists, ...(req.coverage ? { coverage: req.coverage } : {}) }, entity: gate, profile: req.profile, resolutions: req.resolutions, capabilities: req.capabilities, env: { statsig: statsigEnv, ld: ldEnv }, now: req.now, ...dir });
     item.ldKey = r.flagKey;
     item.fidelity = r.fidelity;
     addDecisions(item, r.unresolved, r.stale);
@@ -480,7 +497,7 @@ export function planMigration(req: PlanRequest): Plan {
     if (!statsigEnv) return void finishItem(item, 'error', `no StatSig environment of ${snapshot.source.alias} is mapped to LaunchDarkly “${ldEnv}”`);
     item.statsigEnv = statsigEnv;
 
-    const r: ConfigMapResult = mapConfig({ canonical: { snapshot, idLists: req.idLists, ...(req.coverage ? { coverage: req.coverage } : {}) }, entity: config, profile: req.profile, resolutions: req.resolutions, capabilities: req.capabilities, env: { statsig: statsigEnv, ld: ldEnv }, now: req.now, ...dir });
+    const r: ConfigMapResult = (req.mappers?.mapConfig ?? mapConfig)({ canonical: { snapshot, idLists: req.idLists, ...(req.coverage ? { coverage: req.coverage } : {}) }, entity: config, profile: req.profile, resolutions: req.resolutions, capabilities: req.capabilities, env: { statsig: statsigEnv, ld: ldEnv }, now: req.now, ...dir });
     item.ldKey = r.flagKey;
     item.fidelity = r.fidelity;
     addDecisions(item, r.unresolved, r.stale);
@@ -609,7 +626,7 @@ export function planMigration(req: PlanRequest): Plan {
       return;
     }
     item.statsigEnv = statsigEnv;
-    const r = mapAutotune({ canonical: { snapshot, idLists: req.idLists, ...(req.coverage ? { coverage: req.coverage } : {}) }, entity: a, profile: req.profile, resolutions: req.resolutions, capabilities: req.capabilities, env: { statsig: statsigEnv, ld: ldEnv }, now: req.now, ...dir });
+    const r = (req.mappers?.mapAutotune ?? mapAutotune)({ canonical: { snapshot, idLists: req.idLists, ...(req.coverage ? { coverage: req.coverage } : {}) }, entity: a, profile: req.profile, resolutions: req.resolutions, capabilities: req.capabilities, env: { statsig: statsigEnv, ld: ldEnv }, now: req.now, ...dir });
     item.ldKey = r.flagKey;
     item.fidelity = r.fidelity;
     addDecisions(item, r.unresolved, r.stale);
@@ -708,7 +725,7 @@ export function planMigration(req: PlanRequest): Plan {
       else existing.dependency = false;
       return existing.status === 'ready' ? { ok: true, stepId: `segment:${ldEnv}:${existing.ldKey}` } : { ok: false, reason: `segment “${key}” is ${existing.status}` };
     }
-    const r: NeutralSegmentMapResult = mapNeutralSegment({ canonical: { snapshot }, entity: seg, profile: req.profile, resolutions: req.resolutions, capabilities: req.capabilities, env: { statsig: sourceEnv, ld: ldEnv }, now: req.now, ...dir });
+    const r: NeutralSegmentMapResult = (req.mappers?.mapNeutralSegment ?? mapNeutralSegment)({ canonical: { snapshot }, entity: seg, profile: req.profile, resolutions: req.resolutions, capabilities: req.capabilities, env: { statsig: sourceEnv, ld: ldEnv }, now: req.now, ...dir });
     const ldSeg = req.ld.segments[ldEnv]?.get(r.segmentKey);
     const item: PlanItem = { uid: seg.uid, kind: 'segment', entityId: seg.key, sourceId: snapshot.source.sourceId, ldKey: r.segmentKey, ldEnv, statsigEnv: sourceEnv, status: 'ready', dependency: requiredBy !== null, requiredBy: requiredBy ? [requiredBy] : [], fidelity: r.fidelity, decisions: [], exists: !!ldSeg };
     items.set(itemKey, item);
@@ -765,7 +782,7 @@ export function planMigration(req: PlanRequest): Plan {
     if (!sourceEnv) return finishItem(item, 'error', `no environment of ${snapshot.source.alias} is mapped to LaunchDarkly “${ldEnv}”`);
     item.statsigEnv = sourceEnv;
 
-    const r: NeutralFlagMapResult = mapNeutralFlag({ canonical: { snapshot }, entity: flag, profile: req.profile, resolutions: req.resolutions, capabilities: req.capabilities, env: { statsig: sourceEnv, ld: ldEnv }, now: req.now, ...dir });
+    const r: NeutralFlagMapResult = (req.mappers?.mapNeutralFlag ?? mapNeutralFlag)({ canonical: { snapshot }, entity: flag, profile: req.profile, resolutions: req.resolutions, capabilities: req.capabilities, env: { statsig: sourceEnv, ld: ldEnv }, now: req.now, ...dir });
     item.ldKey = r.flagKey;
     item.fidelity = r.fidelity;
     addDecisions(item, r.unresolved, r.stale);
@@ -841,7 +858,7 @@ export function planMigration(req: PlanRequest): Plan {
     const snapshot = snapshotOf.get(prompt.source.sourceId)!;
     const item: PlanItem = { uid: prompt.uid, kind: 'prompt', entityId: prompt.id, sourceId: prompt.source.sourceId, ldKey: prompt.id, ldEnv: '', status: 'ready', dependency: false, requiredBy: [], decisions: [], exists: false };
     items.set(itemKey, item);
-    const r = mapPrompt({ canonical: { snapshot }, entity: prompt, profile: req.profile, resolutions: req.resolutions, capabilities: req.capabilities, env: { statsig: '', ld: '' }, now: req.now, ...dir });
+    const r = (req.mappers?.mapPrompt ?? mapPrompt)({ canonical: { snapshot }, entity: prompt, profile: req.profile, resolutions: req.resolutions, capabilities: req.capabilities, env: { statsig: '', ld: '' }, now: req.now, ...dir });
     item.ldKey = r.key;
     item.fidelity = r.fidelity;
     addDecisions(item, r.unresolved, r.stale);

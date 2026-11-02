@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useState } from "react";
 import type { CanonicalSnapshot } from "@sslm/canonical";
 import type { RunRecord, StepStatus } from "@sslm/executor";
 import { LD_INSTANCES } from "@sslm/ld-client";
@@ -88,6 +88,10 @@ export function MigrateModal({
   // Target LD environments: segments, rollouts and targets are per environment, so the user picks
   // exactly which ones this run writes to. Only environments a source maps to can be chosen.
   const [ldEnvs, setLdEnvs] = useState<string[]>(initialLdEnvs);
+  // The plan follows the environments one render behind: a tick paints at once, the plan for the
+  // new set is built in the next, deferred render (on a big selection that is a visible pause).
+  const plannedEnvs = useDeferredValue(ldEnvs);
+  const planning = plannedEnvs !== ldEnvs;
   const envOptions = useMemo(() => envChoices(m, sources), [m, sources]);
   // Context kinds are project-level: a run that creates only those needs no environment.
   const needsEnv = !isProjectOnlySelection(selection);
@@ -128,8 +132,8 @@ export function MigrateModal({
     () =>
       phase.kind === "loading"
         ? null
-        : buildPlan({ ...m, selection, ldEnvs, snapshots }),
-    [phase.kind, selection, ldEnvs, snapshots, m],
+        : buildPlan({ ...m, selection, ldEnvs: plannedEnvs, snapshots }),
+    [phase.kind, selection, plannedEnvs, snapshots, m],
   );
   const requested = plan?.items.filter((i) => !i.dependency) ?? [];
   // Flags are project-level (created once, present in every environment); targeting, segments
@@ -162,7 +166,7 @@ export function MigrateModal({
   const needsConfirm = plan?.confirmEnvs ?? [];
   const confirmed =
     needsConfirm.length === 0 || confirm.trim() === needsConfirm.join(", ");
-  const label = needsEnv ? `${describeSelection(selection)} → ${ldEnvs.join(", ")}` : `${describeSelection(selection)} (project)`;
+  const label = needsEnv ? `${describeSelection(selection)} → ${plannedEnvs.join(", ")}` : `${describeSelection(selection)} (project)`;
   const seconds = Math.max(1, Math.round(((plan?.requests ?? 0) * 0.5) / 1));
   const ldBase = m.ld.projectKey
     ? `${LD_INSTANCES[m.ld.instance ?? "us"].origin}/${m.ld.projectKey}`
@@ -264,7 +268,12 @@ export function MigrateModal({
                     title="Configure targeting in"
                     hint="Rules, rollouts, individual targets and segments are per environment. Add every environment to configure now, or come back for the others later."
                   />
-                  {ldEnvs.map((env) => (
+                  {planning && (
+                    <p className="mt-3 flex items-center gap-2 text-xs text-fg-muted" role="status">
+                      <Spinner /> Planning for {ldEnvs.join(", ") || "no environment"}…
+                    </p>
+                  )}
+                  {plannedEnvs.map((env) => (
                     <EnvSection key={env} env={env} choice={envOptions.find((o) => o.key === env)} items={itemsIn(env)} critical={plan.confirmEnvs.includes(env)} />
                   ))}
                 </section>
@@ -424,7 +433,7 @@ export function MigrateModal({
               <Button
                 variant="secondary"
                 className="ml-auto"
-                disabled={busy || plan.steps.length === 0 || (needsEnv && ldEnvs.length === 0)}
+                disabled={busy || planning || plan.steps.length === 0 || (needsEnv && ldEnvs.length === 0)}
                 onClick={() => void run(true)}
               >
                 Dry run
@@ -432,6 +441,7 @@ export function MigrateModal({
               <Button
                 disabled={
                   busy ||
+                  planning ||
                   plan.steps.length === 0 ||
                   (needsEnv && ldEnvs.length === 0) ||
                   !confirmed ||

@@ -38,6 +38,7 @@ import {
   type LdFlagState,
   type LdProjectState,
   type Plan,
+  type PlanMappers,
 } from "@sslm/planner";
 import { STATSIG_CONSOLE_BASE_URL, StatsigConsoleClient } from "@sslm/statsig-client";
 import type { SourceRecord, RunJournalRecord } from "@sslm/store";
@@ -497,8 +498,28 @@ export function describeSelection(sel: MigrationSelection): string {
   return parts.join(" and ") || "nothing";
 }
 
+/**
+ * The mapping memo as the planner's mappers: a plan maps each selected item in each environment
+ * through the same cache the explorers, guide and Decisions view fill, so building it (and
+ * rebuilding it when the user adds an environment in the plan modal) costs no mapping the screen
+ * has already done. The planner hands over the same profile, resolutions, ID lists, coverage,
+ * capabilities, directory and `now` it was given, so a cached result is the one it would compute.
+ */
+function planMappers(i: MappingInputs): PlanMappers {
+  return {
+    mapGate: (a) => mapGateFor(a.canonical.snapshot, a.entity, a.env, i),
+    mapSegment: (a) => mapSegmentFor(a.canonical.snapshot, a.entity, a.env, i),
+    mapConfig: (a) => mapConfigFor(a.canonical.snapshot, a.entity, a.env, i),
+    mapAutotune: (a) => mapAutotuneFor(a.canonical.snapshot, a.entity, a.env, i),
+    mapNeutralFlag: (a) => mapNeutralFlagFor(a.canonical.snapshot, a.entity, a.env, i),
+    mapNeutralSegment: (a) => mapNeutralSegmentFor(a.canonical.snapshot, a.entity, a.env, i),
+    mapPrompt: (a) => mapPromptFor(a.canonical.snapshot, a.entity, i),
+  };
+}
+
 export function buildPlan(input: { selection: MigrationSelection; ldEnvs: string[]; snapshots: CanonicalSnapshot[]; ld: LdSession } & MappingInputs): Plan {
   return planMigration({
+    mappers: planMappers(input),
     gates: input.selection.gates,
     configs: input.selection.configs ?? [],
     autotunes: input.selection.autotunes,

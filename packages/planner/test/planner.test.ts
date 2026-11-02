@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { CanonicalSnapshot } from '@sslm/canonical';
-import type { Resolution } from '@sslm/mapper';
+import { mapGate, mapSegment, type Resolution } from '@sslm/mapper';
 import { flagOwner, migrationStatus, ownsSegment, planMigration, recommendedResolutions, syncPropertyKey, type LdProjectState, type PlanRequest } from '../src/index.ts';
 import { acmeSnapshot, CAPS, DIRECTORY, NOW, profileFor, server } from './fixtures.ts';
 
@@ -469,5 +469,19 @@ describe('prompts → AI Configs (PLAN §6)', () => {
     const plan = planMigration(acceptAll(req));
     expect(plan.ready).toBe(true);
     expect(plan.steps[0]!.op === 'upsert_ai_config' && plan.steps[0]!.desired.maintainerId).toBeUndefined();
+  });
+});
+
+describe('mappers supplied by the caller', () => {
+  it('maps through them instead of the pure mappers, with the same plan', () => {
+    let gates = 0;
+    let segments = 0;
+    const req = request(['new_checkout_flow'], { ldEnvs: ['test', 'production'] });
+    const plain = planMigration(req);
+    const counted = planMigration({ ...req, mappers: { mapGate: (a) => (gates++, mapGate(a)), mapSegment: (a) => (segments++, mapSegment(a)) } });
+    // One gate in two environments; its segment dependency is mapped through the supplied mapper too.
+    expect(gates).toBe(2);
+    expect(segments).toBeGreaterThan(0);
+    expect(counted).toEqual(plain);
   });
 });
