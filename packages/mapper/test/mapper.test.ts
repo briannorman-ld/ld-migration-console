@@ -562,6 +562,78 @@ describe('known edge cases (docs/KNOWN-EDGE-CASES.md)', () => {
       expect(r.env.fallthrough).toEqual({ variation: 0 });
     });
 
+    describe('4.15: rules that serve what the default rule serves (redundant_rules)', () => {
+      const decide = (gateId: string, optionKey: string) => {
+        const base = mapGate(args(gateId));
+        const d = base.unresolved.find((x) => x.type === 'redundant_rules')!;
+        const resolutions = new Map<string, Resolution>([[d.id, { id: d.id, type: 'redundant_rules', optionKey, scope: 'resource', fingerprint: d.fingerprint, decidedAt: NOW }]]);
+        return mapGate(args(gateId, { resolutions }));
+      };
+
+      it('lists trailing rules (exact to drop) apart from exclusions (not exact), and recommends keeping every rule', () => {
+        const r = mapGate(args('account_plan_tier_targeting'));
+        const d = r.unresolved.find((x) => x.type === 'redundant_rules')!;
+        expect(d.severity).toBe('choice');
+        expect(d.recommended).toBe('keep');
+        expect(d.title).toBe('3 rules serve Fail, which the default rule already does');
+        expect((d.sourceFragment as { rules: { name: string; kind: string }[] }).rules.map((x) => `${x.name}: ${x.kind}`)).toEqual(['Starter plan: exclusion', 'Student plan: exclusion', 'Enterprise plan: trailing']);
+        expect(d.options.map((o) => `${o.key} (${o.resultingFidelity})`)).toEqual(['keep (full)', 'trim_trailing (full)', 'trim_all (partial)']);
+        // The preview keeps every rule: nothing changes until the user says so.
+        expect(r.env.rules.map((x) => x.description)).toEqual(['Starter plan', 'Student plan', 'Pro plan', 'Org plan', 'Enterprise plan']);
+        expect(r.env.fallthrough).toEqual({ variation: 1 });
+        expect(r.fidelity.overall).toBe('full');
+      });
+
+      it('"keep" leaves the rules as they are, with full fidelity', () => {
+        const r = decide('account_plan_tier_targeting', 'keep');
+        expect(r.env.rules.map((x) => x.description)).toEqual(['Starter plan', 'Student plan', 'Pro plan', 'Org plan', 'Enterprise plan']);
+        expect(types(r)).not.toContain('redundant_rules');
+        expect(r.fidelity.notes.some((n) => /Dropped/.test(n.message))).toBe(false);
+      });
+
+      it('"trim_trailing" drops only the trailing rule, and the result is still exact', () => {
+        const r = decide('account_plan_tier_targeting', 'trim_trailing');
+        expect(r.env.rules.map((x) => x.description)).toEqual(['Starter plan', 'Student plan', 'Pro plan', 'Org plan']);
+        expect(r.fidelity.overall).toBe('full');
+        expect(r.fidelity.notes.some((n) => n.fidelity === 'full' && /Dropped 1 rule that serves Fail like the default rule \(“Enterprise plan”\)/.test(n.message))).toBe(true);
+      });
+
+      it('"trim_all" also drops the exclusions, which is partial fidelity', () => {
+        const r = decide('account_plan_tier_targeting', 'trim_all');
+        expect(r.env.rules.map((x) => x.description)).toEqual(['Pro plan', 'Org plan']);
+        expect(r.fidelity.overall).toBe('partial');
+        expect(r.fidelity.notes.some((n) => n.fidelity === 'partial' && /Dropped 2 exclusion rules \(“Starter plan”, “Student plan”\)/.test(n.message))).toBe(true);
+      });
+
+      it('offers only the options that apply: exclusions alone → keep or trim_all; trailing alone → keep or trim_trailing', () => {
+        const gate = web.gates.find((g) => g.id === 'account_plan_tier_targeting')!;
+        const exclusionsOnly = mapGate(args('account_plan_tier_targeting', { entity: { ...gate, rules: gate.rules.filter((r) => r.name !== 'Enterprise plan') } }));
+        const d1 = exclusionsOnly.unresolved.find((x) => x.type === 'redundant_rules')!;
+        expect(d1.options.map((o) => o.key)).toEqual(['keep', 'trim_all']);
+        expect(d1.subject.location).toBe('2 rules serve Fail, like the default rule');
+        const trailingOnly = mapGate(args('account_plan_tier_targeting', { entity: { ...gate, rules: gate.rules.filter((r) => ['Pro plan', 'Enterprise plan'].includes(r.name)) } }));
+        const d2 = trailingOnly.unresolved.find((x) => x.type === 'redundant_rules')!;
+        expect(d2.options.map((o) => o.key)).toEqual(['keep', 'trim_trailing']);
+        expect(d2.title).toBe('1 rule serves Fail, which the default rule already does');
+        // A different set of redundant rules is a different question.
+        expect(d1.fingerprint).not.toBe(d2.fingerprint);
+      });
+
+      it('raises nothing when no rule serves what the default serves: a 0% rule before a public pass rule is not redundant, and rollouts never are', () => {
+        // reviews_v2: "Everyone" (100 %, public) becomes the fallthrough, so the default serves Pass and the 0 % rule differs from it.
+        expect(types(mapGate(args('reviews_v2')))).not.toContain('redundant_rules');
+        expect(types(mapGate(args('new_checkout_flow')))).not.toContain('redundant_rules');
+        expect(types(mapGate(args('maintenance_mode')))).not.toContain('redundant_rules');
+      });
+
+      it('is one decision per gate, the same in every environment', () => {
+        const prod = mapGate(args('account_plan_tier_targeting')).unresolved.find((x) => x.type === 'redundant_rules')!;
+        const staging = mapGate(args('account_plan_tier_targeting', { env: { statsig: 'staging', ld: 'test' } })).unresolved.find((x) => x.type === 'redundant_rules')!;
+        expect(staging.id).toBe(prod.id);
+        expect(staging.fingerprint).toBe(prod.fingerprint);
+      });
+    });
+
     it('rules after a public 100% rule are unreachable and dropped', () => {
       const r = mapGate(args('free_returns'));
       expect(r.env.rules).toEqual([]);

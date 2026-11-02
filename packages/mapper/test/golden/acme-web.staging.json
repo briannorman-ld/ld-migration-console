@@ -2304,6 +2304,106 @@
         "targets": [],
         "prerequisites": []
       }
+    },
+    {
+      "gate": "account_plan_tier_targeting",
+      "flagKey": "account_plan_tier_targeting",
+      "name": "account_plan_tier_targeting",
+      "fidelity": "full",
+      "notes": [],
+      "decisions": [
+        "choice client_side_availability (flag settings) → both",
+        "choice redundant_rules (3 rules serve Fail, like the default rule) → keep"
+      ],
+      "dependencies": [],
+      "env": {
+        "ldEnv": "test",
+        "statsigEnv": "staging",
+        "on": true,
+        "offVariation": 1,
+        "fallthrough": {
+          "variation": 1
+        },
+        "rules": [
+          {
+            "description": "Starter plan",
+            "clauses": [
+              {
+                "contextKind": "user",
+                "attribute": "plan",
+                "op": "in",
+                "values": [
+                  "starter"
+                ],
+                "negate": false
+              }
+            ],
+            "variation": 1
+          },
+          {
+            "description": "Student plan",
+            "clauses": [
+              {
+                "contextKind": "user",
+                "attribute": "plan",
+                "op": "in",
+                "values": [
+                  "student"
+                ],
+                "negate": false
+              }
+            ],
+            "variation": 1
+          },
+          {
+            "description": "Pro plan",
+            "clauses": [
+              {
+                "contextKind": "user",
+                "attribute": "plan",
+                "op": "in",
+                "values": [
+                  "pro"
+                ],
+                "negate": false
+              }
+            ],
+            "variation": 0
+          },
+          {
+            "description": "Org plan",
+            "clauses": [
+              {
+                "contextKind": "user",
+                "attribute": "plan",
+                "op": "in",
+                "values": [
+                  "org"
+                ],
+                "negate": false
+              }
+            ],
+            "variation": 0
+          },
+          {
+            "description": "Enterprise plan",
+            "clauses": [
+              {
+                "contextKind": "user",
+                "attribute": "plan",
+                "op": "in",
+                "values": [
+                  "enterprise"
+                ],
+                "negate": false
+              }
+            ],
+            "variation": 1
+          }
+        ],
+        "targets": [],
+        "prerequisites": []
+      }
     }
   ],
   "configs": [

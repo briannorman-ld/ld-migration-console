@@ -603,6 +603,21 @@ export function acmeWeb(): ProjectSeed {
         checksPerHour: 0,
         rules: [{ name: 'Staff', conditions: [STAFF_EMAIL] }],
       },
+      {
+        id: 'account_plan_tier_targeting',
+        description: 'Plan-tier rollout written one rule per plan. The 0% rules fail users the default already fails (edge case 4.15): Enterprise is trailing, Starter and Student exclude before Pro.',
+        owner: P.marco,
+        tags: ['platform'],
+        team: 'Platform',
+        rules: [
+          { name: 'Starter plan', passPercentage: 0, conditions: [{ type: 'custom_field', field: 'plan', operator: 'any_case_sensitive', targetValue: ['starter'] }] },
+          { name: 'Student plan', passPercentage: 0, conditions: [{ type: 'custom_field', field: 'plan', operator: 'any_case_sensitive', targetValue: ['student'] }] },
+          { name: 'Pro plan', conditions: [{ type: 'custom_field', field: 'plan', operator: 'any_case_sensitive', targetValue: ['pro'] }] },
+          { name: 'Org plan', conditions: [{ type: 'custom_field', field: 'plan', operator: 'any_case_sensitive', targetValue: ['org'] }] },
+          { name: 'Enterprise plan', passPercentage: 0, conditions: [{ type: 'custom_field', field: 'plan', operator: 'any_case_sensitive', targetValue: ['enterprise'] }] },
+        ],
+        checksPerHour: 3_200,
+      },
     ],
     configs: [
       {

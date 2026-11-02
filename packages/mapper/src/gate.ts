@@ -33,6 +33,97 @@ import type {
   VariationOrRollout,
 } from './types.ts';
 
+/** A StatSig rule and the slice `[first, last)` of the LD rules it produced. */
+interface EmittedRule {
+  id: string;
+  name: string;
+  passPercentage: number;
+  serve: VariationOrRollout;
+  first: number;
+  last: number;
+}
+
+/**
+ * Edge case 4.15: a rule that serves what the default rule serves (in StatSig, a 0 % rule before
+ * the implicit fail) is redundant when every rule after it serves the same thing: dropping it
+ * changes nothing. When a later rule serves something else it is an exclusion ("fail these users
+ * before the pass rule"), and dropping it changes the result for users in both audiences. Both
+ * kinds are listed in one `redundant_rules` decision per gate; the default keeps every rule, so
+ * the LD flag mirrors StatSig rule for rule.
+ */
+function trimRedundantRules(ctx: ConditionContext, out: DesiredRule[], emitted: EmittedRule[], fallthrough: VariationOrRollout): DesiredRule[] {
+  if (fallthrough.variation === undefined) return out;
+  const served = fallthrough.variation;
+  const label = served === PASS ? 'Pass' : 'Fail';
+  const candidates: (EmittedRule & { cls: 'trailing' | 'exclusion' })[] = [];
+  let allLaterSame = true;
+  for (let i = emitted.length - 1; i >= 0; i--) {
+    const e = emitted[i]!;
+    if (e.serve.variation === served) candidates.unshift({ ...e, cls: allLaterSame ? 'trailing' : 'exclusion' });
+    else allLaterSame = false;
+  }
+  if (candidates.length === 0) return out;
+  const trailing = candidates.filter((c) => c.cls === 'trailing');
+  const exclusions = candidates.filter((c) => c.cls === 'exclusion');
+  const names = (xs: EmittedRule[]) => xs.map((x) => `“${x.name}”`).join(', ');
+  const n = candidates.length;
+  const plural = (k: number, one: string, many: string) => (k === 1 ? one : many);
+  const explanation = [
+    `In StatSig a ${served === PASS ? '100 %' : '0 %'} rule serves ${label} to the users it matches, and so does the default rule: the LD flag would carry ${n} ${plural(n, 'rule', 'rules')} that ${plural(n, 'changes', 'change')} nothing on ${plural(n, 'its', 'their')} own.`,
+    trailing.length ? `${names(trailing)}: every rule after ${plural(trailing.length, 'it', 'them')} serves ${label} too, so dropping ${plural(trailing.length, 'it', 'them')} keeps the same result for everyone.` : '',
+    exclusions.length ? `${names(exclusions)}: a later rule serves something else, so ${plural(exclusions.length, 'it acts', 'they act')} as an exclusion. Dropping ${plural(exclusions.length, 'it', 'them')} changes the result for users who also match that later rule.` : '',
+    'Keeping them mirrors StatSig rule for rule, which can matter for monitoring or for rules you plan to change later.',
+  ]
+    .filter(Boolean)
+    .join(' ');
+  const choice = ctx.decisions.choose(
+    {
+      type: 'redundant_rules',
+      severity: 'choice',
+      subject: { ...ctx.subject, location: `${n} ${plural(n, 'rule serves', 'rules serve')} ${label}, like the default rule` },
+      path: 'rules:redundant',
+      title: `${n} ${plural(n, 'rule serves', 'rules serve')} ${label}, which the default rule already does`,
+      explanation,
+      sourceFragment: { defaultServes: label, rules: candidates.map((c) => ({ id: c.id, name: c.name, passPercentage: c.passPercentage, kind: c.cls })) },
+      fingerprintOf: candidates.map((c) => ({ id: c.id, kind: c.cls })).sort((a, b) => a.id.localeCompare(b.id)),
+      options: [
+        { key: 'keep', label: 'Keep every rule', explanation: 'The LD flag has the same rules as the StatSig gate, redundant ones included.', resultingFidelity: 'full' },
+        ...(trailing.length
+          ? [
+              {
+                key: 'trim_trailing',
+                label: `Drop the ${trailing.length} ${plural(trailing.length, 'rule', 'rules')} that ${plural(trailing.length, 'changes', 'change')} nothing`,
+                explanation: `Drop ${names(trailing)}. Everyone they match reaches the default rule and gets ${label}, exactly as before.${exclusions.length ? ` ${names(exclusions)} ${plural(exclusions.length, 'stays', 'stay')}.` : ''}`,
+                resultingFidelity: 'full' as const,
+              },
+            ]
+          : []),
+        ...(exclusions.length
+          ? [
+              {
+                key: 'trim_all',
+                label: `Drop all ${n}, exclusions included`,
+                explanation: `Also drop ${names(exclusions)}. Users who match ${plural(exclusions.length, 'it', 'one of them')} and a later rule get what the later rule serves instead of ${label}. Safe only when those audiences never overlap.`,
+                resultingFidelity: 'partial' as const,
+              },
+            ]
+          : []),
+      ],
+      recommended: 'keep',
+    },
+    'keep',
+  );
+  if (choice === 'keep') return out;
+  const dropped = choice === 'trim_all' ? candidates : trailing;
+  const droppedTrailing = dropped.filter((c) => c.cls === 'trailing');
+  const droppedExclusions = dropped.filter((c) => c.cls === 'exclusion');
+  if (droppedTrailing.length) ctx.fidelity.push({ fidelity: 'full', message: `Dropped ${droppedTrailing.length} ${plural(droppedTrailing.length, 'rule', 'rules')} that ${plural(droppedTrailing.length, 'serves', 'serve')} ${label} like the default rule (${names(droppedTrailing)}): same result for everyone.` });
+  if (droppedExclusions.length) ctx.fidelity.push({ fidelity: 'partial', message: `Dropped ${droppedExclusions.length} exclusion ${plural(droppedExclusions.length, 'rule', 'rules')} (${names(droppedExclusions)}): users ${plural(droppedExclusions.length, 'it', 'they')} matched now reach the later rules instead of getting ${label}.` });
+  const skip = new Set<number>();
+  for (const d of dropped) for (let i = d.first; i < d.last; i++) skip.add(i);
+  return out.filter((_, i) => !skip.has(i));
+}
+
 /** The canonical model is StatSig's today; the kind is written into every resource (PLAN §3.3). */
 export const SOURCE_KIND: MigrationSourceKind = 'statsig';
 /** `migrated-from-statsig`: the marker tag on everything the console creates from this source. */
@@ -164,6 +255,8 @@ export function mapGate(args: MapArgs<Gate>): GateMapResult {
     c.gateReference = (ids, negate, cond, loc) => gateReference(c, state, { ids, negate, c: cond, loc, prereqCandidate, hasPassOverrides, prerequisites });
 
     const out: DesiredRule[] = [];
+    /** Which StatSig rule each entry of `out` came from, for the redundant-rule check below. */
+    const emitted: EmittedRule[] = [];
     let fallthrough: VariationOrRollout = { variation: FAIL };
     rules: for (const r of rules) {
       const serve = serveFor(c, gate, r.id, r.name, r.passPercentage, r.idType);
@@ -171,6 +264,7 @@ export function mapGate(args: MapArgs<Gate>): GateMapResult {
       let dnf = andDnf(conds);
       if (!dnf) dnf = expansion(c, r.id, r.name, conds.reduce((n, d) => n * Math.max(d.length, 1), 1));
       if (dnf.length === 0) continue;
+      const first = out.length;
       for (const [k, term] of dnf.entries()) {
         if (term.length === 0) {
           // A rule that matches everyone: it becomes the fallthrough and nothing after it is reachable.
@@ -181,7 +275,10 @@ export function mapGate(args: MapArgs<Gate>): GateMapResult {
         }
         out.push({ description: dnf.length > 1 ? `${r.name} (${k + 1}/${dnf.length})` : r.name, clauses: term, ...serve });
       }
+      if (out.length > first) emitted.push({ id: r.id, name: r.name, passPercentage: r.passPercentage, serve, first, last: out.length });
     }
+
+    const kept = trimRedundantRules(c, out, emitted, fallthrough);
 
     const ov = overrideTargets(c, overrides);
     for (const key of [...prerequisites].sort()) deps.set(`flag:${sanitizeKey(key)}`, { kind: 'flag', key: sanitizeKey(key), entityId: key });
@@ -191,7 +288,7 @@ export function mapGate(args: MapArgs<Gate>): GateMapResult {
       on: enabled,
       offVariation: FAIL,
       fallthrough,
-      rules: [...ov.rules, ...out],
+      rules: [...ov.rules, ...kept],
       targets: ov.targets,
       prerequisites: [...prerequisites].sort().map((k) => ({ key: sanitizeKey(k), variation: PASS })),
     };

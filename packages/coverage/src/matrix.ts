@@ -169,7 +169,7 @@ export const COVERAGE: CoverageEntry[] = [
     how: 'Each rule becomes an LD rule; a pass percentage becomes a percentage rollout; disabled gates are off; the shell carries name, description, tags, temporary and StatSig provenance.',
     detail:
       'The first StatSig rule whose conditions match ends evaluation, and users outside its pass percentage fail (no fall-through), which is exactly how an LD rule with a rollout behaves. Partial rollouts re-bucket users because the two platforms hash differently; this is acknowledged once per rule.',
-    decisions: ['partial_rollout_rebucket', 'rule_expansion', 'client_side_availability'],
+    decisions: ['partial_rollout_rebucket', 'rule_expansion', 'redundant_rules', 'client_side_availability'],
     edgeCases: ['4.1', '4.2', '4.3', '4.4', '4.5', '4.6', '4.10', '4.11'],
     kind: 'gate',
     docs: { statsig: `${SS}/feature-flags/working-with`, ld: `${LD}/home/flags/targeting` },

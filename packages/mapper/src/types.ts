@@ -245,6 +245,8 @@ export type DecisionType =
   | 'client_side_availability'
   | 'unsupported_condition'
   | 'rule_expansion'
+  /** Gate rules that serve the variation the default rule already serves (edge case 4.15): keep them (mirror StatSig) or trim them. */
+  | 'redundant_rules'
   | 'autotune_running'
   | 'missing_metric'
   | 'duplicate_variant_value'
