@@ -39,7 +39,7 @@ describe('secrets vault', () => {
     await expect(unlockDeviceVault(w, 'wrong')).rejects.toBeInstanceOf(WrongPassphraseError);
     expect(isDeviceVaultUnlocked(w)).toBe(false);
     const restored = await unlockDeviceVault(w, 'correct horse battery staple');
-    expect(restored).toEqual({ ld: true, statsig: ['src-1', 'src-2'] });
+    expect(restored).toEqual({ ld: true, statsig: ['src-1', 'src-2'], ldSources: [] });
     expect(secrets.get('ld', w)).toBe('api-ld-token');
     expect(secrets.get('statsig', 'src-2')).toBe('console-key-2');
     expect(secrets.get('statsig', 'other-ws-src')).toBeUndefined();
@@ -53,7 +53,7 @@ describe('secrets vault', () => {
     secrets.forget('ld', w);
     await flush();
     resetSecretsForTests();
-    expect(await unlockDeviceVault(w, 'correct horse battery staple')).toEqual({ ld: false, statsig: ['src-1'] });
+    expect(await unlockDeviceVault(w, 'correct horse battery staple')).toEqual({ ld: false, statsig: ['src-1'], ldSources: [] });
     await forgetDevice(w);
     expect(await store.getVault(w)).toBeUndefined();
     expect(secrets.get('statsig', 'src-1')).toBe('console-key');

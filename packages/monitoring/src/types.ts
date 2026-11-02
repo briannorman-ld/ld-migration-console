@@ -28,7 +28,8 @@ export type Lifecycle = 'not_migrated' | 'migrated' | 'dual_running' | 'cut_over
 
 /** A migratable StatSig entity in one mapped environment, as the app's mapper sees it. */
 export interface MonitoredItem {
-  kind: 'gate' | 'config' | 'autotune';
+  /** `flag`: a neutral (LD-source) flag, PLAN §20. */
+  kind: 'gate' | 'config' | 'autotune' | 'flag';
   uid: string;
   id: string;
   name: string;

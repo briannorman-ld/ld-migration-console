@@ -109,7 +109,11 @@ A migration is a chance to pick up capabilities that have no StatSig counterpart
 - **Code references** (`ld-find-code-refs`) find every call site because migrated keys equal StatSig names.
 - **Migration flags**, **AgentControl** (AI configs), **Observability** and **Vega** are separate LaunchDarkly products available after the move.
 
-## 7. Prior art and why this console exists
+## 7. Another LaunchDarkly project as the source
+
+Since 2026-10-30 the console also reads an existing LaunchDarkly project (same or another account or instance) and migrates its flags and segments into the target project with the same side-by-side, decision-driven, manual-sync workflow. Because the vocabulary is the target's, almost everything copies verbatim: shell, variations, per-environment targeting, individual targets, segment rules and lists. What differs between two projects still becomes a decision: context kinds the target lacks, percentage rollouts (a new flag has a new salt, so the same percentages land on different contexts), prerequisites on plans without them, big segments (membership is not readable through the API), the flag's own custom properties, and key collisions. Experiments, metrics, maintainers and approval settings are not carried (they belong to the source account or end there), and are noted. The rows are under *Another LaunchDarkly project as the source* in the matrix below and in `docs/KNOWN-EDGE-CASES.md` §18.
+
+## 8. Prior art and why this console exists
 
 LaunchDarkly's built-in flag importer supports Split and Unleash and copies flag shells only (name, key, variations, tags; flags land off with no rules or targets). StatSig publishes a guide for the opposite direction and, tellingly, advises against importing large ID-list segments. The earlier `statsig-to-ld` CLI mapped rules but had known operator bugs, no decision model, and no per-environment state. This console is browser-only, writes only to LaunchDarkly, records the migration ledger in the LD project itself (tags, custom properties, audit comments) and treats every imperfect mapping as a decision a person answers.
 
@@ -121,11 +125,11 @@ LaunchDarkly's built-in flag importer supports Split and Unleash and copies flag
 
 | Mark | Status | Meaning | Rows |
 |---|---|---|---|
-| ✅ | **Migrates** | Translated exactly and written automatically; at most an informational note. | 9 |
-| 🟡 | **Migrates with decisions** | Written automatically once you answer a Decision or acknowledge a documented difference. Nothing is dropped silently. | 27 |
-| 🧭 | **Guided / manual** | The console does not write it; it produces a checklist, a generated document or step-by-step guidance and a person finishes it in LD or in code. | 12 |
+| ✅ | **Migrates** | Translated exactly and written automatically; at most an informational note. | 11 |
+| 🟡 | **Migrates with decisions** | Written automatically once you answer a Decision or acknowledge a documented difference. Nothing is dropped silently. | 33 |
+| 🧭 | **Guided / manual** | The console does not write it; it produces a checklist, a generated document or step-by-step guidance and a person finishes it in LD or in code. | 13 |
 | 🚧 | **Planned** | LD has an equivalent and the mapping is specified, but the console does not write it yet. The item is inventoried and its blockers are listed. | 12 |
-| ❌ | **No LD equivalent** | LaunchDarkly has no equivalent, or it is a different product that is set up on its own. | 13 |
+| ❌ | **No LD equivalent** | LaunchDarkly has no equivalent, or it is a different product that is set up on its own. | 14 |
 
 ### Projects, environments and identity
 
@@ -276,5 +280,22 @@ Behaviour the SDK provides at evaluation time, which a configuration migration c
 | 🧭 | checkGate / getConfig / getExperiment / getLayer calls | boolVariation / jsonVariation calls | LD keys equal StatSig names, so ld-find-code-refs finds every call site; the console lists the code changes per item. | [LD](https://launchdarkly.com/docs/home/observability/code-references) |
 | 🧭 | Attributes the SDK derives or looks up loosely (user agent, IP, case-insensitive custom fields, numeric strings) | Attributes the app must send, exactly named and typed | Collected into a context contract for developers: attribute names, types, context kinds and multi-context requirements. | Edge cases: 3.5, 5.8, 6.6. |
 | ❌ | Persistent assignment, bootstrapping, local evaluation, data adapters | LD equivalents configured per SDK (Relay Proxy, bootstrapping, persistent stores) | SDK runtime configuration is re-done in each app with the LD SDK. | [StatSig](https://docs.statsig.com/server/concepts/persistent_assignment) · [LD](https://launchdarkly.com/docs/sdk/features/bootstrapping) |
+
+### Another LaunchDarkly project as the source
+
+A LaunchDarkly project (same or another account or instance) attached as a source (PLAN §20). The vocabulary is the target’s, so most things copy verbatim; the rows below are the differences between two projects, and what the console asks.
+
+| | Source LD project | LaunchDarkly | How the console handles it | Notes |
+|---|---|---|---|---|
+| ✅ | Flag (boolean or multivariate): name, description, variations, tags, temporary, client-side availability, defaults | Flag with the same key and settings | The shell is copied verbatim; provenance (migrated-from-launchdarkly, migration-src-<alias>, migration.* properties) is added. | Tags and custom properties that are themselves provenance from an earlier migration into the source project are never copied onward. Archived flags are skipped; deprecated ones are noted. Flags whose purpose is migration or holdout are skipped with a reason. Edge cases: 18.1, 18.8. [LD](https://launchdarkly.com/docs/home/flags) |
+| ✅ | Per-environment targeting: on/off, rules and clauses, off variation, default rule, individual targets | The same targeting in the mapped environment | Clauses (operator, context kind, attribute, values, negate), individual targets per context kind and the default rule are copied one to one. | Source environments map to target environments by key or name (editable under Mapping); unmapped environments are not migrated. Disabled rules are left out because they do not evaluate. Event tracking on rules and the default rule is noted, not copied. Edge cases: 18.2. [LD](https://launchdarkly.com/docs/home/flags/targeting) |
+| 🟡 | Percentage rollouts (rules, default rule, weighted segment rules), bucketBy | Same weights, same bucketBy | Weights and bucketBy are copied; the new flag has its own salt, so the same percentages land on different contexts (partial_rollout_rebucket). | LD buckets by a per-flag salt that the API cannot copy; experiment rollouts with a fixed seed cannot carry the seed either. Decisions: `partial_rollout_rebucket`. Edge cases: 18.3. [LD](https://launchdarkly.com/docs/home/flags/rollouts) |
+| 🟡 | Context kinds used by clauses, rollouts, targets and segments | Context kinds of the target project | Kinds the target already has are used as they are; a missing one raises unit_type_kind (create it with the same key, or use an existing kind). | Decisions: `unit_type_kind`. Edge cases: 18.4. [LD](https://launchdarkly.com/docs/home/observability/contexts) |
+| 🟡 | Prerequisites | Prerequisites (Enterprise) | The prerequisite flag is migrated first in the same environment; prerequisite_unsupported when the target plan or token lacks prerequisites; missing_reference when the flag is not in the source. | Decisions: `prerequisite_unsupported`, `missing_reference`. Edge cases: 18.5. [LD](https://launchdarkly.com/docs/home/flags/prerequisites) |
+| 🟡 | Segments: rules, included and excluded keys per context kind, weighted rules | Segments per environment | Copied per environment; segmentMatch clauses pull the segment in as a dependency; a weighted rule is acknowledged as re-bucketing. | A segment that exists in some source environments only is migrated where it exists; a rule that matches it elsewhere raises missing_reference. Lists above 15,000 keys are skipped with a reason. Decisions: `missing_reference`, `partial_rollout_rebucket`. Edge cases: 18.6. [LD](https://launchdarkly.com/docs/home/flags/segments) |
+| 🟡 | Big (unbounded) segments | Big segment (Enterprise), filled by CSV import | Membership is not readable through the API (LD answers only per key), so big_segment offers to create the segment empty for a manual import, or to skip it. | Rules that match a skipped big segment block their flag. Without big segments in the target plan the segment is skipped with a reason. Decisions: `big_segment`. Edge cases: 18.7. [LD](https://launchdarkly.com/docs/home/flags/big-segments) |
+| 🟡 | Custom properties of the flag | Custom properties | copy_custom_properties asks whether to copy the flag’s own properties; migration provenance is always written and never copied from the source. | Decisions: `copy_custom_properties`. Edge cases: 18.8. [LD](https://launchdarkly.com/docs/home/flags/custom-properties) |
+| 🧭 | Maintainer, maintainer team | Maintainer, maintainer team | Not carried: member and team identities belong to the source account. The source maintainer is noted so it can be re-assigned in the target. | Edge cases: 18.9. [LD](https://launchdarkly.com/docs/home/flags/settings) |
+| ❌ | Experiments, metrics, holdouts, guarded rollouts, release pipelines, approval settings, flag links | The same LaunchDarkly features, set up again in the target | Not read from the source (PLAN §11, §20.4): experiments end in the source and start new in the target; the flag notes which experiments ran on it. | Edge cases: 18.10. [LD](https://launchdarkly.com/docs/home/experimentation) |
 
 <!-- coverage:end -->

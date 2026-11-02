@@ -21,7 +21,7 @@ import {
   Select,
   Spinner,
 } from "../components/ui.tsx";
-import { KIND_LABEL } from "../lib/kinds.ts";
+import { SOURCE_BADGE, KIND_LABEL } from "../lib/kinds.ts";
 import { store } from "../lib/store.ts";
 import { timeAgo } from "../lib/time.ts";
 
@@ -257,11 +257,7 @@ export function SnapshotsView({
                         </span>
                         {latest && <Badge tone="green">latest</Badge>}
                         {viewingThis && <Badge tone="blue">viewing</Badge>}
-                        <Badge tone="slate">
-                          {r.sourceKind === "console_api"
-                            ? "Console API"
-                            : "Spec"}
-                        </Badge>
+                        <Badge tone="slate">{SOURCE_BADGE[r.sourceKind].label}</Badge>
                       </div>
                       <div className="text-xs text-fg-subtle">
                         {timeAgo(r.takenAt)}

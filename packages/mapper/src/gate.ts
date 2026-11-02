@@ -454,10 +454,10 @@ export function chooseClientSideAvailability(ctx: ConditionContext, targetApps: 
 }
 
 /** Provenance custom properties (PLAN §3.3) minus the per-environment sync entries. */
-export function provenanceProperties(entity: { id: string; version?: number; owner?: { email?: string }; permalink?: string }, alias: string, statsigType: string): Record<string, CustomProperty> {
-  const label = SOURCE_KIND_LABEL[SOURCE_KIND];
+export function provenanceProperties(entity: { id: string; version?: number; owner?: { email?: string }; permalink?: string }, alias: string, statsigType: string, kind: MigrationSourceKind = SOURCE_KIND): Record<string, CustomProperty> {
+  const label = SOURCE_KIND_LABEL[kind];
   const props: Record<string, CustomProperty> = {
-    [PROP.kind]: { name: 'Migrated from', value: [SOURCE_KIND] },
+    [PROP.kind]: { name: 'Migrated from', value: [kind] },
     [PROP.id]: { name: `${label} ID`, value: [entity.id] },
     [PROP.type]: { name: `${label} type`, value: [statsigType] },
     [PROP.source]: { name: `${label} source`, value: [alias] },

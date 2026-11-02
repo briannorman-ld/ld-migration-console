@@ -91,7 +91,7 @@ export function MonitoringView({
         await setMonitorNotify(workspaceId, on);
       }}
       onToggleAuthoritative={(row, on) => void setLdAuthoritative(workspaceId, row.flagKey, row.ldEnv, on)}
-      onSync={(row) => onMigrate(row.kind === 'config' ? { gates: [], configs: [row.uid], autotunes: [] } : row.kind === 'autotune' ? { gates: [], autotunes: [row.uid] } : { gates: [row.uid], autotunes: [] }, [row.ldEnv])}
+      onSync={(row) => onMigrate(row.kind === 'config' ? { gates: [], configs: [row.uid], autotunes: [] } : row.kind === 'autotune' ? { gates: [], autotunes: [row.uid] } : row.kind === 'flag' ? { gates: [], autotunes: [], flags: [row.uid] } : { gates: [row.uid], autotunes: [] }, [row.ldEnv])}
       exportDecisionLog={{ markdown: () => decisionLogMarkdown(workspace.name, decisionLog(), m.resolutions, m.profile), csv: () => decisionLogCsv(decisionLog()) }}
       demo={demo}
     />

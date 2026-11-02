@@ -95,9 +95,14 @@ export async function demoKey(): Promise<string> {
   return (await import('@sslm/demo-fixtures')).DEMO_STATSIG_API_KEY;
 }
 
-/** Create (or reuse) the "Acme Retail (Demo)" workspace with both demo sources preconnected. */
+/** The dummy read token of the demo's LD *source* project (checked by the mock). */
+export async function demoLdSourceToken(): Promise<string> {
+  return (await import('@sslm/demo-fixtures')).DEMO_LD_SOURCE_TOKEN;
+}
+
+/** Create (or reuse) the "Acme Retail (Demo)" workspace with the two StatSig demo sources and the "Acme Legacy" LD source preconnected. */
 export async function ensureDemoWorkspace(): Promise<string> {
-  const { demoStatsigBaseUrl } = await import('@sslm/demo-fixtures');
+  const { demoStatsigBaseUrl, demoLdBaseUrl, ACME_LEGACY_PROJECT_KEY } = await import('@sslm/demo-fixtures');
   const existing = await store.getWorkspace(DEMO_WORKSPACE_ID);
   if (!existing) await store.createWorkspace({ id: DEMO_WORKSPACE_ID, name: 'Acme Retail (Demo)', isDemo: true, ld: DEMO_LD_PROJECT });
   else if (!existing.ld?.projectKey) await store.updateWorkspace(DEMO_WORKSPACE_ID, { ld: DEMO_LD_PROJECT });
@@ -111,6 +116,16 @@ export async function ensureDemoWorkspace(): Promise<string> {
     isDemo: true,
     createdAt: new Date(Date.UTC(2026, 0, 1, 0, 0, i)).toISOString(),
   }));
+  // PLAN §20: an acquired business unit's LD project, read as a source through the simulated LD API.
+  sources.push({
+    id: `${DEMO_WORKSPACE_ID}-legacy`,
+    alias: 'legacy',
+    label: 'acme-legacy (LD)',
+    kind: 'launchdarkly',
+    ld: { instance: 'us', projectKey: ACME_LEGACY_PROJECT_KEY, baseUrl: demoLdBaseUrl(appRoot()) },
+    isDemo: true,
+    createdAt: new Date(Date.UTC(2026, 0, 1, 0, 0, 2)).toISOString(),
+  });
   for (const s of sources) if (!have.has(s.id)) await store.addSource(DEMO_WORKSPACE_ID, s);
   return DEMO_WORKSPACE_ID;
 }

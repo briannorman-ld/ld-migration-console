@@ -13,9 +13,17 @@
  * ones and the readers prefer the new ones.
  */
 
-/** Kinds of source a migration can read from. Only StatSig has an adapter today. */
-export type MigrationSourceKind = 'statsig';
-export const SOURCE_KIND_LABEL: Record<MigrationSourceKind, string> = { statsig: 'StatSig' };
+import type { SourceKind } from './model.ts';
+
+/** Kinds of source a migration can read from: StatSig (Console API or config spec) and another LaunchDarkly project (PLAN §20). */
+export type MigrationSourceKind = 'statsig' | 'launchdarkly';
+export const SOURCE_KIND_LABEL: Record<MigrationSourceKind, string> = { statsig: 'StatSig', launchdarkly: 'LaunchDarkly' };
+export const MIGRATION_SOURCE_KINDS: readonly MigrationSourceKind[] = ['statsig', 'launchdarkly'];
+
+/** The provenance kind written for resources read from a source of this kind (both StatSig source kinds are `statsig`). */
+export function migrationKindOf(sourceKind: SourceKind): MigrationSourceKind {
+  return sourceKind === 'launchdarkly' ? 'launchdarkly' : 'statsig';
+}
 
 /** LD tags: letters, digits, `.`, `_`, `-`; at most 64 characters. */
 export function sanitizeTag(tag: string): string {

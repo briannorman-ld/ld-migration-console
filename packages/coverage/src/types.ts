@@ -26,13 +26,15 @@ export type CoverageArea =
   | 'metrics'
   | 'param_stores'
   | 'operations'
-  | 'sdk';
+  | 'sdk'
+  /** Another LaunchDarkly project as the source (PLAN §20). */
+  | 'ld_source';
 
 export interface CoverageEntry {
   /** Stable id, used as an anchor in the doc and the page: `<area>.<slug>`. */
   id: string;
   area: CoverageArea;
-  /** The StatSig construct, in StatSig's words. */
+  /** The source construct, in the source's words (StatSig for every area but `ld_source`; the field name predates the second source). */
   statsig: string;
   /** The LaunchDarkly target, in LD's words; `—` when there is none. */
   ld: string;
@@ -56,4 +58,6 @@ export interface CoverageAreaInfo {
   title: string;
   /** One or two sentences for the section intro. */
   summary: string;
+  /** Column header for the source side; defaults to StatSig. */
+  sourceLabel?: string;
 }

@@ -3,13 +3,14 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "StatSig source adapters (Console API, config spec v1/v2) -> canonical model.",
+  "description": "Source adapters -> canonical model: StatSig (Console API, config spec v1/v2) and LaunchDarkly projects (neutral model).",
   "exports": {
     ".": "./src/index.ts"
   },
   "dependencies": {
     "@sslm/canonical": "workspace:*",
     "@sslm/statsig-client": "workspace:*",
+    "@sslm/ld-client": "workspace:*",
     "zod": "^4.6.5",
     "@sslm/http": "workspace:*"
   },

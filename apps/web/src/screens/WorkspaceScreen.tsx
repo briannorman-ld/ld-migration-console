@@ -26,7 +26,7 @@ import {
   Select,
   Spinner,
 } from "../components/ui.tsx";
-import { describeScope, KIND_LABEL } from "../lib/kinds.ts";
+import { describeScope, KIND_LABEL, refreshable, secretKindOf, SOURCE_BADGE } from "../lib/kinds.ts";
 import { timeAgo } from "../lib/time.ts";
 import { useLdSession } from "../lib/ld.ts";
 import { secrets } from "../lib/secrets.ts";
@@ -38,7 +38,7 @@ import {
 } from "../lib/migration.ts";
 import { monitoredItems, useMonitoring, useMonitorNotifications, useMonitorSchedule } from "../lib/monitor.ts";
 import { store } from "../lib/store.ts";
-import { syncConsoleSource } from "../lib/sync.ts";
+import { syncSource } from "../lib/sync.ts";
 import { useMigration } from "../lib/useMigration.ts";
 import { AddSource } from "./AddSource.tsx";
 import { AutotunesSideBySide } from "./AutotunesSideBySide.tsx";
@@ -48,6 +48,7 @@ import { DecisionsView } from "./DecisionsView.tsx";
 import { EntityList } from "./EntityList.tsx";
 import { FlagSideBySide } from "./GatesSideBySide.tsx";
 import { LdPanel } from "./LdPanel.tsx";
+import { LdSourceSideBySide, type LdSourceResource } from "./LdSourceSideBySide.tsx";
 import { MappingView } from "./MappingView.tsx";
 import { MigrateModal } from "./MigrateModal.tsx";
 import { MonitoringView } from "./MonitoringView.tsx";
@@ -57,6 +58,8 @@ import { WarningsView } from "./WarningsView.tsx";
 
 export type View =
   | { kind: "resource"; resource: EntityKind }
+  /** Flags or segments of an LD project attached as a source (PLAN §20). */
+  | { kind: "ld-source"; resource: LdSourceResource }
   | { kind: "connections" }
   | { kind: "ld" }
   | { kind: "warnings" }
@@ -154,7 +157,7 @@ export function WorkspaceScreen({
       patch((cur) => ({ ...cur, log: appendLog(cur.log, e) }));
     setSync((x) => ({ ...x, [s.id]: { running: true, log: [] } }));
     try {
-      await syncConsoleSource(workspaceId, s, {
+      await syncSource(workspaceId, s, {
         onProgress: (p) => {
           patch((cur) => ({
             ...cur,
@@ -174,16 +177,17 @@ export function WorkspaceScreen({
   };
 
   // Removing a source drops its snapshots and fetched ID lists from this browser and forgets its
-  // key. Nothing in StatSig or LaunchDarkly changes; the source can be added again later.
+  // key. Nothing in the source or in LaunchDarkly changes; the source can be added again later.
   const removeSource = async (s: SourceRecord) => {
     const synced = snapshots?.[s.id];
     if (
       !window.confirm(
-        `Remove "${s.label}" from this workspace?${synced ? " Its synced snapshot is deleted from this browser." : ""} StatSig itself is not touched.`,
+        `Remove "${s.label}" from this workspace?${synced ? " Its synced snapshot is deleted from this browser." : ""} The source project itself is not touched.`,
       )
     )
       return;
-    secrets.forget("statsig", s.id);
+    const secretKind = secretKindOf(s);
+    if (secretKind) secrets.forget(secretKind, s.id);
     await store.removeSource(s.id);
     setSync((x) => {
       const { [s.id]: _, ...rest } = x;
@@ -202,12 +206,12 @@ export function WorkspaceScreen({
     if (sources.length === 0) setView({ kind: "connections" });
   }, [sources]);
 
-  // First open of a demo workspace: sync every Console API source that has no snapshot yet.
+  // First open of a demo workspace: sync every live demo source that has no snapshot yet.
   useEffect(() => {
     if (!sources || !snapshots) return;
     for (const s of sources) {
       if (
-        s.kind === "console_api" &&
+        refreshable(s) &&
         s.isDemo &&
         !snapshots[s.id] &&
         !autoSynced.current.has(s.id)
@@ -251,6 +255,12 @@ export function WorkspaceScreen({
     return out;
   }, [visibleSnaps]);
   const warningCount = visibleSnaps.reduce((n, s) => n + s.warnings.length, 0);
+  // Resources of LD-source projects (PLAN §20) live in the snapshot's neutral block, not in the StatSig kinds.
+  const neutralCounts = useMemo(
+    () => visibleSnaps.reduce((acc, s) => ({ flags: acc.flags + (s.neutral?.flags.length ?? 0), segments: acc.segments + (s.neutral?.segments.length ?? 0) }), { flags: 0, segments: 0 }),
+    [visibleSnaps],
+  );
+  const hasLdSource = visibleSnaps.some((s) => s.neutral);
   const m = useMigration(workspaceId, visibleSnaps);
   const openDecisions = useMemo(
     () =>
@@ -404,7 +414,7 @@ export function WorkspaceScreen({
           className="w-72 shrink-0 overflow-y-auto border-r border-line bg-surface p-3"
           aria-label="Workspace"
         >
-          <SectionTitle>StatSig sources</SectionTitle>
+          <SectionTitle>Sources</SectionTitle>
           <ul className="space-y-1.5">
             {(sources ?? []).map((s) => {
               const sn = snapshots?.[s.id];
@@ -422,16 +432,16 @@ export function WorkspaceScreen({
                       onChange={() => setHidden((h) => toggle(h, s.id))}
                     />
                     <span className="font-medium">{s.label}</span>
-                    <Badge tone={s.kind === "console_api" ? "green" : "amber"}>
-                      {s.kind === "console_api" ? "Console API" : "Spec"}
+                    <Badge tone={SOURCE_BADGE[s.kind].tone}>
+                      {SOURCE_BADGE[s.kind].label}
                     </Badge>
                     <span className="ml-auto flex items-center gap-1">
-                      {s.kind === "console_api" && (
+                      {refreshable(s) && (
                         <button
                           type="button"
                           className="rounded px-1 text-fg-muted hover:bg-surface-hover hover:text-fg disabled:opacity-40"
-                          title="Refresh from StatSig"
-                          aria-label={`Refresh ${s.label} from StatSig`}
+                          title={`Refresh from ${SOURCE_BADGE[s.kind].label}`}
+                          aria-label={`Refresh ${s.label} from ${SOURCE_BADGE[s.kind].label}`}
                           disabled={st?.running}
                           onClick={() => runSync(s)}
                         >
@@ -461,7 +471,7 @@ export function WorkspaceScreen({
                         {sn.projectName && (
                           <span
                             className="block truncate"
-                            title={`StatSig project “${sn.projectName}” (one Console key reads one project)`}
+                            title={s.kind === "launchdarkly" ? `LaunchDarkly project “${sn.projectName}” (${s.ld?.projectKey ?? ""} on ${s.ld?.instance ?? "us"})` : `StatSig project “${sn.projectName}” (one Console key reads one project)`}
                           >
                             project {sn.projectName}
                           </span>
@@ -530,6 +540,27 @@ export function WorkspaceScreen({
               </li>
             ))}
           </ul>
+
+          {hasLdSource && (
+            <>
+              <SectionTitle>LaunchDarkly source</SectionTitle>
+              <ul>
+                {(["flag", "segment"] as const).map((k) => (
+                  <li key={k}>
+                    <NavItem
+                      active={view.kind === "ld-source" && view.resource === k}
+                      onClick={() => setView({ kind: "ld-source", resource: k })}
+                    >
+                      <span>{k === "flag" ? "Flags" : "Segments"}</span>
+                      <span className="text-fg-muted tabular-nums">
+                        {k === "flag" ? neutralCounts.flags : neutralCounts.segments}
+                      </span>
+                    </NavItem>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
 
           <SectionTitle>Migration</SectionTitle>
           <NavItem
@@ -611,7 +642,8 @@ export function WorkspaceScreen({
           </NavItem>
           <p className="mt-6 px-2 text-xs text-fg-subtle">
             Gates, dynamic configs, segments and autotunes (as drafted bandits)
-            migrate now.{" "}
+            migrate from StatSig; flags and segments migrate from another
+            LaunchDarkly project.{" "}
             <button
               type="button"
               className="text-link hover:underline"
@@ -638,6 +670,7 @@ export function WorkspaceScreen({
           )}
           {visible.length === 0 &&
             (view.kind === "resource" ||
+              view.kind === "ld-source" ||
               view.kind === "decisions" ||
               view.kind === "mapping" ||
               view.kind === "monitoring") && (
@@ -648,7 +681,7 @@ export function WorkspaceScreen({
                       className="font-medium underline"
                       onClick={() => setView({ kind: "connections" })}
                     >
-                      Connect a StatSig source
+                      Connect a source
                     </button>{" "}
                     to get started.
                   </>
@@ -704,6 +737,20 @@ export function WorkspaceScreen({
                 onOpenCoverage={(focus) => setView({ kind: "coverage", focus })}
               />
             ))}
+          {view.kind === "ld-source" && visible.length > 0 && m && (
+            <LdSourceSideBySide
+              resource={view.resource}
+              sources={visible}
+              snapshots={snapshots ?? {}}
+              env={env}
+              m={m}
+              readOnly={viewingPast}
+              onMigrate={(sel, ldEnvs) =>
+                setMigrate({ selection: { gates: [], autotunes: [], ...sel }, ldEnvs })
+              }
+              nav={explorerNav}
+            />
+          )}
           {viewingPast &&
             (view.kind === "decisions" ||
               view.kind === "mapping" ||

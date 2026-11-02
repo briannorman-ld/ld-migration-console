@@ -37,6 +37,8 @@ export type LdOperator =
 /** Weights are thousandths of a percent (0–100000), as in LD `WeightedVariation`. */
 export interface LdRollout {
   contextKind: string;
+  /** Attribute to bucket by instead of the context key (LD-source rollouts, PLAN §20.3). */
+  bucketBy?: string;
   variations: { variation: number; weight: number }[];
 }
 
@@ -120,6 +122,7 @@ export interface DesiredSegmentRule {
   /** Thousandths of a percent; omitted = everyone matching the clauses. */
   weight?: number;
   rolloutContextKind?: string;
+  bucketBy?: string;
 }
 
 /** An LD segment in one environment. Segments are per environment in LD. */
@@ -135,12 +138,20 @@ export interface DesiredSegment {
   included: string[];
   /** Included keys for other context kinds (standard segments only). */
   includedContexts: { contextKind: string; values: string[] }[];
+  /** Excluded `user` keys and keys of other kinds (LD-source segments, PLAN §20.3). Absent = none. */
+  excluded?: string[];
+  excludedContexts?: { contextKind: string; values: string[] }[];
   /**
    * Set for a big segment (LD `unbounded: true`, Enterprise): a list above LD's 15,000-ID limit for
    * standard segments. Membership is written with a CSV import in `replace` mode, never with
    * `included`, and `rules` stay empty (big segments have no rules).
    */
-  unbounded?: { contextKind: string; ids: string[] };
+  unbounded?: {
+    contextKind: string;
+    ids: string[];
+    /** The membership is not known to the console (LD-source big segment, PLAN §20.3): create the segment, import nothing. */
+    manual?: true;
+  };
 }
 
 /** An LD custom conversion metric (POST /metrics/{projectKey}; PLAN §11 "the success event becomes a metric"). */
@@ -218,7 +229,11 @@ export type DecisionType =
   | 'autotune_running'
   | 'missing_metric'
   | 'duplicate_variant_value'
-  | 'variation_change_affects_migrated_env';
+  | 'variation_change_affects_migrated_env'
+  /** LD source (PLAN §20.3): copy the source flag's own custom properties, or leave them. */
+  | 'copy_custom_properties'
+  /** LD source: the target plan or token has no prerequisites. */
+  | 'prerequisite_unsupported';
 
 /**
  * - blocking: no safe default; the item can't migrate until resolved.
@@ -238,7 +253,8 @@ export interface DecisionOption {
 
 export interface DecisionSubject {
   sourceId: string;
-  kind: EntityKind | 'unit_type';
+  /** `flag`: a neutral (LD-source) flag, PLAN §20. */
+  kind: EntityKind | 'unit_type' | 'flag';
   /** Entity uid, or `<sourceId>/unit_type/<name>` for project-level decisions. */
   uid: string;
   id: string;
@@ -329,6 +345,7 @@ export interface MapperCapabilities {
   existingContextKinds: string[];
 }
 
+/** A (source environment, target LD environment) pair. `statsig` is the source environment key for every source kind (PLAN §20.1 "Trade-offs"). */
 export interface EnvTarget {
   statsig: string;
   ld: string;

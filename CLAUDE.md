@@ -8,7 +8,7 @@
 - **Mirror StatSig, but sync only when the user triggers it.** Monitoring is read-only.
 - **Migration is scoped per environment.** State is per (resource, LD environment).
 - **Every imperfect mapping becomes a Decision** (PLAN §8). Never silently drop or approximate a condition.
-- Two source types feed one canonical model: the Console API (read-only key) and an uploaded config spec (DCS v1/v2).
+- Two StatSig source types feed one canonical model: the Console API (read-only key) and an uploaded config spec (DCS v1/v2). A third source kind, another LaunchDarkly project (PLAN §20), fills the snapshot's provider-neutral block (`packages/canonical/src/neutral.ts`) read by `packages/adapters/src/launchdarkly` and mapped by `packages/mapper/src/neutral.ts`; new sources go onto the neutral model, not onto StatSig's vocabulary.
 - Experiments end in StatSig and launch new in LD; nothing is moved mid-flight.
 - A workspace is 1 LD project plus N StatSig sources (consolidation). Keep N-source support in the data model.
 - Tokens stay in memory by default and are never logged, persisted unencrypted, or put in workspace files. CSP `connect-src` is limited to the StatSig and LD API hosts.
@@ -25,4 +25,4 @@
   - Custom unit IDs map to their own context kind, not `user`.
 - The demo (PLAN §19) uses MSW in front of the real adapters. Its dataset in `packages/demo-fixtures` is also the main test fixture.
 - `packages/coverage/src/matrix.ts` is the **coverage matrix**: every StatSig construct, its LD target and how completely the console migrates it. It drives the in-app "What migrates" page and the generated block in `docs/LIMITATIONS.md` (`pnpm coverage:generate`; a test fails when the doc is stale). When a resource kind starts migrating, or a limitation is found, update the matrix row first. `docs/LIMITATIONS.md` also holds the hand-written narrative for the blog post.
-- `docs/KNOWN-EDGE-CASES.md` is the running list of places where StatSig and LD differ. When you find a new one: add a row there, a demo example in `packages/demo-fixtures/src/acme/`, and a test in `packages/mapper/test/mapper.test.ts` (the golden files then cover it). Rows marked as gaps are the mapper backlog.
+- `docs/KNOWN-EDGE-CASES.md` is the running list of places where StatSig and LD differ. When you find a new one: add a row there, a demo example in `packages/demo-fixtures/src/acme/`, and a test in `packages/mapper/test/mapper.test.ts` (the golden files then cover it). Rows marked as gaps are the mapper backlog. LD-source differences go in its §18, with the demo example in `packages/demo-fixtures/src/ld/acme-legacy.ts` and the test in `packages/mapper/test/neutral.test.ts`.

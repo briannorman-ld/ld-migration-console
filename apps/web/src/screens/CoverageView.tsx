@@ -167,7 +167,7 @@ export function CoverageView({
                 <thead className="text-left text-xs text-fg-muted">
                   <tr className="border-b border-line-soft">
                     <th className="w-44 px-3 py-2 font-medium">Status</th>
-                    <th className="px-3 py-2 font-medium">StatSig</th>
+                    <th className="px-3 py-2 font-medium">{a.sourceLabel ?? 'StatSig'}</th>
                     <th className="px-3 py-2 font-medium">LaunchDarkly</th>
                     <th className="w-8 px-2 py-2" />
                   </tr>

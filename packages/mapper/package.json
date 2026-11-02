@@ -4,11 +4,16 @@
   "private": true,
   "type": "module",
   "description": "Pure, deterministic canonical -> LD mapper (M3).",
-  "exports": { ".": "./src/index.ts" },
-  "dependencies": {"@sslm/canonical": "workspace:*"},
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@sslm/canonical": "workspace:*"
+  },
   "devDependencies": {
     "@sslm/adapters": "workspace:*",
     "@sslm/demo-fixtures": "workspace:*",
-    "@sslm/statsig-client": "workspace:*"
+    "@sslm/statsig-client": "workspace:*",
+    "@sslm/ld-client": "workspace:*"
   }
 }

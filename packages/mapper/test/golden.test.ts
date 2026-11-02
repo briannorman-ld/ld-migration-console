@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { CanonicalSnapshot } from '@sslm/canonical';
-import { mapAutotune, mapConfig, mapGate, mapSegment } from '../src/index.ts';
-import { acmeSnapshot, CAPS, NOW, profileFor, server } from './fixtures.ts';
+import { mapAutotune, mapConfig, mapGate, mapNeutralFlag, mapNeutralSegment, mapSegment } from '../src/index.ts';
+import { acmeSnapshot, CAPS, legacySnapshot, NOW, profileFor, server } from './fixtures.ts';
 
 beforeAll(() => server.listen({ onUnhandledFrame: 'error' }));
 afterAll(() => server.close());
@@ -84,5 +84,43 @@ describe('mapper golden files', () => {
   ] as const)('acme-%s %s → LD %s', async (alias, statsig, ld) => {
     const snap = await acmeSnapshot(alias);
     await expect(JSON.stringify(golden(snap, statsig, ld), null, 2) + '\n').toMatchFileSnapshot(`golden/acme-${alias}.${statsig}.json`);
+  });
+
+  /**
+   * The LD *source* project (PLAN §20): neutral flags and segments → desired LD state. Near-identity,
+   * so a diff here usually means a copied field went missing or a new difference became a decision.
+   */
+  it.each([
+    ['test', 'test'],
+    ['production', 'production'],
+  ] as const)('acme-legacy (LD source) %s → LD %s', async (source, ld) => {
+    const snap = await legacySnapshot();
+    const profile = profileFor(snap, { test: 'test', production: 'production' });
+    const args = { canonical: { snapshot: snap }, profile, resolutions: new Map(), capabilities: { ...CAPS, existingContextKinds: ['user', 'organization'] }, env: { statsig: source, ld }, now: NOW };
+    const flags = snap.neutral!.flags.map((f) => {
+      const r = mapNeutralFlag({ ...args, entity: f });
+      return {
+        flag: f.key,
+        flagKind: r.flagKind,
+        ...(r.skipped ? { skipped: r.skipped } : {}),
+        fidelity: r.fidelity.overall,
+        notes: r.fidelity.notes.map((n) => `${n.fidelity}: ${n.message}${n.location ? ` [${n.location}]` : ''}`),
+        decisions: r.unresolved.map((d) => `${d.severity} ${d.type} (${d.subject.location ?? d.subject.id}) → ${d.recommended ?? 'no default'}`),
+        dependencies: r.dependencies.map((d) => `${d.kind}:${d.key}`),
+        shell: r.skipped ? undefined : { tags: r.shell.tags, variations: r.shell.variations, customProperties: Object.keys(r.shell.customProperties).sort(), clientSideAvailability: r.shell.clientSideAvailability, temporary: r.shell.temporary },
+        env: r.skipped ? undefined : r.env,
+      };
+    });
+    const segments = snap.neutral!.segments.map((g) => {
+      const r = mapNeutralSegment({ ...args, entity: g });
+      return {
+        segment: g.key,
+        ...(r.skipped ? { skipped: r.skipped } : {}),
+        fidelity: r.fidelity.overall,
+        decisions: r.unresolved.map((d) => `${d.severity} ${d.type} (${d.subject.location ?? d.subject.id})`),
+        desired: r.desired,
+      };
+    });
+    await expect(JSON.stringify({ flags, segments }, null, 2) + '\n').toMatchFileSnapshot(`golden/acme-legacy.${source}.json`);
   });
 });

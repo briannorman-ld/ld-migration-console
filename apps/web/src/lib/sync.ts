@@ -6,13 +6,16 @@ import {
 import {
   crawlConsoleProject,
   normalizeConsoleSnapshot,
+  normalizeLdSnapshot,
+  readLdProject,
   type CrawlProgress,
 } from "@sslm/adapters";
+import { LD_INSTANCES, LdClient } from "@sslm/ld-client";
 import type { TransportEvent } from "@sslm/http";
 import { WorkspaceStore } from "@sslm/store";
 import { StatsigConsoleClient, type SchemaIssue } from "@sslm/statsig-client";
 import { pipeline } from "../pipeline/client.ts";
-import { demoKey, startDemoMock } from "./demo.ts";
+import { demoKey, demoLdSourceToken, startDemoMock } from "./demo.ts";
 import { secrets } from "./secrets.ts";
 import { store } from "./store.ts";
 
@@ -34,6 +37,34 @@ export interface SyncHandlers {
   onRetry?: (message: string) => void;
   /** Every request, response, retry and throttle event, for the live activity log. No headers or bodies. */
   onTransport?: (e: TransportEvent) => void;
+}
+
+/** Re-read any live source (Console API or LaunchDarkly project) into a new immutable snapshot. */
+export async function syncSource(workspaceId: string, source: SourceDescriptor, h: SyncHandlers = {}): Promise<CanonicalSnapshot> {
+  if (source.kind === "launchdarkly") return syncLdSource(workspaceId, source, h);
+  return syncConsoleSource(workspaceId, source, h);
+}
+
+/**
+ * Read an LD project attached as a source (PLAN §20.2) with its own read token, through the
+ * real LD client and adapter, on the main thread (LD reads are few and fast; the demo's mock only
+ * intercepts this page's requests). Read-only: the adapter has no write path.
+ */
+export async function syncLdSource(workspaceId: string, source: SourceDescriptor, h: SyncHandlers = {}): Promise<CanonicalSnapshot> {
+  if (source.kind !== "launchdarkly" || !source.ld) throw new Error("Not a LaunchDarkly source.");
+  let token: string | undefined;
+  if (source.isDemo) {
+    await startDemoMock();
+    token = await demoLdSourceToken();
+  } else token = secrets.get("ld_source", source.id);
+  if (!token) throw new Error("Enter the LaunchDarkly read token for this source (tokens are kept in memory only).");
+  const instance = source.ld.baseUrl ? { ...LD_INSTANCES[source.ld.instance], origin: source.ld.baseUrl } : source.ld.instance;
+  const client = new LdClient({ instance, token, transport: { onEvent: (e) => h.onTransport?.(e) } });
+  const raw = await readLdProject(client, source.ld.projectKey, { onProgress: h.onProgress });
+  const snapshot = normalizeLdSnapshot(raw, { source: { sourceId: source.id, sourceKind: "launchdarkly", alias: source.alias } });
+  await store.saveSnapshot(workspaceId, snapshot);
+  await pruneAfterSync(workspaceId, source.id);
+  return snapshot;
 }
 
 /** Re-crawl a Console API source and save a new immutable snapshot. */

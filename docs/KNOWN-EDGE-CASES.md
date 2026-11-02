@@ -1,4 +1,4 @@
-# Known edge cases: StatSig → LaunchDarkly
+# Known edge cases: StatSig → LaunchDarkly (and LaunchDarkly → LaunchDarkly, §18)
 
 A running list of every place where a StatSig resource does not migrate cleanly to LaunchDarkly,
 across all resource types. It is the mapper's conscience: anything listed as a **gap** here is
@@ -298,3 +298,24 @@ availability and provenance (`migration.type = config`) work exactly as for gate
 5. **Dates** (5.3, 6.8): `on` in UTC vs local day; attribute values in epoch seconds; add to the context contract.
 6. **Context contract** (3.5, 5.8, 5.9, 6.6): generate the document PLAN §10.5 promises, so the attribute-name, type and multi-context requirements collected above reach developers.
 7. **`maintainer_unknown`** (1.5) and `analysis_list` / `user_store_id_list` segments (9.10), override-list size (8.5).
+
+---
+
+## 18. Another LaunchDarkly project as the source (PLAN §20; `packages/mapper/src/neutral.ts`)
+
+The vocabulary is the target's, so the differences are between two *projects*, not two platforms. Demo examples are in `packages/demo-fixtures/src/ld/acme-legacy.ts`; tests in `packages/mapper/test/neutral.test.ts` and the golden files `acme-legacy.*.json`.
+
+| # | Edge case | Source LD project | Target LD project | Handling | Demo example |
+|---|---|---|---|---|---|
+| 18.1 | Flag shell | Key, name, description, kind, variations (values, names), tags, temporary, client-side availability, defaults. | Same fields. | ⚙️ copied verbatim; provenance tags and `migration.*` properties added. Archived flags skipped; `deprecated` noted; `purpose` migration/holdout skipped with a reason. A source that did not report `clientSideAvailability` gets a server-side-only flag, 📝 noted. | `legacy-kill-switch`, `legacy-archived-promo`, `legacy-cta-copy` |
+| 18.2 | Per-environment targeting | on/off, off variation, default rule, rules (clauses with operator, context kind, attribute, values, negate), `targets` + `contextTargets`, `trackEvents`, disabled rules. | Same, in the environment the profile maps to. | ⚙️ copied one to one; environments map by key/name (§7). `targets` (user) and `contextTargets` are merged per (kind, variation). 📝 disabled rules left out (they do not evaluate); 📝 event tracking not copied. Operators the console cannot write → ✅ `unsupported_condition`. | `legacy-checkout-redesign` (test), `legacy-ios-min-version` |
+| 18.3 | Percentage rollouts | Rule / default-rule rollouts, weighted segment rules, `bucketBy`, experiment `seed`. | Same weights; a new flag gets a new `salt`; `seed` is not settable through the API. | ✅ `partial_rollout_rebucket` (acknowledge) per rollout; `bucketBy` copied. | `legacy-checkout-redesign` (production), `legacy-pricing-tiers`, `legacy-internal-users` |
+| 18.4 | Context kinds | Any kind in clauses, rollouts, targets, segment lists. | The target may lack the kind. | ✅ `unit_type_kind`: create it with the same key (an `ensure_context_kind` step) or use an existing kind. Archived source kinds are listed but not created. | `device` in `legacy-ios-min-version` |
+| 18.5 | Prerequisites | `prerequisites: [{ key, variation }]`. | Enterprise feature; the referenced flag must exist first. | ⚙️ dependency on the source flag (migrated first in the same environment). ✅ `prerequisite_unsupported` (blocking: drop / skip) when the target plan or token lacks them; ✅ `missing_reference` when the flag is not in the source or archived. | `legacy-pricing-tiers`, `legacy-receipt-emails` |
+| 18.6 | Segments | Per environment: rules (weight, `bucketBy`), `included` / `excluded`, `includedContexts` / `excludedContexts`. A key may exist in some environments only. | Same, per environment. | ⚙️ copied where the segment exists; `segmentMatch` pulls it in as a dependency; ✅ `missing_reference` for a rule matching a segment absent from that environment; `segmentMatch` inside a segment rule → ✅ `unsupported_condition`. Lists > 15,000 keys skipped with a reason. Name/description differing per environment: the first environment's wins, with a snapshot warning. | `legacy-beta-orgs`, `legacy-internal-users`, `legacy-fraud-shield` (test) |
+| 18.7 | Big segments | `unbounded: true`; membership lives in the big-segment store and is readable only per key. | Big segment (Enterprise) filled by CSV import. | ✅ `big_segment` (blocking): create it empty for a manual import (fidelity *manual*), or skip. Skipped with a reason when the target has no big segments. Rules on a skipped segment block their flag. | `legacy-fraud-blocklist`, `legacy-fraud-shield` (production) |
+| 18.8 | Custom properties and provenance tags | Flag-level custom properties; a source that was itself a migration target carries `migrated-from-*` / `migration-src-*` tags and `migration.*` properties. | Custom properties; the console's own provenance. | ✅ `copy_custom_properties` (choice, recommended copy) for the flag's own properties; ⚙️ earlier-migration provenance is never copied onward, 📝 noted. | `legacy-checkout-redesign` (`jira.issue`), `legacy-theme` |
+| 18.9 | Maintainer and team | `maintainerId`, `_maintainer.email`, `maintainerTeamKey`. | Member and team IDs of another account mean nothing here. | ❌ not carried; 📝 noted with the email so it can be re-assigned. | `legacy-kill-switch` |
+| 18.10 | Experiments, metrics, holdouts, guarded rollouts, release pipelines, approval settings, flag links | Attached to the flag or environment. | Set up again in the target. | ❌ not read (PLAN §11, §20.4); 📝 experiments running on a flag are noted on the flag. | `legacy-cta-copy` |
+| 18.11 | Key already in the target | — | A flag or segment with the same key, not created by the console. | ✅ `key_collision` (adopt or skip), as for every source; a flag of the other kind (boolean vs multivariate) is a plan error. | planner test |
+| 18.12 | Source environment without a target environment | Any environment key. | The target has a different environment list. | ⚙️ mapping profile (auto-mapped by key or name; create or map under Mapping); items planned for an unmapped environment are errors, as for StatSig. | `test` → `test`, `production` → `production` |

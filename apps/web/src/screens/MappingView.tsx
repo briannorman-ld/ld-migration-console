@@ -69,7 +69,7 @@ export function MappingView({ workspaceId, sources, snapshots, m, onConnect }: {
                         <td className="py-1.5 pr-3">
                           <span className="font-mono">{e.name}</span>
                           {e.isProduction && (
-                            <Badge tone="red" title="StatSig production tier">
+                            <Badge tone="red" title="Production environment in the source">
                               prod
                             </Badge>
                           )}

@@ -11,7 +11,7 @@ import { alertsSince, ldVersionsAtSync, latestSamples, monitorRows, pruneSamples
 import { flagOwner } from '@sslm/planner';
 import type { MonitorSampleRecord, MonitorStateRecord } from '@sslm/store';
 import { ldClient, ldSessionSnapshot, refreshLdState, type LdSession } from './ld.ts';
-import { envTargets, ldFlagState, mapAutotuneFor, mapConfigFor, mapGateFor, type MappingInputs } from './migration.ts';
+import { envTargets, ldFlagState, mapAutotuneFor, mapConfigFor, mapGateFor, mapNeutralFlagFor, type MappingInputs } from './migration.ts';
 import { store } from './store.ts';
 
 /** How often the open tab re-checks LD (PLAN §14 "every N minutes, default 15"). */
@@ -48,6 +48,7 @@ export function monitoredItems(snapshots: CanonicalSnapshot[], i: MappingInputs,
       for (const g of snap.gates) push('gate', g, mapGateFor(snap, g, env, i));
       for (const c of snap.configs) push('config', c, mapConfigFor(snap, c, env, i));
       for (const a of snap.autotunes) push('autotune', a, mapAutotuneFor(snap, a, env, i));
+      for (const f of snap.neutral?.flags ?? []) push('flag', { uid: f.uid, id: f.key, name: f.name, archived: f.archived, ...(f.version !== undefined ? { version: f.version } : {}) }, mapNeutralFlagFor(snap, f, env, i));
     }
   }
   return out;

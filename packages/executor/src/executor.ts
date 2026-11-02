@@ -15,6 +15,7 @@ import { footer as provenanceFooter, parseFooter as parseProvenanceFooter, PROP,
 import { LdAuthError, LdWriteError, type JsonPatchOp, type LdClient, type LdExperiment, type LdExperimentationSettings, type LdFlag, type LdFlagConfig, type LdMetric, type LdSegment, type SemanticPatch } from '@sslm/ld-client';
 import { flagOwner, ownsSegment, syncPropertyKey, type PlanStep } from '@sslm/planner';
 import { SOURCE_KIND, type DesiredBandit, type DesiredFlagEnv, type DesiredRule, type DesiredSegment, type VariationOrRollout } from '@sslm/mapper';
+import type { MigrationSourceKind } from '@sslm/canonical';
 
 export type LdWriter = Pick<
   LdClient,
@@ -372,9 +373,9 @@ export class Executor {
     const ref = `run #${run.id.slice(0, 8)}`;
     if (s.op === 'update_flag_env' || s.op === 'upsert_segment' || s.op === 'upsert_metric' || s.op === 'create_bandit') {
       const p = s.provenance;
-      return `Synced from StatSig ${p.statsigType} ${p.statsigId}${p.statsigVersion !== undefined ? ` v${p.statsigVersion}` : ''} (source ${p.sourceAlias})${by}, ${ref}`;
+      return `Synced from ${SOURCE_KIND_LABEL[p.sourceKind ?? SOURCE_KIND]} ${p.statsigType} ${p.statsigId}${p.statsigVersion !== undefined ? ` v${p.statsigVersion}` : ''} (source ${p.sourceAlias})${by}, ${ref}`;
     }
-    return `StatSig migration${by}, ${ref}`;
+    return `${s.op === 'ensure_context_kind' && s.sourceKind ? SOURCE_KIND_LABEL[s.sourceKind] : 'StatSig'} migration${by}, ${ref}`;
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -481,7 +482,8 @@ export class Executor {
 
   private async contextKind(run: RunRecord, rec: StepRecord, s: Extract<PlanStep, { op: 'ensure_context_kind' }>): Promise<string> {
     if (run.dryRun) return `Would create context kind “${s.key}”.`;
-    await this.c.putContextKind(this.p, s.key, { name: s.name, description: `StatSig unit type ${s.unitType} (created by the StatSig migration).` }, this.signal);
+    const from = s.sourceKind === 'launchdarkly' ? `Context kind “${s.unitType}” of the source LaunchDarkly project` : `StatSig unit type ${s.unitType}`;
+    await this.c.putContextKind(this.p, s.key, { name: s.name, description: `${from} (created by the LaunchDarkly Migration Console).` }, this.signal);
     rec.created = true;
     return `Created context kind “${s.key}”.`;
   }
@@ -520,9 +522,11 @@ export class Executor {
     if (d.unbounded) return this.bigSegment(run, rec, s, current, description);
 
     const patch: JsonPatchOp[] = [
-      { op: 'add', path: '/rules', value: d.rules.map((r) => ({ description: r.description, clauses: r.clauses, ...(r.weight !== undefined ? { weight: r.weight, rolloutContextKind: r.rolloutContextKind } : {}) })) },
+      { op: 'add', path: '/rules', value: d.rules.map((r) => ({ description: r.description, clauses: r.clauses, ...(r.weight !== undefined ? { weight: r.weight, rolloutContextKind: r.rolloutContextKind, ...(r.bucketBy ? { bucketBy: r.bucketBy } : {}) } : {}) })) },
       { op: 'add', path: '/included', value: d.included },
       { op: 'add', path: '/includedContexts', value: d.includedContexts },
+      // Excluded keys exist only for LD-source segments (PLAN §20.3); a StatSig segment leaves them alone.
+      ...(d.excluded || d.excludedContexts ? [{ op: 'add' as const, path: '/excluded', value: d.excluded ?? [] }, { op: 'add' as const, path: '/excludedContexts', value: d.excludedContexts ?? [] }] : []),
       { op: 'add', path: '/description', value: description },
       { op: 'add', path: '/tags', value: union(current.tags ?? [], d.tags) },
     ];
@@ -553,6 +557,8 @@ export class Executor {
     ];
     const res = await this.c.patchSegmentJson(this.p, s.ldEnv, s.key, patch, { comment: this.comment(run, s), dryRun: run.dryRun });
     rec.ldVersion = res.version ?? undefined;
+    // An LD-source big segment (PLAN §20.3): the console cannot read its members, so nothing is imported.
+    if (d.unbounded!.manual) return `${run.dryRun ? 'Would create' : rec.created ? 'Created' : 'Updated'} big segment “${s.key}” in ${s.ldEnv} without members: import the member list yourself.`;
     if (run.dryRun) return `Would import ${ids.length.toLocaleString('en-US')} ${d.unbounded!.contextKind} IDs into big segment “${s.key}” in ${s.ldEnv} (replace mode).`;
     try {
       await this.c.createSegmentImport(this.p, s.ldEnv, s.key, ids, { mode: 'replace' });
@@ -710,7 +716,7 @@ export class Executor {
   private async writeProvenance(run: RunRecord, s: Extract<PlanStep, { op: 'update_flag_env' }>, scheduledChangeIds: string[]): Promise<void> {
     const prop = syncPropertyKey(s.ldEnv);
     const value = [s.provenance.statsigFingerprint, String(s.provenance.statsigVersion ?? ''), this.now().toISOString(), s.provenance.decisionSetHash, ...scheduledChangeIds.map((id) => `sc:${id}`)];
-    await this.c.patchFlagJson(this.p, s.key, [{ op: 'add', path: `/customProperties/${pointer(prop)}`, value: { name: `${SOURCE_KIND_LABEL[SOURCE_KIND]} sync (${s.ldEnv})`, value } }], { comment: this.comment(run, s), dryRun: run.dryRun, signal: this.signal });
+    await this.c.patchFlagJson(this.p, s.key, [{ op: 'add', path: `/customProperties/${pointer(prop)}`, value: { name: `${SOURCE_KIND_LABEL[s.provenance.sourceKind ?? SOURCE_KIND]} sync (${s.ldEnv})`, value } }], { comment: this.comment(run, s), dryRun: run.dryRun, signal: this.signal });
   }
 
   /** The semantic-patch instructions that make an environment match `state` (also used for scheduled changes and approvals). */
@@ -767,6 +773,7 @@ export class Executor {
             { op: 'add', path: '/rules', value: (pre.rules ?? []).map(({ _id, ...r }) => ({ ...r, clauses: r.clauses.map(({ _id: _c, ...c }) => c) })) },
             { op: 'add', path: '/included', value: pre.included ?? [] },
             { op: 'add', path: '/includedContexts', value: pre.includedContexts ?? [] },
+            ...(s.desired.excluded || s.desired.excludedContexts ? [{ op: 'add' as const, path: '/excluded', value: pre.excluded ?? [] }, { op: 'add' as const, path: '/excludedContexts', value: pre.excludedContexts ?? [] }] : []),
             { op: 'add', path: '/description', value: pre.description ?? '' },
             { op: 'add', path: '/tags', value: pre.tags ?? [] },
           ],
@@ -884,7 +891,7 @@ export function variationIds(flag: LdFlag, values: unknown[]): Ids {
 }
 
 function serve(v: VariationOrRollout, ids: Ids): Record<string, unknown> {
-  if (v.rollout) return { rolloutContextKind: v.rollout.contextKind, rolloutWeights: Object.fromEntries(v.rollout.variations.map((w) => [ids(w.variation), w.weight])) };
+  if (v.rollout) return { rolloutContextKind: v.rollout.contextKind, ...(v.rollout.bucketBy ? { rolloutBucketBy: v.rollout.bucketBy } : {}), rolloutWeights: Object.fromEntries(v.rollout.variations.map((w) => [ids(w.variation), w.weight])) };
   return { variationId: ids(v.variation ?? 0) };
 }
 
@@ -990,6 +997,18 @@ export function segmentInstructions(current: LdSegment, d: DesiredSegment): Sema
     for (const c of chunks(t.remove, TARGET_BATCH)) out.push({ kind: 'removeIncludedTargets', contextKind: kind, values: c });
     for (const c of chunks(t.add, TARGET_BATCH)) out.push({ kind: 'addIncludedTargets', contextKind: kind, values: c });
   }
+  // Exclusions exist only for LD-source segments (PLAN §20.3).
+  if (d.excluded || d.excludedContexts) {
+    const ex = diff(current.excluded ?? [], d.excluded ?? []);
+    for (const c of chunks(ex.remove, TARGET_BATCH)) out.push({ kind: 'removeExcludedUsers', values: c });
+    for (const c of chunks(ex.add, TARGET_BATCH)) out.push({ kind: 'addExcludedUsers', values: c });
+    const exKinds = unique([...(current.excludedContexts ?? []).map((c) => c.contextKind), ...(d.excludedContexts ?? []).map((c) => c.contextKind)]);
+    for (const kind of exKinds) {
+      const t = diff(current.excludedContexts?.find((c) => c.contextKind === kind)?.values ?? [], d.excludedContexts?.find((c) => c.contextKind === kind)?.values ?? []);
+      for (const c of chunks(t.remove, TARGET_BATCH)) out.push({ kind: 'removeExcludedTargets', contextKind: kind, values: c });
+      for (const c of chunks(t.add, TARGET_BATCH)) out.push({ kind: 'addExcludedTargets', contextKind: kind, values: c });
+    }
+  }
   const tags = d.tags.filter((t) => !(current.tags ?? []).includes(t));
   if (tags.length) out.push({ kind: 'addTags', values: tags });
   return out;
@@ -1004,8 +1023,8 @@ function union(a: string[], b: string[]): string[] {
 }
 
 /** Segments have no custom properties, so provenance goes in a description footer (PLAN §3.3). */
-export function footer(p: { sourceAlias: string; statsigId: string; statsigFingerprint: string; decisionSetHash: string }, at: Date): string {
-  const input: FooterInput = { kind: SOURCE_KIND, sourceAlias: p.sourceAlias, sourceId: p.statsigId, sourceFingerprint: p.statsigFingerprint, decisionSetHash: p.decisionSetHash };
+export function footer(p: { sourceKind?: MigrationSourceKind; sourceAlias: string; statsigId: string; statsigFingerprint: string; decisionSetHash: string }, at: Date): string {
+  const input: FooterInput = { kind: p.sourceKind ?? SOURCE_KIND, sourceAlias: p.sourceAlias, sourceId: p.statsigId, sourceFingerprint: p.statsigFingerprint, decisionSetHash: p.decisionSetHash };
   return provenanceFooter(input, at);
 }
 

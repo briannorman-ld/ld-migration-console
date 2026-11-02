@@ -4,6 +4,8 @@ export * from './console/dataset.ts';
 export * from './console/envelopes.ts';
 export * from './msw/statsig-console.ts';
 export * from './msw/demo.ts';
+export * from './msw/ld-api.ts';
+export * from './ld/acme-legacy.ts';
 export { pseudoId } from './ids.ts';
 export * from './spec/generate.ts';
 export * from './spec/raw-ids.ts';

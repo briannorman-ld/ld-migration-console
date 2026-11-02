@@ -123,6 +123,9 @@ importers:
       '@sslm/http':
         specifier: workspace:*
         version: link:../http
+      '@sslm/ld-client':
+        specifier: workspace:*
+        version: link:../ld-client
       '@sslm/statsig-client':
         specifier: workspace:*
         version: link:../statsig-client
@@ -199,6 +202,9 @@ importers:
       '@sslm/demo-fixtures':
         specifier: workspace:*
         version: link:../demo-fixtures
+      '@sslm/ld-client':
+        specifier: workspace:*
+        version: link:../ld-client
       '@sslm/statsig-client':
         specifier: workspace:*
         version: link:../statsig-client
@@ -230,6 +236,9 @@ importers:
       '@sslm/demo-fixtures':
         specifier: workspace:*
         version: link:../demo-fixtures
+      '@sslm/ld-client':
+        specifier: workspace:*
+        version: link:../ld-client
       '@sslm/statsig-client':
         specifier: workspace:*
         version: link:../statsig-client

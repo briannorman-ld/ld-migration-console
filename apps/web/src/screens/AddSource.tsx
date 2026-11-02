@@ -1,20 +1,26 @@
 import { useState } from 'react';
-import { ENTITY_KINDS, type EntityKind } from '@sslm/canonical';
+import { ENTITY_KINDS, type EntityKind, type SourceDescriptor, type SourceKind } from '@sslm/canonical';
 import { MAX_SPEC_BYTES } from '@sslm/adapters';
+import { LD_INSTANCES, type LdInstanceId } from '@sslm/ld-client';
 import { STATSIG_CONSOLE_BASE_URL } from '@sslm/statsig-client';
 import { appendLog, describeProgress, describeTransportEvent, SyncActivity, type SyncLogEntry } from '../components/SyncActivity.tsx';
-import { Button, Callout, Card, Input, Label, Spinner } from '../components/ui.tsx';
+import { Button, Callout, Card, Input, Label, Select, Spinner } from '../components/ui.tsx';
 import { KIND_LABEL } from '../lib/kinds.ts';
 import { secrets } from '../lib/secrets.ts';
 import { store } from '../lib/store.ts';
-import { syncConsoleSource, uploadSpec } from '../lib/sync.ts';
+import { syncConsoleSource, syncLdSource, uploadSpec } from '../lib/sync.ts';
 
-/** Add a StatSig source: Console API key (recommended) or an uploaded config spec (PLAN §4.2). */
+/**
+ * Add a source: a StatSig project (Console API key, recommended, or an uploaded config spec,
+ * PLAN §4.2), or another LaunchDarkly project read with its own token (PLAN §20.2).
+ */
 export function AddSource({ workspaceId, onDone }: { workspaceId: string; onDone: () => void }) {
-  const [kind, setKind] = useState<'console_api' | 'config_spec'>('console_api');
+  const [kind, setKind] = useState<SourceKind>('console_api');
   const [label, setLabel] = useState('');
   const [alias, setAlias] = useState('');
   const [key, setKey] = useState('');
+  const [ldInstance, setLdInstance] = useState<LdInstanceId>('us');
+  const [ldProject, setLdProject] = useState('');
   const [file, setFile] = useState<File>();
   const [kinds, setKinds] = useState<Set<EntityKind>>(() => new Set(ENTITY_KINDS));
   const [busy, setBusy] = useState(false);
@@ -28,13 +34,31 @@ export function AddSource({ workspaceId, onDone }: { workspaceId: string; onDone
     setLog([]);
     setProgress(undefined);
     const push = (e: SyncLogEntry) => setLog((l) => appendLog(l, e));
-    const a = (alias || label || 'src').toLowerCase().replace(/[^a-z0-9-]+/g, '-').slice(0, 24);
+    const a = (alias || label || (kind === 'launchdarkly' ? ldProject : '') || 'src').toLowerCase().replace(/[^a-z0-9-]+/g, '-').slice(0, 24);
     // Only Console API sources have a crawl scope; a spec file already holds whatever it holds.
     const scope = kind === 'console_api' && kinds.size < ENTITY_KINDS.length ? { resources: ENTITY_KINDS.filter((k) => kinds.has(k)) } : {};
-    const source = { id: crypto.randomUUID(), alias: a, label: label || a, kind, createdAt: new Date().toISOString(), ...(kind === 'console_api' ? { baseUrl: STATSIG_CONSOLE_BASE_URL, ...scope } : {}) };
+    const source: SourceDescriptor = {
+      id: crypto.randomUUID(),
+      alias: a,
+      label: label || (kind === 'launchdarkly' ? `${ldProject.trim()} (LD)` : a),
+      kind,
+      createdAt: new Date().toISOString(),
+      ...(kind === 'console_api' ? { baseUrl: STATSIG_CONSOLE_BASE_URL, ...scope } : {}),
+      ...(kind === 'launchdarkly' ? { ld: { instance: ldInstance, projectKey: ldProject.trim() } } : {}),
+    };
     try {
       await store.addSource(workspaceId, source);
-      if (kind === 'console_api') {
+      if (kind === 'launchdarkly') {
+        secrets.set('ld_source', source.id, key.trim(), workspaceId);
+        setKey('');
+        await syncLdSource(workspaceId, source, {
+          onProgress: (p) => {
+            setProgress(p);
+            push(describeProgress(p));
+          },
+          onTransport: (e) => push(describeTransportEvent(e)),
+        });
+      } else if (kind === 'console_api') {
         secrets.set('statsig', source.id, key.trim(), workspaceId);
         setKey('');
         await syncConsoleSource(workspaceId, source, {
@@ -57,27 +81,58 @@ export function AddSource({ workspaceId, onDone }: { workspaceId: string; onDone
 
   return (
     <div className="max-w-2xl space-y-4">
-      <h2 className="font-display text-xl font-semibold tracking-tight">Add a StatSig source</h2>
-      <div className="flex gap-2">
+      <h2 className="font-display text-xl font-semibold tracking-tight">Add a source</h2>
+      <div className="flex flex-wrap gap-2">
         <Button variant={kind === 'console_api' ? 'primary' : 'secondary'} onClick={() => setKind('console_api')}>
-          Console API key (recommended)
+          StatSig Console API key
         </Button>
         <Button variant={kind === 'config_spec' ? 'primary' : 'secondary'} onClick={() => setKind('config_spec')}>
-          Upload config spec
+          StatSig config spec
+        </Button>
+        <Button variant={kind === 'launchdarkly' ? 'primary' : 'secondary'} onClick={() => setKind('launchdarkly')}>
+          LaunchDarkly project
         </Button>
       </div>
       <Card className="space-y-4 p-5">
         <div className="grid grid-cols-2 gap-3">
           <div>
             <Label htmlFor="src-label">Name</Label>
-            <Input id="src-label" value={label} placeholder="acme-web" onChange={(e) => setLabel(e.target.value)} />
+            <Input id="src-label" value={label} placeholder={kind === 'launchdarkly' ? 'acme-legacy (LD)' : 'acme-web'} onChange={(e) => setLabel(e.target.value)} />
           </div>
           <div>
             <Label htmlFor="src-alias">Alias (prefix for consolidation)</Label>
-            <Input id="src-alias" value={alias} placeholder="web" onChange={(e) => setAlias(e.target.value)} />
+            <Input id="src-alias" value={alias} placeholder={kind === 'launchdarkly' ? 'legacy' : 'web'} onChange={(e) => setAlias(e.target.value)} />
           </div>
         </div>
-        {kind === 'console_api' ? (
+        {kind === 'launchdarkly' ? (
+          <>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label htmlFor="src-ld-instance">Instance</Label>
+                <Select id="src-ld-instance" value={ldInstance} onChange={(e) => setLdInstance(e.target.value as LdInstanceId)}>
+                  {Object.values(LD_INSTANCES).map((i) => (
+                    <option key={i.id} value={i.id}>
+                      {i.label}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+              <div>
+                <Label htmlFor="src-ld-project">Project key</Label>
+                <Input id="src-ld-project" value={ldProject} placeholder="legacy-storefront" spellCheck={false} onChange={(e) => setLdProject(e.target.value)} />
+              </div>
+            </div>
+            <div>
+              <Label htmlFor="src-ld-token">Access token (read access to that project)</Label>
+              <Input id="src-ld-token" type="password" autoComplete="off" spellCheck={false} placeholder="api-…" value={key} onChange={(e) => setKey(e.target.value)} />
+              <p className="mt-1.5 text-xs text-fg-muted">
+                A Reader token is enough. It may belong to a <b>different LaunchDarkly account or instance</b> than the target project; it is kept in memory (or encrypted on this
+                device if you remember keys there) and sent only to that instance’s API. The source project is only ever read: flags, their per-environment targeting, segments
+                and context kinds. Experiments and metrics are not read (they end in the source and launch new in the target).
+              </p>
+            </div>
+          </>
+        ) : kind === 'console_api' ? (
           <>
             <div>
               <Label htmlFor="src-key">Console API key (read-only)</Label>
@@ -154,8 +209,8 @@ export function AddSource({ workspaceId, onDone }: { workspaceId: string; onDone
         )}
         {error && <Callout tone="red">{error}</Callout>}
         <div className="flex items-center gap-3">
-          <Button onClick={add} disabled={busy || (kind === 'console_api' ? !key || kinds.size === 0 : !file)}>
-            {busy && <Spinner />} {busy && kind === 'console_api' ? 'Syncing…' : 'Add source'}
+          <Button onClick={add} disabled={busy || (kind === 'console_api' ? !key || kinds.size === 0 : kind === 'launchdarkly' ? !key || !ldProject.trim() : !file)}>
+            {busy && <Spinner />} {busy && kind !== 'config_spec' ? 'Syncing…' : 'Add source'}
           </Button>
           {busy && progress && (
             <span className="text-xs text-fg-muted tabular-nums">
@@ -163,7 +218,7 @@ export function AddSource({ workspaceId, onDone }: { workspaceId: string; onDone
             </span>
           )}
         </div>
-        {kind === 'console_api' && (busy || (error && log.length > 0)) && <SyncActivity log={log} running={busy} />}
+        {kind !== 'config_spec' && (busy || (error && log.length > 0)) && <SyncActivity log={log} running={busy} />}
       </Card>
     </div>
   );

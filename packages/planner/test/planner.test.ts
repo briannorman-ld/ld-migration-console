@@ -280,3 +280,112 @@ describe('migrationStatus (from LD provenance)', () => {
     expect(migrationStatus(both, 'test', { statsigFingerprint: 'new', decisionSetHash: 'd1' }).status).toBe('in_sync');
   });
 });
+
+// ---------------------------------------------------------------------------------------------
+// LD project → LD project (PLAN §20)
+// ---------------------------------------------------------------------------------------------
+import { legacySnapshot } from './fixtures.ts';
+
+describe('planMigration with an LD source (PLAN §20)', () => {
+  let legacy: CanonicalSnapshot;
+  beforeAll(async () => {
+    legacy = await legacySnapshot();
+  });
+  const fuid = (key: string) => legacy.neutral!.flags.find((f) => f.key === key)!.uid;
+  const suid = (key: string) => legacy.neutral!.segments.find((s) => s.key === key)!.uid;
+  const ldWithKinds: LdProjectState = { ...EMPTY_LD, contextKinds: ['user', 'organization'] };
+  function legacyRequest(over: Partial<PlanRequest>): PlanRequest {
+    return {
+      gates: [],
+      ldEnvs: ['production'],
+      snapshots: [legacy],
+      profile: profileFor(legacy, { test: 'test', production: 'production' }),
+      resolutions: new Map(),
+      capabilities: { ...CAPS, existingContextKinds: ['user', 'organization'] },
+      ld: ldWithKinds,
+      now: NOW,
+      ...over,
+    };
+  }
+
+  it('plans a flag with its segment and prerequisite, writing LaunchDarkly provenance', () => {
+    const blocked = planMigration(legacyRequest({ flags: [fuid('legacy-pricing-tiers')] }));
+    expect(blocked.ready).toBe(false);
+    expect(blocked.decisions.map((d) => d.type).sort()).toEqual(['copy_custom_properties', 'partial_rollout_rebucket', 'partial_rollout_rebucket']);
+
+    const plan = planMigration(acceptAll(legacyRequest({ flags: [fuid('legacy-pricing-tiers')] })));
+    expect(plan.errors).toEqual([]);
+    expect(plan.ready).toBe(true);
+    expect(plan.steps.map((s) => s.id)).toEqual([
+      'segment:production:legacy-beta-orgs',
+      'shell:legacy-checkout-redesign',
+      'shell:legacy-pricing-tiers',
+      'env:production:legacy-checkout-redesign',
+      'env:production:legacy-pricing-tiers',
+    ]);
+    const env = plan.steps.find((s) => s.id === 'env:production:legacy-pricing-tiers');
+    expect(env?.op === 'update_flag_env' && env.provenance).toMatchObject({ sourceKind: 'launchdarkly', sourceAlias: 'legacy', statsigType: 'flag', statsigId: 'legacy-pricing-tiers', statsigVersion: 3 });
+    expect(env?.op === 'update_flag_env' && env.desired.prerequisites).toEqual([{ key: 'legacy-checkout-redesign', variation: 0 }]);
+    const seg = plan.steps.find((s) => s.id === 'segment:production:legacy-beta-orgs');
+    expect(seg?.op === 'upsert_segment' && seg.provenance.sourceKind).toBe('launchdarkly');
+    expect(plan.items.map((i) => [i.kind, i.entityId, i.dependency])).toEqual([
+      ['flag', 'legacy-pricing-tiers', false],
+      ['flag', 'legacy-checkout-redesign', true],
+      ['segment', 'legacy-beta-orgs', true],
+    ]);
+    expect(plan.confirmEnvs).toEqual(['production']);
+  });
+
+  it('creates a missing context kind for the device flag', () => {
+    const plan = planMigration(acceptAll(legacyRequest({ flags: [fuid('legacy-ios-min-version')], ldEnvs: ['test'] })));
+    expect(plan.ready).toBe(true);
+    expect(plan.steps.map((s) => s.id)).toEqual(['context_kind:device', 'shell:legacy-ios-min-version', 'env:test:legacy-ios-min-version']);
+    const ck = plan.steps[0];
+    expect(ck?.op === 'ensure_context_kind' && ck.sourceKind).toBe('launchdarkly');
+  });
+
+  it('a segment can be migrated on its own', () => {
+    const plan = planMigration(acceptAll(legacyRequest({ segments: [suid('legacy-internal-users')] })));
+    expect(plan.ready).toBe(true);
+    expect(plan.steps.map((s) => s.id)).toEqual(['segment:production:legacy-internal-users']);
+    expect(plan.items[0]).toMatchObject({ kind: 'segment', dependency: false, status: 'ready' });
+    const step = plan.steps[0];
+    expect(step?.op === 'upsert_segment' && step.desired.excluded).toEqual(['u-contractor-9']);
+  });
+
+  it('a flag on a big segment is blocked until the big_segment decision is answered, then carries the empty segment', () => {
+    const blocked = planMigration(legacyRequest({ flags: [fuid('legacy-fraud-shield')] }));
+    expect(blocked.ready).toBe(false);
+    expect(blocked.decisions.map((d) => d.type)).toEqual(['big_segment']);
+    const d = blocked.decisions[0]!;
+    const plan = planMigration(legacyRequest({ flags: [fuid('legacy-fraud-shield')], resolutions: new Map([[d.id, { id: d.id, type: d.type, optionKey: 'create_empty', scope: 'resource', fingerprint: d.fingerprint, decidedAt: NOW }]]) }));
+    expect(plan.ready).toBe(true);
+    const seg = plan.steps.find((s) => s.op === 'upsert_segment');
+    expect(seg?.op === 'upsert_segment' && seg.desired.unbounded).toEqual({ contextKind: 'user', ids: [], manual: true });
+    expect(plan.items.find((i) => i.kind === 'segment')?.fidelity?.overall).toBe('manual');
+  });
+
+  it('skips archived flags and reports a key collision with an existing target flag', () => {
+    const plan = planMigration(acceptAll(legacyRequest({ flags: [fuid('legacy-archived-promo'), fuid('legacy-kill-switch')], ld: { ...ldWithKinds, flags: new Map([['legacy-kill-switch', { key: 'legacy-kill-switch', tags: [], customProperties: {}, kind: 'boolean' }]]) } })));
+    expect(plan.items.find((i) => i.entityId === 'legacy-archived-promo')).toMatchObject({ status: 'skipped' });
+    expect(plan.items.find((i) => i.entityId === 'legacy-kill-switch')).toMatchObject({ status: 'blocked', reason: 'LD flag “legacy-kill-switch” already exists' });
+    expect(plan.decisions.map((d) => d.type)).toEqual(['key_collision']);
+  });
+
+  it('an existing flag of the other kind is an error, and a flag the console migrated is re-synced', () => {
+    const plan = planMigration(acceptAll(legacyRequest({ flags: [fuid('legacy-kill-switch')], ld: { ...ldWithKinds, flags: new Map([['legacy-kill-switch', { key: 'legacy-kill-switch', tags: [], customProperties: {}, kind: 'multivariate' }]]) } })));
+    expect(plan.items[0]).toMatchObject({ status: 'error' });
+    const owned = planMigration(
+      acceptAll(
+        legacyRequest({
+          flags: [fuid('legacy-kill-switch')],
+          ld: { ...ldWithKinds, flags: new Map([['legacy-kill-switch', { key: 'legacy-kill-switch', tags: ['migrated-from-launchdarkly', 'migration-src-legacy'], customProperties: { 'migration.kind': { value: ['launchdarkly'] }, 'migration.id': { value: ['legacy-kill-switch'] }, 'migration.source': { value: ['legacy'] }, 'migration.type': { value: ['flag'] } }, kind: 'boolean' }]]) },
+        }),
+      ),
+    );
+    expect(owned.ready).toBe(true);
+    expect(owned.steps.map((s) => s.id)).toEqual(['shell:legacy-kill-switch', 'env:production:legacy-kill-switch']);
+    const shell = owned.steps[0];
+    expect(shell?.op === 'upsert_flag_shell' && shell.exists && !shell.adopt).toBe(true);
+  });
+});

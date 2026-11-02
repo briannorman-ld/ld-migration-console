@@ -18,10 +18,10 @@ function setup(over: Partial<Parameters<typeof ConnectionsView>[0]> = {}) {
 describe('ConnectionsView', () => {
   afterEach(cleanup);
 
-  it('gives a new workspace a place to connect StatSig and a place to connect LaunchDarkly', () => {
+  it('gives a new workspace a place to connect a source and a place to connect LaunchDarkly', () => {
     const h = setup();
     expect(screen.getAllByText('Not connected')).toHaveLength(2);
-    fireEvent.click(screen.getByRole('button', { name: 'Connect StatSig' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Connect a source' }));
     fireEvent.click(screen.getByRole('button', { name: 'Connect LaunchDarkly' }));
     expect(h.onAddSource).toHaveBeenCalledTimes(1);
     expect(h.onOpenLd).toHaveBeenCalledTimes(1);

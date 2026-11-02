@@ -65,7 +65,7 @@ export function renderCoverageMarkdown(entries: readonly CoverageEntry[] = COVER
     const rows = entries.filter((e) => e.area === a.area);
     if (!rows.length) continue;
     out.push(`### ${a.title}`, '', a.summary, '');
-    out.push('| | StatSig | LaunchDarkly | How the console handles it | Notes |', '|---|---|---|---|---|');
+    out.push(`| | ${a.sourceLabel ?? 'StatSig'} | LaunchDarkly | How the console handles it | Notes |`, '|---|---|---|---|---|');
     for (const e of rows) {
       out.push(`| ${STATUS_MARK[e.status]} | ${cell(e.statsig)} | ${cell(e.ld)} | ${cell(e.how)} | ${cell(details(e))} |`);
     }

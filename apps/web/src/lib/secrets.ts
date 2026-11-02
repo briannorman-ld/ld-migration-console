@@ -12,7 +12,8 @@ import { useSyncExternalStore } from 'react';
 import { decryptVault, encryptVault, newVaultKey, unlockVaultKey, WrongPassphraseError, type UnlockedVault } from '@sslm/store';
 import { store } from './store.ts';
 
-type SecretKind = 'statsig' | 'ld';
+/** `ld_source`: the read token of an LD project attached as a *source* (PLAN §20.2), keyed by source id. */
+type SecretKind = 'statsig' | 'ld' | 'ld_source';
 
 const vault = new Map<string, string>();
 /** Which workspace each in-memory secret belongs to (StatSig keys are keyed by source id). */
@@ -76,17 +77,18 @@ export async function rememberOnDevice(workspaceId: string, passphrase: string):
  * Unlock the device vault of a workspace: decrypt with the passphrase and load the tokens into
  * memory. Returns the kinds restored. Throws WrongPassphraseError on a mismatch.
  */
-export async function unlockDeviceVault(workspaceId: string, passphrase: string): Promise<{ ld: boolean; statsig: string[] }> {
+export async function unlockDeviceVault(workspaceId: string, passphrase: string): Promise<{ ld: boolean; statsig: string[]; ldSources: string[] }> {
   const rec = await store.getVault(workspaceId);
   if (!rec) throw new Error('No keys are stored on this device for this workspace.');
   const u = await unlockVaultKey(rec.blob, passphrase);
   const entries = await decryptVault(rec.blob, u);
-  const restored = { ld: false, statsig: [] as string[] };
+  const restored = { ld: false, statsig: [] as string[], ldSources: [] as string[] };
   for (const [k, v] of Object.entries(entries)) {
     vault.set(k, v);
     owners.set(k, workspaceId);
     if (k === key('ld', workspaceId)) restored.ld = true;
     else if (k.startsWith('statsig:')) restored.statsig.push(k.slice('statsig:'.length));
+    else if (k.startsWith('ld_source:')) restored.ldSources.push(k.slice('ld_source:'.length));
   }
   unlocked.set(workspaceId, u);
   notify();

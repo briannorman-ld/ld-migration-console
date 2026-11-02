@@ -1,6 +1,6 @@
 # LaunchDarkly Migration Console — Plan (v4)
 
-> The console started as, and for now still is, a StatSig → LaunchDarkly migration: the canonical model and mapper speak StatSig's vocabulary. The name, the repository and the provenance written into LD projects are source-neutral so other sources (FeatureHub, Unleash, Split, another LD project, …) can be added behind a provider-neutral model without renaming anything a customer already has.
+> The console started as a StatSig → LaunchDarkly migration, and the StatSig path (canonical model §4, mapper §10) still speaks StatSig's vocabulary. Since 2026-10-30 it also reads **another LaunchDarkly project** as a source (§20), through a small provider-neutral core that the StatSig adapters are meant to move onto later. The name, the repository and the provenance written into LD projects are source-neutral, so further sources (FeatureHub, Unleash, Split, …) can be added without renaming anything a customer already has.
 
 A **browser-only** web app (a static site with no backend, no accounts and no server-side storage) that reads one or more StatSig projects and writes to one LaunchDarkly project. Migration is one-way only, StatSig → LD.
 
@@ -829,3 +829,58 @@ A `DEMO.md` walkthrough (10–15 minutes) is kept up to date with each milestone
 9. Experiments: a concluded experiment becomes a shipped flag, and a setup experiment becomes a draft LD experiment with metrics.
 10. Spec-only path: upload the sample spec, re-upload a newer one to see the diff, and run the ID-list reconciliation report.
 11. Export the decision log and the context contract.
+
+---
+
+## 20. Second source: another LaunchDarkly project, and the provider-neutral model
+
+**Why.** "Copy this LD project into a new LD project" (a new account after an acquisition, splitting a project, moving to the EU instance) is a request that comes up often, and it is the cheapest second source: the target vocabulary *is* the source vocabulary. It also forces the question the multi-source direction depends on: what model sits between a source adapter and the LD mapper.
+
+### 20.1 The decision: a neutral core now, StatSig stays put until the third source
+
+The canonical model (§4, `packages/canonical/src/model.ts`) is StatSig's: `CONDITION_TYPES`, `OPERATORS`, gates vs dynamic configs, `passPercentage`, overrides. An LD source must not be squeezed into that (an LD clause has a typed operator, a context kind and `negate`; a rule serves a variation or a weighted rollout; a flag has N arbitrary variations). The intended end state is a provider-neutral intermediate model that every adapter emits and one LD mapper consumes. Three ways to get there were weighed:
+
+| Option | What it means | Verdict |
+|---|---|---|
+| A. Force LD into StatSig terms | LD rules become StatSig `custom_field` conditions etc. | No. Lossy both ways; every operator would need a decision for a translation that is the identity. |
+| B. Full neutral model first | Rewrite both StatSig adapters and the mapper onto a new model, then add LD | No, not yet. Weeks of churn with the golden files as the only safety net, before the second source proves the model. |
+| **C. Neutral core alongside** (chosen) | Add a small neutral model; the LD adapter emits it; a new mapper path consumes it; the StatSig path is untouched | Yes. Ships the second source now; the neutral core is designed from the mapper's *output* types, which the StatSig path already produces, so moving StatSig onto it later is a refactor, not a redesign. |
+
+**What the neutral core is** (`packages/canonical/src/neutral.ts`). The flag-platform concepts every source has, in LD-shaped vocabulary because LD is the target and the richest of the sources:
+- `NeutralFlag`: key, name, description, kind (boolean / multivariate), ordered variations, tags, temporary, client-side availability, defaults, custom properties, maintainer, archived, and one `NeutralFlagEnv` per source environment: on, off variation, fallthrough, rules (clauses + serve a variation or a rollout), individual targets per context kind, prerequisites, version.
+- `NeutralSegment`: key, name, description, tags, and one `NeutralSegmentEnv` per environment: rules (clauses, optional weight / bucketBy), included and excluded keys per context kind, `unbounded` (big segment) with its context kind, version.
+- `NeutralClause`: context kind, attribute, operator (LD's operator names), values, negate. `NeutralRollout`: context kind, optional bucketBy, weighted variations in thousandths of a percent.
+- Environments and context kinds of the source project.
+
+**How it plugs in.** `CanonicalSnapshot` gains an optional `neutral` block (flags, segments, context kinds) next to the StatSig collections, and `SourceKind` gains `launchdarkly`. An LD-source snapshot has empty StatSig collections and a populated `neutral` block, so every piece of plumbing that moves snapshots around (store, snapshots view, pruning, run journal, workspace file) is unchanged. The planner accepts neutral flags and segments in a plan next to gates and configs; the executor is unchanged except that provenance carries the source kind. Step 2, when the third source arrives: the StatSig adapters emit `neutral` too, the StatSig mapper becomes a translator *into* the neutral model (its per-condition decisions move with it), and the one neutral → LD mapper writes everything. At that point the StatSig collections go away and `neutral.*` is hoisted to the top of the snapshot.
+
+**Trade-offs accepted.** Two vocabularies live in one snapshot container until step 2; the UI branches on `snapshot.neutral` for inventory (a dedicated LD-source explorer rather than the gate/config grid); field names that say `statsig` (`statsigEnv`, `statsigFingerprint`, `statsigType`) now mean "source" and are documented as such rather than renamed across the executor, monitoring and journal in the same change.
+
+### 20.2 The LaunchDarkly source adapter (`packages/adapters/src/launchdarkly`)
+
+- **Input:** instance (US, EU, Federal), project key, an API token with read access to that project. The token lives in memory like the other tokens (`secrets` kind `ld_source`, keyed by source id). The source may be a different account or instance than the target; the CSP already allows the three LD API hosts.
+- **Reads (never writes):** `GET /projects/{p}`, `/projects/{p}/environments`, `/projects/{p}/context-kinds`, `/flags/{p}` (summaries, for the count) then `GET /flags/{p}/{key}` per flag (every environment's targeting in one response), and `GET /segments/{p}/{env}` per environment. Lenient Zod schemas from `packages/ld-client` (field names from `reference/launchdarkly/openapi.json`); mismatches become snapshot warnings.
+- **Not readable, and reported as such:** big-segment membership (LD only answers per-key membership), flag links, approval settings, experiments and metrics (out of scope by §11), member and team identities of another account.
+
+### 20.3 Mapping an LD flag to an LD flag: near-identity, every difference a decision
+
+The mapper is `packages/mapper/src/neutral.ts` (`mapNeutralFlag`, `mapNeutralSegment`), pure like the rest. What is copied verbatim: name, description, kind, variations (values and names), tags, temporary, client-side availability, defaults, on/off, off variation, fallthrough, rules and clauses, individual targets, segment rules and lists. What becomes a decision or a note:
+
+| Difference | Handling |
+|---|---|
+| Source environment with no target environment | `envMapping` in the profile (auto-mapped by key or name, §7); unmapped environments are not migrated |
+| Context kind missing in the target project | `unit_type_kind` (choice): create it (an `ensure_context_kind` step) or use an existing kind |
+| Percentage rollouts (rules, fallthrough, weighted segment rules) | `partial_rollout_rebucket` (acknowledge): the new flag has a new salt, so the same percentage lands on different contexts |
+| Prerequisites | Dependency on the referenced source flag, migrated first in the same environment. `prerequisite_unsupported` (blocking) when the target plan or token lacks prerequisites; `missing_reference` when the flag is not in the source |
+| `segmentMatch` clauses | Dependency on the source segment in the same environment; `missing_reference` when it is not there |
+| Big (unbounded) segments | `big_segment`: create it empty (membership is not readable; import the member list by hand), or skip. Rules that reference a skipped segment block their flag |
+| Custom properties other than `migration.*` | `copy_custom_properties` (choice): copy or leave out. Provenance keys and `migrated-from-*` / `migration-src-*` tags from an earlier migration are never copied |
+| Key already in the target and not created by the console | `key_collision` (blocking), as for every source |
+| Maintainer, maintainer team | Not carried (member IDs belong to the source account); noted |
+| Disabled rules, `trackEvents`, experiments on the flag, migration-purpose flags | Disabled rules are left out (they do not evaluate); event tracking and experiments are noted; migration flags are skipped with a reason |
+| Operators the console does not know | `unsupported_condition` (blocking) |
+
+**Provenance** (§3.3) is written with `kind = launchdarkly`: tags `migrated-from-launchdarkly` and `migration-src-<alias>`, custom properties `migration.kind = launchdarkly`, `migration.id` = the source flag key, `migration.type = flag`, `migration.source`, `migration.sync.<env>`; segments get the `[ld-migration: from=launchdarkly; …]` footer. The planner's ownership and drift checks work unchanged.
+
+### 20.4 Out of scope for the first step
+Experiments, metrics, holdouts and release pipelines (they end in the source and start new in the target, §11); flag links; approval settings; copying member and team assignments; reading big-segment membership; consolidation of an LD source with a StatSig source into one key (the data model allows it, the `source_collision` UI is M8).

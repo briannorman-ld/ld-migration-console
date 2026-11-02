@@ -5,6 +5,7 @@ import type { SourceRecord, WorkspaceRecord } from '@sslm/store';
 import { LdMark } from '../components/Brand.tsx';
 import { Badge, Button, Card, cx, Dot, PageTitle, Spinner, type Tone } from '../components/ui.tsx';
 import type { LdSession } from '../lib/ld.ts';
+import { SOURCE_BADGE } from '../lib/kinds.ts';
 
 /**
  * The landing page of a workspace: one place to connect StatSig (the sources we read) and one to
@@ -39,14 +40,15 @@ export function ConnectionsView({
     <div className="max-w-4xl space-y-5">
       <PageTitle eyebrow="Get started">{workspace.name}</PageTitle>
       <p className="max-w-2xl text-sm text-fg-muted">
-        A workspace reads one or more StatSig projects and writes to one LaunchDarkly project. Connect both to compare them side by side. Tokens stay in this tab’s
-        memory (or encrypted on this device, if you choose to remember them) and are sent only to StatSig and LaunchDarkly; nothing is ever written to StatSig.
+        A workspace reads one or more source projects (StatSig, or another LaunchDarkly project) and writes to one LaunchDarkly project. Connect both to compare them
+        side by side. Tokens stay in this tab’s memory (or encrypted on this device, if you choose to remember them) and are sent only to the source and target APIs; nothing is
+        ever written to a source.
       </p>
 
       <div className="grid gap-5 md:grid-cols-2">
         <ConnectionCard
           step={1}
-          title="StatSig"
+          title="Sources"
           icon={<StatsigGlyph />}
           done={statsigDone}
           status={
@@ -62,8 +64,8 @@ export function ConnectionsView({
         >
           {sources.length === 0 ? (
             <p className="text-sm text-fg-muted">
-              Read a project with a <b>read-only Console API key</b>, or upload a <b>config spec</b> exported from the StatSig CDN. Add more than one source to
-              consolidate several StatSig projects into the same LaunchDarkly project.
+              Read a StatSig project with a <b>read-only Console API key</b> or an uploaded <b>config spec</b>, or attach <b>another LaunchDarkly project</b> with a
+              read token. Add more than one source to consolidate several projects into the same LaunchDarkly project.
             </p>
           ) : (
             <ul className="space-y-1.5">
@@ -72,7 +74,7 @@ export function ConnectionsView({
                 return (
                   <li key={s.id} className="flex items-center gap-2 rounded-md border border-line-soft px-2.5 py-1.5 text-sm">
                     <span className="font-medium">{s.label}</span>
-                    <Badge tone={s.kind === 'console_api' ? 'green' : 'amber'}>{s.kind === 'console_api' ? 'Console API' : 'Spec'}</Badge>
+                    <Badge tone={SOURCE_BADGE[s.kind].tone}>{SOURCE_BADGE[s.kind].label}</Badge>
                     <span className="ml-auto text-xs text-fg-muted">{sn ? `synced ${new Date(sn.takenAt).toLocaleString()}` : 'not synced yet'}</span>
                     <button
                       type="button"
@@ -89,7 +91,7 @@ export function ConnectionsView({
             </ul>
           )}
           <Button variant={sources.length === 0 ? 'primary' : 'secondary'} onClick={onAddSource}>
-            {sources.length === 0 ? 'Connect StatSig' : '+ Add another source'}
+            {sources.length === 0 ? 'Connect a source' : '+ Add another source'}
           </Button>
         </ConnectionCard>
 

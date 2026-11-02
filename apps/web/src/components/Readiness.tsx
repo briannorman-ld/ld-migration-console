@@ -39,7 +39,7 @@ export interface ReadinessInput {
 export function readinessSteps(i: ReadinessInput): ReadinessStep[] {
   const blocking = i.selected > 0 ? i.blockingSelected : i.blockingAll;
   return [
-    { key: 'source', label: 'StatSig source synced', done: i.hasSnapshot, detail: 'Connect a StatSig project and wait for its first sync.', action: { label: 'Connections', onClick: i.nav.connections } },
+    { key: 'source', label: 'Source synced', done: i.hasSnapshot, detail: 'Connect a source project (StatSig, or another LaunchDarkly project) and wait for its first sync.', action: { label: 'Connections', onClick: i.nav.connections } },
     { key: 'ld', label: 'LaunchDarkly connected', done: i.m.connected, detail: 'Connect LaunchDarkly and choose the target project. Tokens are forgotten on refresh.', action: { label: 'Connect LD', onClick: i.nav.ld } },
     {
       key: 'mapping',

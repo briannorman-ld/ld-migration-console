@@ -14,3 +14,4 @@ export { mapGate, SOURCE_KIND, TAG_MIGRATED, sourceTag, PASS, FAIL, chooseClient
 export { mapConfig, DEFAULT as CONFIG_DEFAULT, type ConfigMapResult } from './config.ts';
 export { mapSegment, type SegmentMapResult } from './segment.ts';
 export { mapAutotune, percent as banditPercent, BANDIT_REALLOCATION_MS, type AutotuneMapResult, type AutotuneState } from './autotune.ts';
+export { mapNeutralFlag, mapNeutralSegment, resolveSourceKind, LD_OPERATORS, type NeutralFlagMapResult, type NeutralSegmentMapResult } from './neutral.ts';

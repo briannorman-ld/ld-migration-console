@@ -4,13 +4,15 @@
  * metrics, randomization units), collision checks against what's already in LD, and an ordered
  * list of idempotent steps. Pure: LD state is an input.
  */
-import { hasMigratedTag, hasSourceTag, readFlagProvenance, readSync, stableStringify, syncedEnvsOf, syncPropertyKey, type Autotune, type CanonicalSnapshot, type Config, type Gate } from '@sslm/canonical';
+import { hasMigratedTag, hasSourceTag, migrationKindOf, readFlagProvenance, readSync, stableStringify, syncedEnvsOf, syncPropertyKey, type Autotune, type CanonicalSnapshot, type Config, type Gate, type MigrationSourceKind, type NeutralFlag } from '@sslm/canonical';
 import {
   decisionPoint,
   lookupResolution,
   mapAutotune,
   mapConfig,
   mapGate,
+  mapNeutralFlag,
+  mapNeutralSegment,
   mapSegment,
   type AutotuneMapResult,
   type ConfigMapResult,
@@ -26,6 +28,8 @@ import {
   type IdLists,
   type MapperCapabilities,
   type MappingProfile,
+  type NeutralFlagMapResult,
+  type NeutralSegmentMapResult,
   type Resolution,
   type SegmentMapResult,
   type StaleDecision,
@@ -85,6 +89,10 @@ export interface PlanRequest {
   configs?: string[];
   /** Autotune uids to migrate (PLAN §11: flag + metric + drafted bandit). */
   autotunes?: string[];
+  /** Neutral flag uids (an LD-source project, PLAN §20). */
+  flags?: string[];
+  /** Segment uids to migrate on their own (neutral or StatSig); segments a flag needs are pulled in regardless. */
+  segments?: string[];
   ldEnvs: string[];
   snapshots: CanonicalSnapshot[];
   idLists?: IdLists;
@@ -97,9 +105,14 @@ export interface PlanRequest {
   now: string;
 }
 
+/**
+ * What the executor writes as provenance (PLAN §3.3). The `statsig*` names date from the
+ * StatSig-only days and mean "source": `sourceKind` says which kind (PLAN §20.1 "Trade-offs").
+ */
 export interface Provenance {
+  sourceKind: MigrationSourceKind;
   sourceAlias: string;
-  statsigType: 'gate' | 'config' | 'autotune';
+  statsigType: 'gate' | 'config' | 'autotune' | 'flag';
   statsigId: string;
   statsigVersion?: number;
   statsigFingerprint: string;
@@ -107,7 +120,7 @@ export interface Provenance {
 }
 
 export type PlanStep =
-  | { id: string; deps: string[]; op: 'ensure_context_kind'; key: string; name: string; unitType: string }
+  | { id: string; deps: string[]; op: 'ensure_context_kind'; key: string; name: string; unitType: string; sourceKind?: MigrationSourceKind }
   | { id: string; deps: string[]; op: 'upsert_segment'; ldEnv: string; key: string; exists: boolean; adopt: boolean; desired: DesiredSegment; provenance: Omit<Provenance, 'statsigType'> & { statsigType: 'segment' } }
   | { id: string; deps: string[]; op: 'upsert_flag_shell'; key: string; exists: boolean; adopt: boolean; desired: DesiredFlagShell }
   | { id: string; deps: string[]; op: 'ensure_randomization_unit'; key: string }
@@ -130,7 +143,8 @@ export type ItemStatus = 'ready' | 'blocked' | 'skipped' | 'error';
 
 export interface PlanItem {
   uid: string;
-  kind: 'gate' | 'config' | 'segment' | 'autotune' | 'metric';
+  /** `flag`: a neutral (LD-source) flag, PLAN §20. */
+  kind: 'gate' | 'config' | 'segment' | 'autotune' | 'metric' | 'flag';
   entityId: string;
   sourceId: string;
   ldKey: string;
@@ -226,29 +240,30 @@ export function planMigration(req: PlanRequest): Plan {
     return matches[0] ?? null;
   };
 
-  const ensureKinds = (deps: { kind: string; key: string; entityId?: string }[]): string[] => {
+  const ensureKinds = (deps: { kind: string; key: string; entityId?: string }[], sourceKind: MigrationSourceKind = 'statsig'): string[] => {
     const out: string[] = [];
     for (const d of deps) {
       if (d.kind !== 'context_kind') continue;
       const id = `context_kind:${d.key}`;
-      if (!req.ld.contextKinds.includes(d.key) && !steps.has(id)) steps.set(id, { id, deps: [], op: 'ensure_context_kind', key: d.key, name: d.key, unitType: d.entityId ?? d.key });
+      if (!req.ld.contextKinds.includes(d.key) && !steps.has(id)) steps.set(id, { id, deps: [], op: 'ensure_context_kind', key: d.key, name: d.key, unitType: d.entityId ?? d.key, ...(sourceKind !== 'statsig' ? { sourceKind } : {}) });
       if (steps.has(id)) out.push(id);
     }
     return out;
   };
 
-  const planSegment = (snapshot: CanonicalSnapshot, segmentId: string, statsigEnv: string, ldEnv: string, requiredBy: string): { stepId?: string; ok: boolean; reason?: string } => {
+  const planSegment = (snapshot: CanonicalSnapshot, segmentId: string, statsigEnv: string, ldEnv: string, requiredBy: string | null): { stepId?: string; ok: boolean; reason?: string } => {
     const seg = snapshot.segments.find((s) => s.id === segmentId);
     if (!seg) return { ok: false, reason: `segment “${segmentId}” not found` };
     const itemKey = `${seg.uid}|${ldEnv}`;
     const existing = items.get(itemKey);
     if (existing) {
-      existing.requiredBy.push(requiredBy);
+      if (requiredBy) existing.requiredBy.push(requiredBy);
+      else existing.dependency = false;
       return existing.status === 'ready' ? { ok: true, stepId: `segment:${ldEnv}:${existing.ldKey}` } : { ok: false, reason: `segment “${segmentId}” is ${existing.status}` };
     }
     const r: SegmentMapResult = mapSegment({ canonical: { snapshot, idLists: req.idLists, ...(req.coverage ? { coverage: req.coverage } : {}) }, entity: seg, profile: req.profile, resolutions: req.resolutions, capabilities: req.capabilities, env: { statsig: statsigEnv, ld: ldEnv }, now: req.now });
     const ldSeg = req.ld.segments[ldEnv]?.get(r.segmentKey);
-    const item: PlanItem = { uid: seg.uid, kind: 'segment', entityId: seg.id, sourceId: seg.source.sourceId, ldKey: r.segmentKey, ldEnv, statsigEnv, status: 'ready', dependency: true, requiredBy: [requiredBy], fidelity: r.fidelity, decisions: [], exists: !!ldSeg };
+    const item: PlanItem = { uid: seg.uid, kind: 'segment', entityId: seg.id, sourceId: seg.source.sourceId, ldKey: r.segmentKey, ldEnv, statsigEnv, status: 'ready', dependency: requiredBy !== null, requiredBy: requiredBy ? [requiredBy] : [], fidelity: r.fidelity, decisions: [], exists: !!ldSeg };
     items.set(itemKey, item);
     addDecisions(item, r.unresolved, r.stale);
     if (r.skipped || !r.desired) return finishItem(item, 'skipped', r.skipped ?? 'not migratable');
@@ -270,7 +285,7 @@ export function planMigration(req: PlanRequest): Plan {
       exists: !!ldSeg,
       adopt,
       desired: r.desired,
-      provenance: { sourceAlias: snapshot.source.alias, statsigType: 'segment', statsigId: seg.id, ...(seg.version !== undefined ? { statsigVersion: seg.version } : {}), statsigFingerprint: r.statsigFingerprint, decisionSetHash: r.decisionSetHash },
+      provenance: { sourceKind: 'statsig', sourceAlias: snapshot.source.alias, statsigType: 'segment', statsigId: seg.id, ...(seg.version !== undefined ? { statsigVersion: seg.version } : {}), statsigFingerprint: r.statsigFingerprint, decisionSetHash: r.decisionSetHash },
     });
     return { ok: true, stepId };
   };
@@ -360,7 +375,7 @@ export function planMigration(req: PlanRequest): Plan {
       statsigEnv,
       variations: r.shell.variations.map((v) => v.value),
       desired: r.env,
-      provenance: { sourceAlias: snapshot.source.alias, statsigType: 'gate', statsigId: gate.id, ...(gate.version !== undefined ? { statsigVersion: gate.version } : {}), statsigFingerprint: r.statsigFingerprint, decisionSetHash: r.decisionSetHash },
+      provenance: { sourceKind: 'statsig', sourceAlias: snapshot.source.alias, statsigType: 'gate', statsigId: gate.id, ...(gate.version !== undefined ? { statsigVersion: gate.version } : {}), statsigFingerprint: r.statsigFingerprint, decisionSetHash: r.decisionSetHash },
     });
     return { ok: true, stepId };
   };
@@ -473,7 +488,7 @@ export function planMigration(req: PlanRequest): Plan {
       statsigEnv,
       variations: r.shell.variations.map((v) => v.value),
       desired: r.env,
-      provenance: { sourceAlias: snapshot.source.alias, statsigType: 'config', statsigId: config.id, ...(config.version !== undefined ? { statsigVersion: config.version } : {}), statsigFingerprint: r.statsigFingerprint, decisionSetHash: r.decisionSetHash },
+      provenance: { sourceKind: 'statsig', sourceAlias: snapshot.source.alias, statsigType: 'config', statsigId: config.id, ...(config.version !== undefined ? { statsigVersion: config.version } : {}), statsigFingerprint: r.statsigFingerprint, decisionSetHash: r.decisionSetHash },
     });
   };
 
@@ -508,7 +523,7 @@ export function planMigration(req: PlanRequest): Plan {
       exists: !!ldMetric,
       adopt,
       desired,
-      provenance: { sourceAlias: snapshot.source.alias, statsigType: 'metric', statsigId: desired.eventKey, statsigFingerprint: owner.statsigFingerprint, decisionSetHash: owner.decisionSetHash },
+      provenance: { sourceKind: 'statsig', sourceAlias: snapshot.source.alias, statsigType: 'metric', statsigId: desired.eventKey, statsigFingerprint: owner.statsigFingerprint, decisionSetHash: owner.decisionSetHash },
     });
     return { ok: true, stepId };
   };
@@ -607,7 +622,7 @@ export function planMigration(req: PlanRequest): Plan {
     if (r.unresolved.length) return void finishItem(item, 'blocked', `${r.unresolved.length} open decision${r.unresolved.length === 1 ? '' : 's'}`);
     if (depProblems.length) return void finishItem(item, 'blocked', `depends on: ${depProblems.join('; ')}`);
 
-    const provenance: Provenance = { sourceAlias: snapshot.source.alias, statsigType: 'autotune', statsigId: a.id, ...(a.version !== undefined ? { statsigVersion: a.version } : {}), statsigFingerprint: r.statsigFingerprint, decisionSetHash: r.decisionSetHash };
+    const provenance: Provenance = { sourceKind: 'statsig', sourceAlias: snapshot.source.alias, statsigType: 'autotune', statsigId: a.id, ...(a.version !== undefined ? { statsigVersion: a.version } : {}), statsigFingerprint: r.statsigFingerprint, decisionSetHash: r.decisionSetHash };
     const shellId = `shell:${r.flagKey}`;
     if (!steps.has(shellId)) steps.set(shellId, { id: shellId, deps: [], op: 'upsert_flag_shell', key: r.flagKey, exists: !!ldFlag, adopt, desired: r.shell });
     const envId = `env:${ldEnv}:${r.flagKey}`;
@@ -616,6 +631,139 @@ export function planMigration(req: PlanRequest): Plan {
       const banditId = `bandit:${ldEnv}:${r.bandit.key}`;
       steps.set(banditId, { id: banditId, deps: [envId, ...depSteps], op: 'create_bandit', key: r.bandit.key, ldEnv, statsigEnv, flagKey: r.flagKey, exists: banditExists, adopt: banditAdopt, desired: r.bandit, provenance });
     }
+  };
+
+  // --- Neutral (LD-source) flags and segments, PLAN §20 -----------------------------------------
+  const neutralFlagsByUid = new Map(req.snapshots.flatMap((s) => (s.neutral?.flags ?? []).map((f) => [f.uid, { flag: f, snapshot: s }] as const)));
+  const neutralSegmentsByUid = new Map(req.snapshots.flatMap((s) => (s.neutral?.segments ?? []).map((g) => [g.uid, { segment: g, snapshot: s }] as const)));
+  const segmentsByUid = new Map(req.snapshots.flatMap((s) => s.segments.map((g) => [g.uid, { segment: g, snapshot: s }] as const)));
+
+  const planNeutralSegment = (snapshot: CanonicalSnapshot, key: string, sourceEnv: string, ldEnv: string, requiredBy: string | null): { stepId?: string; ok: boolean; reason?: string } => {
+    const seg = snapshot.neutral?.segments.find((g) => g.key === key);
+    if (!seg) return { ok: false, reason: `segment “${key}” not found` };
+    const itemKey = `${seg.uid}|${ldEnv}`;
+    const existing = items.get(itemKey);
+    if (existing) {
+      if (requiredBy) existing.requiredBy.push(requiredBy);
+      else existing.dependency = false;
+      return existing.status === 'ready' ? { ok: true, stepId: `segment:${ldEnv}:${existing.ldKey}` } : { ok: false, reason: `segment “${key}” is ${existing.status}` };
+    }
+    const r: NeutralSegmentMapResult = mapNeutralSegment({ canonical: { snapshot }, entity: seg, profile: req.profile, resolutions: req.resolutions, capabilities: req.capabilities, env: { statsig: sourceEnv, ld: ldEnv }, now: req.now });
+    const ldSeg = req.ld.segments[ldEnv]?.get(r.segmentKey);
+    const item: PlanItem = { uid: seg.uid, kind: 'segment', entityId: seg.key, sourceId: snapshot.source.sourceId, ldKey: r.segmentKey, ldEnv, statsigEnv: sourceEnv, status: 'ready', dependency: requiredBy !== null, requiredBy: requiredBy ? [requiredBy] : [], fidelity: r.fidelity, decisions: [], exists: !!ldSeg };
+    items.set(itemKey, item);
+    addDecisions(item, r.unresolved, r.stale);
+    if (r.skipped || !r.desired) {
+      if (r.unresolved.length) return finishItem(item, 'blocked', `${r.unresolved.length} open decision${r.unresolved.length === 1 ? '' : 's'}`);
+      return finishItem(item, 'skipped', r.skipped ?? 'not migratable');
+    }
+    let adopt = false;
+    if (ldSeg && !ownsSegment(ldSeg, snapshot.source.alias)) {
+      const c = collision(item, { sourceId: snapshot.source.sourceId, kind: 'segment', uid: seg.uid, id: seg.key }, r.segmentKey, 'segment', ldEnv);
+      if (c === 'skip') return finishItem(item, 'skipped', `LD segment “${r.segmentKey}” exists and was not adopted`);
+      if (c === 'open') return finishItem(item, 'blocked', `LD segment “${r.segmentKey}” already exists`);
+      adopt = true;
+    }
+    if (r.unresolved.length) return finishItem(item, 'blocked', `${r.unresolved.length} open decision${r.unresolved.length === 1 ? '' : 's'}`);
+    const stepId = `segment:${ldEnv}:${r.segmentKey}`;
+    const version = seg.environments.find((e) => e.env === sourceEnv)?.version;
+    steps.set(stepId, {
+      id: stepId,
+      deps: ensureKinds(r.dependencies, migrationKindOf(snapshot.source.sourceKind)),
+      op: 'upsert_segment',
+      ldEnv,
+      key: r.segmentKey,
+      exists: !!ldSeg,
+      adopt,
+      desired: r.desired,
+      provenance: { sourceKind: migrationKindOf(snapshot.source.sourceKind), sourceAlias: snapshot.source.alias, statsigType: 'segment', statsigId: seg.key, ...(version !== undefined ? { statsigVersion: version } : {}), statsigFingerprint: r.statsigFingerprint, decisionSetHash: r.decisionSetHash },
+    });
+    return { ok: true, stepId };
+  };
+
+  const planNeutralFlag = (flag: NeutralFlag, snapshot: CanonicalSnapshot, ldEnv: string, requiredBy: string | null, stack: string[]): { ok: boolean; reason?: string; stepId?: string } => {
+    const itemKey = `${flag.uid}|${ldEnv}`;
+    const existing = items.get(itemKey);
+    if (existing) {
+      if (requiredBy) existing.requiredBy.push(requiredBy);
+      if (stack.includes(flag.uid)) {
+        errors.push(`Prerequisites form a cycle: ${[...stack, flag.uid].map((u) => neutralFlagsByUid.get(u)?.flag.key ?? u).join(' → ')}.`);
+        return { ok: false, reason: 'prerequisite cycle' };
+      }
+      return existing.status === 'ready' ? { ok: true, stepId: `env:${ldEnv}:${existing.ldKey}` } : { ok: false, reason: `flag “${flag.key}” is ${existing.status}` };
+    }
+    const sourceEnv = envFor(snapshot.source.sourceId, ldEnv);
+    const item: PlanItem = { uid: flag.uid, kind: 'flag', entityId: flag.key, sourceId: snapshot.source.sourceId, ldKey: flag.key, ldEnv, status: 'ready', dependency: requiredBy !== null, requiredBy: requiredBy ? [requiredBy] : [], decisions: [], exists: false };
+    items.set(itemKey, item);
+    if (!sourceEnv) return finishItem(item, 'error', `no environment of ${snapshot.source.alias} is mapped to LD “${ldEnv}”`);
+    item.statsigEnv = sourceEnv;
+
+    const r: NeutralFlagMapResult = mapNeutralFlag({ canonical: { snapshot }, entity: flag, profile: req.profile, resolutions: req.resolutions, capabilities: req.capabilities, env: { statsig: sourceEnv, ld: ldEnv }, now: req.now });
+    item.ldKey = r.flagKey;
+    item.fidelity = r.fidelity;
+    addDecisions(item, r.unresolved, r.stale);
+    if (r.skipped) return finishItem(item, 'skipped', r.skipped);
+
+    const ldFlag = req.ld.flags.get(r.flagKey);
+    item.exists = !!ldFlag;
+    let adopt = false;
+    const other = shellOwner.get(r.flagKey);
+    if (other && other !== flag.uid) return finishItem(item, 'error', `${describeOwner(other)} also produces LD key “${r.flagKey}” (migrate one source at a time; consolidation arrives in M8)`);
+    shellOwner.set(r.flagKey, flag.uid);
+    if (ldFlag) {
+      const owner = flagOwner(ldFlag);
+      if (owner && (owner.id !== flag.key || owner.source !== snapshot.source.alias)) return finishItem(item, 'error', `LD flag “${r.flagKey}” was migrated from ${owner.source}/${owner.id}; consolidation arrives in M8`);
+      if (ldFlag.kind && ldFlag.kind !== r.flagKind) return finishItem(item, 'error', `LD flag “${r.flagKey}” exists and is a ${ldFlag.kind} flag, the source flag is ${r.flagKind}`);
+      if (!owner) {
+        const c = collision(item, { sourceId: snapshot.source.sourceId, kind: 'flag', uid: flag.uid, id: flag.key }, r.flagKey, 'flag', 'flag key');
+        if (c === 'skip') return finishItem(item, 'skipped', `LD flag “${r.flagKey}” exists and was not adopted`);
+        if (c === 'open') return finishItem(item, 'blocked', `LD flag “${r.flagKey}” already exists`);
+        adopt = true;
+      } else if (r.flagKind === 'multivariate') {
+        const g = variationGuard(item, { sourceId: snapshot.source.sourceId, kind: 'flag', uid: flag.uid, id: flag.key }, ldFlag, r.shell, ldEnv);
+        if (g === 'skip') return finishItem(item, 'skipped', `new variations for “${r.flagKey}” were not appended`);
+        if (g === 'open') return finishItem(item, 'blocked', `new variations affect environments already migrated`);
+      }
+    }
+
+    const depSteps: string[] = ensureKinds(r.dependencies, migrationKindOf(snapshot.source.sourceKind));
+    const depProblems: string[] = [];
+    for (const d of r.dependencies) {
+      if (d.kind === 'segment') {
+        const sg = planNeutralSegment(snapshot, d.entityId ?? d.key, sourceEnv, ldEnv, flag.uid);
+        if (sg.ok && sg.stepId) depSteps.push(sg.stepId);
+        else depProblems.push(sg.reason ?? `segment ${d.key}`);
+      } else if (d.kind === 'flag') {
+        const ref = snapshot.neutral?.flags.find((f) => f.key === d.entityId);
+        if (!ref) {
+          depProblems.push(`prerequisite flag “${d.entityId}” not found`);
+          continue;
+        }
+        const p = planNeutralFlag(ref, snapshot, ldEnv, flag.uid, [...stack, flag.uid]);
+        if (p.ok && p.stepId) depSteps.push(p.stepId);
+        else depProblems.push(`prerequisite ${p.reason ?? d.key}`);
+      }
+    }
+
+    if (r.unresolved.length) return finishItem(item, 'blocked', `${r.unresolved.length} open decision${r.unresolved.length === 1 ? '' : 's'}`);
+    if (depProblems.length) return finishItem(item, 'blocked', `depends on: ${depProblems.join('; ')}`);
+
+    const shellId = `shell:${r.flagKey}`;
+    if (!steps.has(shellId)) steps.set(shellId, { id: shellId, deps: [], op: 'upsert_flag_shell', key: r.flagKey, exists: !!ldFlag, adopt, desired: r.shell });
+    const stepId = `env:${ldEnv}:${r.flagKey}`;
+    const version = flag.environments.find((e) => e.env === sourceEnv)?.version ?? flag.version;
+    steps.set(stepId, {
+      id: stepId,
+      deps: [shellId, ...depSteps],
+      op: 'update_flag_env',
+      key: r.flagKey,
+      ldEnv,
+      statsigEnv: sourceEnv,
+      variations: r.shell.variations.map((v) => v.value),
+      desired: r.env,
+      provenance: { sourceKind: migrationKindOf(snapshot.source.sourceKind), sourceAlias: snapshot.source.alias, statsigType: 'flag', statsigId: flag.key, ...(version !== undefined ? { statsigVersion: version } : {}), statsigFingerprint: r.statsigFingerprint, decisionSetHash: r.decisionSetHash },
+    });
+    return { ok: true, stepId };
   };
 
   const configsByUid = new Map(req.snapshots.flatMap((s) => s.configs.map((c) => [c.uid, c] as const)));
@@ -650,6 +798,30 @@ export function planMigration(req: PlanRequest): Plan {
       }
       planAutotune(a, ldEnv);
     }
+    for (const uid of req.flags ?? []) {
+      const f = neutralFlagsByUid.get(uid);
+      if (!f) {
+        errors.push(`Flag ${uid} is not in the current snapshots.`);
+        continue;
+      }
+      planNeutralFlag(f.flag, f.snapshot, ldEnv, null, []);
+    }
+    for (const uid of req.segments ?? []) {
+      const n = neutralSegmentsByUid.get(uid);
+      const st = segmentsByUid.get(uid);
+      const snapshot = n?.snapshot ?? st?.snapshot;
+      if (!snapshot) {
+        errors.push(`Segment ${uid} is not in the current snapshots.`);
+        continue;
+      }
+      const sourceEnv = envFor(snapshot.source.sourceId, ldEnv);
+      if (!sourceEnv) {
+        errors.push(`No environment of ${snapshot.source.alias} is mapped to LD “${ldEnv}”, so segment ${uid} cannot be planned there.`);
+        continue;
+      }
+      if (n) planNeutralSegment(snapshot, n.segment.key, sourceEnv, ldEnv, null);
+      else if (st) planSegment(snapshot, st.segment.id, sourceEnv, ldEnv, null);
+    }
   }
 
   // A step whose dependency was dropped (blocked item) can't run either.
@@ -665,11 +837,12 @@ export function planMigration(req: PlanRequest): Plan {
   }
   // Drop dependencies nothing needs any more: shells whose environment steps were removed, and
   // segments / context kinds whose only dependents are blocked (they'd be written for nothing).
+  const requestedSegmentSteps = new Set([...items.values()].filter((i) => i.kind === 'segment' && !i.dependency && i.status === 'ready').map((i) => `segment:${i.ldEnv}:${i.ldKey}`));
   changed = true;
   while (changed) {
     changed = false;
     for (const [id, s] of steps) {
-      if (s.op === 'update_flag_env' || s.op === 'create_bandit' || [...steps.values()].some((x) => x.deps.includes(id))) continue;
+      if (s.op === 'update_flag_env' || s.op === 'create_bandit' || requestedSegmentSteps.has(id) || [...steps.values()].some((x) => x.deps.includes(id))) continue;
       steps.delete(id);
       changed = true;
     }

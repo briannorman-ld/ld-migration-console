@@ -4,13 +4,15 @@
  * this module wires them to the store, the LD session and the StatSig source.
  */
 import { useSyncExternalStore } from "react";
-import type { Autotune, CanonicalSnapshot, Config, Gate, Segment } from "@sslm/canonical";
+import type { Autotune, CanonicalSnapshot, Config, Gate, NeutralFlag, NeutralSegment, Segment } from "@sslm/canonical";
 import { Executor, newRun, type RunRecord } from "@sslm/executor";
 import type { CapabilityMatrix, LdFlagSummary } from "@sslm/ld-client";
 import {
   mapAutotune,
   mapConfig,
   mapGate,
+  mapNeutralFlag,
+  mapNeutralSegment,
   mapSegment,
   reconcileProfile,
   type AutotuneMapResult,
@@ -22,6 +24,8 @@ import {
   type IdLists,
   type MapperCapabilities,
   type MappingProfile,
+  type NeutralFlagMapResult,
+  type NeutralSegmentMapResult,
   type Resolution,
   type SegmentMapResult,
 } from "@sslm/mapper";
@@ -217,6 +221,15 @@ export function mapAutotuneFor(snapshot: CanonicalSnapshot, autotune: Autotune, 
   );
 }
 
+/** Neutral (LD-source) flag → desired LD flag (PLAN §20), memoized like the StatSig mappers. */
+export function mapNeutralFlagFor(snapshot: CanonicalSnapshot, flag: NeutralFlag, env: EnvTarget, i: MappingInputs): NeutralFlagMapResult {
+  return memoized(i, snapshot, memoKey("flag", flag.uid, env), () => mapNeutralFlag({ canonical: { snapshot }, entity: flag, profile: i.profile, resolutions: i.resolutions, capabilities: i.capabilities, env, now: i.now }));
+}
+
+export function mapNeutralSegmentFor(snapshot: CanonicalSnapshot, segment: NeutralSegment, env: EnvTarget, i: MappingInputs): NeutralSegmentMapResult {
+  return memoized(i, snapshot, memoKey("nsegment", segment.uid, env), () => mapNeutralSegment({ canonical: { snapshot }, entity: segment, profile: i.profile, resolutions: i.resolutions, capabilities: i.capabilities, env, now: i.now }));
+}
+
 export interface DecisionInstance {
   decision: DecisionPoint;
   /** Where it was raised: which entity and environments. */
@@ -261,6 +274,8 @@ export function collectDecisions(
         ...snap.configs.filter((c) => !c.archived).map((c) => mapConfigFor(snap, c, env, i)),
         ...snap.segments.filter((s) => !s.archived).map((s) => mapSegmentFor(snap, s, env, i)),
         ...snap.autotunes.filter((a) => !a.archived).map((a) => mapAutotuneFor(snap, a, env, i)),
+        ...(snap.neutral?.flags ?? []).filter((f) => !f.archived).map((f) => mapNeutralFlagFor(snap, f, env, i)),
+        ...(snap.neutral?.segments ?? []).filter((s) => !s.archived).map((s) => mapNeutralSegmentFor(snap, s, env, i)),
       ];
       for (const r of results) {
         const staleById = new Map(
@@ -353,14 +368,22 @@ export interface MigrationSelection {
   gates: string[];
   configs?: string[];
   autotunes: string[];
+  /** Neutral (LD-source) flag uids, PLAN §20. */
+  flags?: string[];
+  /** Segment uids chosen on their own (LD-source segments). */
+  segments?: string[];
 }
 
 export function describeSelection(sel: MigrationSelection): string {
   const configs = sel.configs ?? [];
+  const flags = sel.flags ?? [];
+  const segments = sel.segments ?? [];
   const parts = [
     sel.gates.length ? `${sel.gates.length} gate${sel.gates.length === 1 ? "" : "s"}` : "",
     configs.length ? `${configs.length} dynamic config${configs.length === 1 ? "" : "s"}` : "",
     sel.autotunes.length ? `${sel.autotunes.length} autotune${sel.autotunes.length === 1 ? "" : "s"}` : "",
+    flags.length ? `${flags.length} flag${flags.length === 1 ? "" : "s"}` : "",
+    segments.length ? `${segments.length} segment${segments.length === 1 ? "" : "s"}` : "",
   ].filter(Boolean);
   return parts.join(" and ") || "nothing";
 }
@@ -370,6 +393,8 @@ export function buildPlan(input: { selection: MigrationSelection; ldEnvs: string
     gates: input.selection.gates,
     configs: input.selection.configs ?? [],
     autotunes: input.selection.autotunes,
+    flags: input.selection.flags ?? [],
+    segments: input.selection.segments ?? [],
     ldEnvs: input.ldEnvs,
     snapshots: input.snapshots,
     idLists: input.idLists,

@@ -126,7 +126,7 @@ export function monitorRows(input: MonitorInput): MonitorRow[] {
   for (const flag of input.ldFlags.values()) {
     const owner = flagOwner(flag);
     if (!owner || seen.has(`${owner.source}/${owner.id}`) || !knownSources.has(owner.source)) continue;
-    const kind = owner.type === 'config' || owner.type === 'autotune' ? owner.type : 'gate';
+    const kind = owner.type === 'config' || owner.type === 'autotune' || owner.type === 'flag' ? owner.type : 'gate';
     for (const ldEnv of syncedEnvsOf(flag.customProperties)) {
       const sync = readSync(flag.customProperties, ldEnv)!;
       const k = itemKey(flag.key, ldEnv);

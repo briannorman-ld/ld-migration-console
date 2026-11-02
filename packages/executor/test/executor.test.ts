@@ -131,7 +131,7 @@ const env = (key: string, deps: string[] = [`shell:${key}`]): PlanStep => ({
   statsigEnv: 'staging',
   variations: [true, false],
   desired: desiredEnv,
-  provenance: { sourceAlias: 'web', statsigType: 'gate', statsigId: key, statsigVersion: 3, statsigFingerprint: 'fp', decisionSetHash: 'dh' },
+  provenance: { sourceKind: 'statsig', sourceAlias: 'web', statsigType: 'gate', statsigId: key, statsigVersion: 3, statsigFingerprint: 'fp', decisionSetHash: 'dh' },
 });
 
 function setup(client: LdWriter, steps: PlanStep[]) {
@@ -443,7 +443,7 @@ describe('big segments (PLAN §8.3 big_segment)', () => {
     exists: false,
     adopt: false,
     desired: { key: 'fraud_blocklist', ldEnv: 'test', statsigEnv: 'staging', name: 'Fraud blocklist', description: '', tags: ['migrated-from-statsig', 'migration-src-web'], rules: [], included: [], includedContexts: [], unbounded: { contextKind: 'user', ids } },
-    provenance: { sourceAlias: 'web', statsigType: 'segment', statsigId: 'fraud_blocklist', statsigFingerprint: 'fp', decisionSetHash: 'dh' },
+    provenance: { sourceKind: 'statsig', sourceAlias: 'web', statsigType: 'segment', statsigId: 'fraud_blocklist', statsigFingerprint: 'fp', decisionSetHash: 'dh' },
   };
   const withSegments = () => {
     const segments = new Map<string, Record<string, unknown>>();
@@ -455,6 +455,24 @@ describe('big segments (PLAN §8.3 big_segment)', () => {
     });
     return { ld, segments };
   };
+
+  it('an LD-source big segment is created without an import, and its sync comment names LaunchDarkly', async () => {
+    const { ld, segments } = withSegments();
+    const ex = new Executor({ client: ld.client, projectKey: 'p', journal: { save: async () => undefined }, sleep: async () => undefined, now: () => new Date('2026-10-30T00:00:00Z') });
+    const step: PlanStep = {
+      ...big,
+      id: 'segment:test:legacy-fraud-blocklist',
+      key: 'legacy-fraud-blocklist',
+      desired: { ...big.desired, key: 'legacy-fraud-blocklist', statsigEnv: 'test', tags: ['migrated-from-launchdarkly', 'migration-src-legacy'], unbounded: { contextKind: 'user', ids: [], manual: true } },
+      provenance: { sourceKind: 'launchdarkly', sourceAlias: 'legacy', statsigType: 'segment', statsigId: 'legacy-fraud-blocklist', statsigFingerprint: 'fp', decisionSetHash: 'dh' },
+    };
+    const out = await ex.run(newRun({ id: 'r', workspaceId: 'w', projectKey: 'p', label: 'ld', dryRun: false, steps: [step], now: new Date() }));
+    expect(out.status).toBe('done');
+    expect(segments.get('legacy-fraud-blocklist')).toMatchObject({ unbounded: true });
+    expect(ld.imports).toEqual([]);
+    expect(out.steps[0]!.message).toMatch(/without members: import the member list yourself/);
+    expect(out.steps[0]!.import).toBeUndefined();
+  });
 
   it('creates an unbounded segment, patches only metadata, imports the CSV in replace mode and confirms membership on a sample', async () => {
     const { ld, segments } = withSegments();
@@ -530,7 +548,7 @@ describe('segment approval instructions', () => {
       exists: true,
       adopt: false,
       desired: { key: 'beta', ldEnv: 'test', statsigEnv: 'staging', name: 'beta', description: '', tags: ['migrated-from-statsig', 'migration-src-web'], rules: [], included: ['u1'], includedContexts: [] },
-      provenance: { sourceAlias: 'web', statsigType: 'segment', statsigId: 'beta', statsigFingerprint: 'fp', decisionSetHash: 'dh' },
+      provenance: { sourceKind: 'statsig', sourceAlias: 'web', statsigType: 'segment', statsigId: 'beta', statsigFingerprint: 'fp', decisionSetHash: 'dh' },
     };
     const { ex, run } = setup(ld.client, [step]);
     const out = await ex.run(run);
@@ -560,7 +578,7 @@ describe('segment provenance footer', () => {
       exists: false,
       adopt: false,
       desired: { key: 'promo_click', name: 'promo_click', description: '', kind: 'custom', eventKey: 'promo_click', isNumeric: false, successCriteria: 'HigherThanBaseline', tags: ['migrated-from-statsig', 'migration-src-web'], analysisUnits: ['user'] },
-      provenance: { sourceAlias: 'web', statsigType: 'metric', statsigId: 'promo_click', statsigFingerprint: 'fp', decisionSetHash: 'dh' },
+      provenance: { sourceKind: 'statsig', sourceAlias: 'web', statsigType: 'metric', statsigId: 'promo_click', statsigFingerprint: 'fp', decisionSetHash: 'dh' },
     };
     const unit: PlanStep = { id: 'randomization_unit:company', deps: [], op: 'ensure_randomization_unit', key: 'company' };
     const bandit = (key: string): PlanStep => ({
@@ -591,7 +609,7 @@ describe('segment provenance footer', () => {
         reallocationFrequencyMillis: 3_600_000,
         tags: ['migrated-from-statsig', 'migration-src-web'],
       },
-      provenance: { sourceAlias: 'web', statsigType: 'autotune', statsigId: key, statsigVersion: 2, statsigFingerprint: 'fp', decisionSetHash: 'dh' },
+      provenance: { sourceKind: 'statsig', sourceAlias: 'web', statsigType: 'autotune', statsigId: key, statsigVersion: 2, statsigFingerprint: 'fp', decisionSetHash: 'dh' },
     });
     const jsonFlag = (ld: ReturnType<typeof fakeLd>, key: string): LdFlag => ({
       ...ld.flag(key, { tags: ['migrated-from-statsig', 'migration-src-web'], customProperties: { 'migration.id': { name: 'StatSig ID', value: [key] }, 'migration.source': { name: 'StatSig source', value: ['web'] } } }),
@@ -668,5 +686,11 @@ describe('segment provenance footer', () => {
     const once = withFooter('VIPs', f);
     expect(withFooter(once, f)).toBe(once);
     expect(parseFooter(once)).toEqual({ from: 'statsig', src: 'web', id: 'vip', fp: 'abc', d: 'd', at: '2026-10-22T00:00:00.000Z' });
+  });
+
+  it('writes the source kind into the footer for an LD-source segment (PLAN §20.3)', () => {
+    const f = footer({ sourceKind: 'launchdarkly', sourceAlias: 'legacy', statsigId: 'legacy-beta-orgs', statsigFingerprint: 'abc', decisionSetHash: 'd' }, new Date('2026-10-30T00:00:00Z'));
+    expect(f).toBe('[ld-migration: from=launchdarkly; src=legacy; id=legacy-beta-orgs; fp=abc; d=d; at=2026-10-30T00:00:00.000Z]');
+    expect(parseFooter(withFooter('Beta orgs', f))?.from).toBe('launchdarkly');
   });
 });

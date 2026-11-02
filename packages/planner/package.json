@@ -4,11 +4,17 @@
   "private": true,
   "type": "module",
   "description": "Migration planner: dependency closure, ordering, operations (M3).",
-  "exports": { ".": "./src/index.ts" },
-  "dependencies": {"@sslm/canonical": "workspace:*", "@sslm/mapper": "workspace:*"},
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@sslm/canonical": "workspace:*",
+    "@sslm/mapper": "workspace:*"
+  },
   "devDependencies": {
     "@sslm/adapters": "workspace:*",
     "@sslm/demo-fixtures": "workspace:*",
-    "@sslm/statsig-client": "workspace:*"
+    "@sslm/statsig-client": "workspace:*",
+    "@sslm/ld-client": "workspace:*"
   }
 }

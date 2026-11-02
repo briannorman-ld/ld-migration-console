@@ -1,0 +1,701 @@
+{
+  "flags": [
+    {
+      "flag": "legacy-archived-promo",
+      "flagKind": "boolean",
+      "skipped": "archived in the source project",
+      "fidelity": "skipped",
+      "notes": [
+        "skipped: Not migrated: archived in the source project."
+      ],
+      "decisions": [],
+      "dependencies": []
+    },
+    {
+      "flag": "legacy-checkout-redesign",
+      "flagKind": "boolean",
+      "fidelity": "partial",
+      "notes": [
+        "partial: 30% / 70% rollout re-buckets contexts (new flag, new salt). [default rule]"
+      ],
+      "decisions": [
+        "choice copy_custom_properties (custom properties) → copy",
+        "acknowledge partial_rollout_rebucket (default rule) → acknowledge"
+      ],
+      "dependencies": [
+        "segment:legacy-beta-orgs"
+      ],
+      "shell": {
+        "tags": [
+          "migrated-from-launchdarkly",
+          "migration-src-legacy",
+          "checkout",
+          "legacy"
+        ],
+        "variations": [
+          {
+            "value": true,
+            "name": "On"
+          },
+          {
+            "value": false,
+            "name": "Off"
+          }
+        ],
+        "customProperties": [
+          "jira.issue",
+          "migration.id",
+          "migration.kind",
+          "migration.source",
+          "migration.type",
+          "migration.version"
+        ],
+        "clientSideAvailability": {
+          "usingEnvironmentId": true,
+          "usingMobileKey": true
+        },
+        "temporary": true
+      },
+      "env": {
+        "ldEnv": "production",
+        "statsigEnv": "production",
+        "on": true,
+        "offVariation": 1,
+        "fallthrough": {
+          "rollout": {
+            "contextKind": "user",
+            "variations": [
+              {
+                "variation": 0,
+                "weight": 30000
+              },
+              {
+                "variation": 1,
+                "weight": 70000
+              }
+            ]
+          }
+        },
+        "rules": [
+          {
+            "description": "Beta organizations",
+            "clauses": [
+              {
+                "contextKind": "organization",
+                "attribute": "key",
+                "op": "segmentMatch",
+                "values": [
+                  "legacy-beta-orgs"
+                ],
+                "negate": false
+              }
+            ],
+            "variation": 0
+          }
+        ],
+        "targets": [],
+        "prerequisites": []
+      }
+    },
+    {
+      "flag": "legacy-cta-copy",
+      "flagKind": "multivariate",
+      "fidelity": "partial",
+      "notes": [
+        "partial: 50% / 50% rollout re-buckets contexts (new flag, new salt). [default rule]",
+        "full: Event tracking for the default rule is on in the source project; not copied.",
+        "full: Deprecated in the source project. Consider retiring it instead of migrating.",
+        "partial: 1 experiment runs on this flag in the source project (legacy-cta-copy-test); experiments are not migrated (PLAN §11)."
+      ],
+      "decisions": [
+        "acknowledge partial_rollout_rebucket (default rule) → acknowledge"
+      ],
+      "dependencies": [],
+      "shell": {
+        "tags": [
+          "migrated-from-launchdarkly",
+          "migration-src-legacy",
+          "experiment"
+        ],
+        "variations": [
+          {
+            "value": "Buy now",
+            "name": "Buy now"
+          },
+          {
+            "value": "Checkout",
+            "name": "Checkout"
+          }
+        ],
+        "customProperties": [
+          "migration.id",
+          "migration.kind",
+          "migration.source",
+          "migration.type",
+          "migration.version"
+        ],
+        "clientSideAvailability": {
+          "usingEnvironmentId": false,
+          "usingMobileKey": false
+        },
+        "temporary": true
+      },
+      "env": {
+        "ldEnv": "production",
+        "statsigEnv": "production",
+        "on": true,
+        "offVariation": 0,
+        "fallthrough": {
+          "rollout": {
+            "contextKind": "user",
+            "variations": [
+              {
+                "variation": 0,
+                "weight": 50000
+              },
+              {
+                "variation": 1,
+                "weight": 50000
+              }
+            ]
+          }
+        },
+        "rules": [],
+        "targets": [],
+        "prerequisites": []
+      }
+    },
+    {
+      "flag": "legacy-fraud-shield",
+      "flagKind": "boolean",
+      "fidelity": "full",
+      "notes": [],
+      "decisions": [],
+      "dependencies": [
+        "segment:legacy-fraud-blocklist"
+      ],
+      "shell": {
+        "tags": [
+          "migrated-from-launchdarkly",
+          "migration-src-legacy",
+          "risk"
+        ],
+        "variations": [
+          {
+            "value": true,
+            "name": "Allow"
+          },
+          {
+            "value": false,
+            "name": "Block"
+          }
+        ],
+        "customProperties": [
+          "migration.id",
+          "migration.kind",
+          "migration.source",
+          "migration.type",
+          "migration.version"
+        ],
+        "clientSideAvailability": {
+          "usingEnvironmentId": false,
+          "usingMobileKey": false
+        },
+        "temporary": false
+      },
+      "env": {
+        "ldEnv": "production",
+        "statsigEnv": "production",
+        "on": true,
+        "offVariation": 0,
+        "fallthrough": {
+          "variation": 0
+        },
+        "rules": [
+          {
+            "description": "Blocklisted users",
+            "clauses": [
+              {
+                "contextKind": "user",
+                "attribute": "key",
+                "op": "segmentMatch",
+                "values": [
+                  "legacy-fraud-blocklist"
+                ],
+                "negate": false
+              }
+            ],
+            "variation": 1
+          }
+        ],
+        "targets": [],
+        "prerequisites": []
+      }
+    },
+    {
+      "flag": "legacy-ios-min-version",
+      "flagKind": "boolean",
+      "fidelity": "full",
+      "notes": [],
+      "decisions": [
+        "choice unit_type_kind (device) → create:device"
+      ],
+      "dependencies": [
+        "context_kind:device"
+      ],
+      "shell": {
+        "tags": [
+          "migrated-from-launchdarkly",
+          "migration-src-legacy",
+          "mobile"
+        ],
+        "variations": [
+          {
+            "value": true,
+            "name": "On"
+          },
+          {
+            "value": false,
+            "name": "Off"
+          }
+        ],
+        "customProperties": [
+          "migration.id",
+          "migration.kind",
+          "migration.source",
+          "migration.type",
+          "migration.version"
+        ],
+        "clientSideAvailability": {
+          "usingEnvironmentId": false,
+          "usingMobileKey": true
+        },
+        "temporary": true
+      },
+      "env": {
+        "ldEnv": "production",
+        "statsigEnv": "production",
+        "on": false,
+        "offVariation": 1,
+        "fallthrough": {
+          "variation": 1
+        },
+        "rules": [
+          {
+            "description": "App 4.2+ not on iPadOS",
+            "clauses": [
+              {
+                "contextKind": "device",
+                "attribute": "appVersion",
+                "op": "semVerGreaterThan",
+                "values": [
+                  "4.2.0"
+                ],
+                "negate": false
+              },
+              {
+                "contextKind": "device",
+                "attribute": "os",
+                "op": "in",
+                "values": [
+                  "ipados"
+                ],
+                "negate": true
+              }
+            ],
+            "variation": 0
+          }
+        ],
+        "targets": [],
+        "prerequisites": []
+      }
+    },
+    {
+      "flag": "legacy-kill-switch",
+      "flagKind": "boolean",
+      "fidelity": "full",
+      "notes": [
+        "full: Maintainer (ops@acme-legacy.example) not carried: member and team identities belong to the source account. [flag settings]"
+      ],
+      "decisions": [],
+      "dependencies": [],
+      "shell": {
+        "tags": [
+          "migrated-from-launchdarkly",
+          "migration-src-legacy",
+          "ops"
+        ],
+        "variations": [
+          {
+            "value": true,
+            "name": "On"
+          },
+          {
+            "value": false,
+            "name": "Off"
+          }
+        ],
+        "customProperties": [
+          "migration.id",
+          "migration.kind",
+          "migration.source",
+          "migration.type",
+          "migration.version"
+        ],
+        "clientSideAvailability": {
+          "usingEnvironmentId": false,
+          "usingMobileKey": false
+        },
+        "temporary": false
+      },
+      "env": {
+        "ldEnv": "production",
+        "statsigEnv": "production",
+        "on": true,
+        "offVariation": 1,
+        "fallthrough": {
+          "variation": 0
+        },
+        "rules": [],
+        "targets": [],
+        "prerequisites": []
+      }
+    },
+    {
+      "flag": "legacy-pricing-tiers",
+      "flagKind": "multivariate",
+      "fidelity": "partial",
+      "notes": [
+        "partial: 50% / 50% rollout re-buckets contexts (new flag, new salt). [default rule]",
+        "full: Rule “Enterprise plan” tracks evaluation events in the source project (experimentation); event tracking is not copied. [rule “Enterprise plan”]",
+        "full: Prerequisites need an Enterprise plan; the target's plan is checked on the first write. [prerequisites]"
+      ],
+      "decisions": [
+        "acknowledge partial_rollout_rebucket (default rule) → acknowledge"
+      ],
+      "dependencies": [
+        "flag:legacy-checkout-redesign"
+      ],
+      "shell": {
+        "tags": [
+          "migrated-from-launchdarkly",
+          "migration-src-legacy",
+          "pricing"
+        ],
+        "variations": [
+          {
+            "value": "standard",
+            "name": "Standard"
+          },
+          {
+            "value": "plus",
+            "name": "Plus"
+          },
+          {
+            "value": "enterprise",
+            "name": "Enterprise"
+          }
+        ],
+        "customProperties": [
+          "migration.id",
+          "migration.kind",
+          "migration.source",
+          "migration.type",
+          "migration.version"
+        ],
+        "clientSideAvailability": {
+          "usingEnvironmentId": false,
+          "usingMobileKey": false
+        },
+        "temporary": false
+      },
+      "env": {
+        "ldEnv": "production",
+        "statsigEnv": "production",
+        "on": true,
+        "offVariation": 0,
+        "fallthrough": {
+          "rollout": {
+            "contextKind": "organization",
+            "bucketBy": "plan",
+            "variations": [
+              {
+                "variation": 0,
+                "weight": 50000
+              },
+              {
+                "variation": 1,
+                "weight": 50000
+              }
+            ]
+          }
+        },
+        "rules": [
+          {
+            "description": "Enterprise plan",
+            "clauses": [
+              {
+                "contextKind": "organization",
+                "attribute": "plan",
+                "op": "in",
+                "values": [
+                  "enterprise"
+                ],
+                "negate": false
+              }
+            ],
+            "variation": 2
+          }
+        ],
+        "targets": [],
+        "prerequisites": [
+          {
+            "key": "legacy-checkout-redesign",
+            "variation": 0
+          }
+        ]
+      }
+    },
+    {
+      "flag": "legacy-receipt-emails",
+      "flagKind": "boolean",
+      "fidelity": "partial",
+      "notes": [
+        "partial: Prerequisite “legacy-retired-gate” dropped (missing in the source project). [prerequisite “legacy-retired-gate”]"
+      ],
+      "decisions": [
+        "blocking missing_reference (prerequisite “legacy-retired-gate”) → no default"
+      ],
+      "dependencies": [],
+      "shell": {
+        "tags": [
+          "migrated-from-launchdarkly",
+          "migration-src-legacy",
+          "email"
+        ],
+        "variations": [
+          {
+            "value": true,
+            "name": "On"
+          },
+          {
+            "value": false,
+            "name": "Off"
+          }
+        ],
+        "customProperties": [
+          "migration.id",
+          "migration.kind",
+          "migration.source",
+          "migration.type",
+          "migration.version"
+        ],
+        "clientSideAvailability": {
+          "usingEnvironmentId": false,
+          "usingMobileKey": false
+        },
+        "temporary": true
+      },
+      "env": {
+        "ldEnv": "production",
+        "statsigEnv": "production",
+        "on": true,
+        "offVariation": 1,
+        "fallthrough": {
+          "variation": 0
+        },
+        "rules": [],
+        "targets": [],
+        "prerequisites": []
+      }
+    },
+    {
+      "flag": "legacy-theme",
+      "flagKind": "multivariate",
+      "fidelity": "full",
+      "notes": [
+        "full: 2 provenance tags from an earlier migration into the source project not copied."
+      ],
+      "decisions": [],
+      "dependencies": [],
+      "shell": {
+        "tags": [
+          "migrated-from-launchdarkly",
+          "migration-src-legacy",
+          "ui"
+        ],
+        "variations": [
+          {
+            "value": {
+              "theme": "light",
+              "contrast": 1
+            },
+            "name": "Light"
+          },
+          {
+            "value": {
+              "theme": "dark",
+              "contrast": 1.2
+            },
+            "name": "Dark"
+          }
+        ],
+        "customProperties": [
+          "migration.id",
+          "migration.kind",
+          "migration.source",
+          "migration.type",
+          "migration.version"
+        ],
+        "clientSideAvailability": {
+          "usingEnvironmentId": false,
+          "usingMobileKey": false
+        },
+        "temporary": true
+      },
+      "env": {
+        "ldEnv": "production",
+        "statsigEnv": "production",
+        "on": true,
+        "offVariation": 0,
+        "fallthrough": {
+          "variation": 0
+        },
+        "rules": [
+          {
+            "description": "Dark mode opt-in",
+            "clauses": [
+              {
+                "contextKind": "user",
+                "attribute": "prefersDark",
+                "op": "in",
+                "values": [
+                  true
+                ],
+                "negate": false
+              }
+            ],
+            "variation": 1
+          }
+        ],
+        "targets": [],
+        "prerequisites": []
+      }
+    }
+  ],
+  "segments": [
+    {
+      "segment": "legacy-beta-orgs",
+      "fidelity": "full",
+      "decisions": [],
+      "desired": {
+        "key": "legacy-beta-orgs",
+        "ldEnv": "production",
+        "statsigEnv": "production",
+        "name": "Beta organizations",
+        "description": "Design partners and pilot customers.",
+        "tags": [
+          "migrated-from-launchdarkly",
+          "migration-src-legacy",
+          "beta"
+        ],
+        "rules": [
+          {
+            "description": "Design partners",
+            "clauses": [
+              {
+                "contextKind": "organization",
+                "attribute": "tier",
+                "op": "in",
+                "values": [
+                  "design-partner"
+                ],
+                "negate": false
+              }
+            ]
+          }
+        ],
+        "included": [],
+        "includedContexts": [
+          {
+            "contextKind": "organization",
+            "values": [
+              "org-pilot"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "segment": "legacy-fraud-blocklist",
+      "fidelity": "manual",
+      "decisions": [
+        "blocking big_segment (membership)"
+      ],
+      "desired": {
+        "key": "legacy-fraud-blocklist",
+        "ldEnv": "production",
+        "statsigEnv": "production",
+        "name": "Fraud blocklist",
+        "description": "Synced nightly from the risk warehouse (big segment).",
+        "tags": [
+          "migrated-from-launchdarkly",
+          "migration-src-legacy",
+          "risk"
+        ],
+        "rules": [],
+        "included": [],
+        "includedContexts": [],
+        "unbounded": {
+          "contextKind": "user",
+          "ids": [],
+          "manual": true
+        }
+      }
+    },
+    {
+      "segment": "legacy-internal-users",
+      "fidelity": "partial",
+      "decisions": [
+        "acknowledge partial_rollout_rebucket (rule “Half of acme.example”)"
+      ],
+      "desired": {
+        "key": "legacy-internal-users",
+        "ldEnv": "production",
+        "statsigEnv": "production",
+        "name": "Internal users",
+        "description": "Staff and half of the contractors.",
+        "tags": [
+          "migrated-from-launchdarkly",
+          "migration-src-legacy"
+        ],
+        "rules": [
+          {
+            "description": "Half of acme.example",
+            "clauses": [
+              {
+                "contextKind": "user",
+                "attribute": "email",
+                "op": "endsWith",
+                "values": [
+                  "@acme.example"
+                ],
+                "negate": false
+              }
+            ],
+            "weight": 50000,
+            "rolloutContextKind": "user"
+          }
+        ],
+        "included": [
+          "u-1",
+          "u-2"
+        ],
+        "includedContexts": [],
+        "excluded": [
+          "u-contractor-9"
+        ]
+      }
+    }
+  ]
+}

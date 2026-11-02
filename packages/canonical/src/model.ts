@@ -9,7 +9,13 @@
  * N-source ready: every object carries its `source`, and `uid` is unique across sources.
  */
 
-export type SourceKind = 'console_api' | 'config_spec';
+/**
+ * Where a source's data comes from. The two StatSig kinds fill the StatSig-vocabulary collections
+ * below; `launchdarkly` (another LD project, PLAN §20) fills the neutral block (`neutral`).
+ */
+import type { NeutralProject } from './neutral.ts';
+
+export type SourceKind = 'console_api' | 'config_spec' | 'launchdarkly';
 
 export interface SourceRef {
   sourceId: string;
@@ -27,6 +33,11 @@ export interface SourceDescriptor {
   baseUrl?: string;
   /** Spec sources: the StatSig `company_id` seen in the first upload (sanity check, §4.2). */
   companyId?: string;
+  /**
+   * LaunchDarkly sources (PLAN §20.2): which instance and project to read. `baseUrl` overrides the
+   * instance origin (the demo's in-browser mock). The token is never stored here.
+   */
+  ld?: { instance: 'us' | 'eu' | 'federal'; projectKey: string; baseUrl?: string };
   isDemo?: boolean;
   /**
    * Console API sources: the entity kinds to read. Undefined means everything. Gates reference
@@ -478,6 +489,11 @@ export interface CanonicalSnapshot {
   autotunes: Autotune[];
   metrics: Metric[];
   paramStores: ParamStore[];
+  /**
+   * Provider-neutral resources (PLAN §20.1): filled by the LaunchDarkly source adapter; absent on
+   * StatSig sources until they move onto the neutral model too.
+   */
+  neutral?: NeutralProject;
   /** Source-level completeness (what this source kind can never provide). */
   completeness: Completeness;
   warnings: SnapshotWarning[];
