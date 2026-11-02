@@ -518,44 +518,6 @@ export function WorkspaceScreen({
             + Add source
           </Button>
 
-          <SectionTitle>Resources</SectionTitle>
-          <ul>
-            {ENTITY_KINDS.map((k) => (
-              <li key={k}>
-                <NavItem
-                  active={view.kind === "resource" && view.resource === k}
-                  onClick={() => setView({ kind: "resource", resource: k })}
-                >
-                  <span>{KIND_LABEL[k]}</span>
-                  <span className="text-fg-muted tabular-nums">
-                    {counts[k]}
-                  </span>
-                </NavItem>
-              </li>
-            ))}
-          </ul>
-
-          {hasLdSource && (
-            <>
-              <SectionTitle>LaunchDarkly source</SectionTitle>
-              <ul>
-                {(["flag", "segment"] as const).map((k) => (
-                  <li key={k}>
-                    <NavItem
-                      active={view.kind === "ld-source" && view.resource === k}
-                      onClick={() => setView({ kind: "ld-source", resource: k })}
-                    >
-                      <span>{k === "flag" ? "Flags" : "Segments"}</span>
-                      <span className="text-fg-muted tabular-nums">
-                        {k === "flag" ? neutralCounts.flags : neutralCounts.segments}
-                      </span>
-                    </NavItem>
-                  </li>
-                ))}
-              </ul>
-            </>
-          )}
-
           <SectionTitle>Migration</SectionTitle>
           <NavItem
             active={view.kind === "guide"}
@@ -610,6 +572,44 @@ export function WorkspaceScreen({
           >
             <span>What migrates</span>
           </NavItem>
+
+          <SectionTitle>Resources</SectionTitle>
+          <ul>
+            {ENTITY_KINDS.map((k) => (
+              <li key={k}>
+                <NavItem
+                  active={view.kind === "resource" && view.resource === k}
+                  onClick={() => setView({ kind: "resource", resource: k })}
+                >
+                  <span>{KIND_LABEL[k]}</span>
+                  <span className="text-fg-muted tabular-nums">
+                    {counts[k]}
+                  </span>
+                </NavItem>
+              </li>
+            ))}
+          </ul>
+
+          {hasLdSource && (
+            <>
+              <SectionTitle>LaunchDarkly source</SectionTitle>
+              <ul>
+                {(["flag", "segment"] as const).map((k) => (
+                  <li key={k}>
+                    <NavItem
+                      active={view.kind === "ld-source" && view.resource === k}
+                      onClick={() => setView({ kind: "ld-source", resource: k })}
+                    >
+                      <span>{k === "flag" ? "Flags" : "Segments"}</span>
+                      <span className="text-fg-muted tabular-nums">
+                        {k === "flag" ? neutralCounts.flags : neutralCounts.segments}
+                      </span>
+                    </NavItem>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
 
           <SectionTitle>Workspace</SectionTitle>
           <NavItem
