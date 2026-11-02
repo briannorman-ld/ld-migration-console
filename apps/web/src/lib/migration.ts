@@ -345,7 +345,7 @@ export async function fetchDeferredIdListsReport(workspaceId: string, sources: S
       apiKey = await demoKey();
     } else apiKey = secrets.get("statsig", source.id);
     if (!apiKey) {
-      report.blocked.push({ sourceId: source.id, reason: "No Console API key in memory for this source (keys are forgotten on refresh). Enter it under Connections, then retry." });
+      report.blocked.push({ sourceId: source.id, reason: "No Console API key for this source. Enter it under Connections, then retry." });
       continue;
     }
     const client = new StatsigConsoleClient({ baseUrl: source.baseUrl, apiKey });
