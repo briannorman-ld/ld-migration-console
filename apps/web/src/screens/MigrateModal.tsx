@@ -61,7 +61,7 @@ type Phase =
 export function MigrateModal({
   workspaceId,
   selection,
-  ldEnvs,
+  ldEnvs: initialLdEnvs,
   sources,
   snapshots,
   m,
@@ -69,6 +69,7 @@ export function MigrateModal({
 }: {
   workspaceId: string;
   selection: MigrationSelection;
+  /** The LD environments to start with (what the header environment maps to); changeable in the modal. */
   ldEnvs: string[];
   sources: SourceRecord[];
   snapshots: CanonicalSnapshot[];
@@ -82,6 +83,10 @@ export function MigrateModal({
   const [confirm, setConfirm] = useState("");
   const [showSteps, setShowSteps] = useState(false);
   const [lastDry, setLastDry] = useState<RunRecord>();
+  // Target LD environments: segments, rollouts and targets are per environment, so the user picks
+  // exactly which ones this run writes to. Only environments a source maps to can be chosen.
+  const [ldEnvs, setLdEnvs] = useState<string[]>(initialLdEnvs);
+  const envOptions = useMemo(() => envChoices(m, sources), [m, sources]);
   const activeRun = useActiveRun(workspaceId);
   const cancelling = useCancelling(workspaceId);
 
@@ -108,6 +113,12 @@ export function MigrateModal({
       cancelled = true;
     };
   }, []);
+
+  // An environment added later needs its LD segments too; the plan rebuilds when they arrive.
+  useEffect(() => {
+    const missing = ldEnvs.filter((e) => !m.ld.segments?.[e]);
+    if (missing.length) void refreshLdState(workspaceId, { segmentEnvs: missing }).catch(() => undefined);
+  }, [ldEnvs, m.ld.segments, workspaceId]);
 
   const plan = useMemo(
     () =>
@@ -207,6 +218,7 @@ export function MigrateModal({
 
           {plan && (phase.kind === "plan" || phase.kind === "error") && (
             <>
+              <EnvChooser options={envOptions} chosen={ldEnvs} onChange={setLdEnvs} disabled={busy} />
               {plan.errors.map((e) => (
                 <Callout key={e} tone="red">
                   {e}
@@ -379,7 +391,7 @@ export function MigrateModal({
               <Button
                 variant="secondary"
                 className="ml-auto"
-                disabled={busy || plan.steps.length === 0}
+                disabled={busy || plan.steps.length === 0 || ldEnvs.length === 0}
                 onClick={() => void run(true)}
               >
                 Dry run
@@ -388,6 +400,7 @@ export function MigrateModal({
                 disabled={
                   busy ||
                   plan.steps.length === 0 ||
+                  ldEnvs.length === 0 ||
                   !confirmed ||
                   plan.errors.length > 0
                 }
@@ -628,6 +641,61 @@ export function RunProgress({
           </li>
         ))}
       </ul>
+    </section>
+  );
+}
+
+export interface EnvChoice {
+  key: string;
+  name: string;
+  critical: boolean;
+  /** "acme-web staging, acme-mobile staging": which source environments land here. Empty = no source maps to it. */
+  mappedFrom: string[];
+}
+
+/** Every LD environment of the target project, with the source environments mapped to it. */
+export function envChoices(m: Pick<MigrationContext, "ldEnvs" | "profile">, sources: SourceRecord[]): EnvChoice[] {
+  return m.ldEnvs.map((e) => ({
+    key: e.key,
+    name: e.name,
+    critical: e.critical,
+    mappedFrom: sources.flatMap((s) =>
+      Object.entries(m.profile.sources[s.id]?.envMapping ?? {})
+        .filter(([, ld]) => ld === e.key)
+        .map(([src]) => (sources.length > 1 ? `${s.label} ${src}` : src)),
+    ),
+  }));
+}
+
+/**
+ * Which LD environments the run writes to. Segments, rollouts and individual targets are
+ * per environment, so this is where "only staging" or "test and production" is decided; an
+ * environment no source maps to cannot be chosen (map it first).
+ */
+export function EnvChooser({ options, chosen, onChange, disabled }: { options: EnvChoice[]; chosen: string[]; onChange: (keys: string[]) => void; disabled?: boolean }) {
+  const toggle = (key: string) => onChange(chosen.includes(key) ? chosen.filter((k) => k !== key) : options.filter((o) => o.key === key || chosen.includes(o.key)).map((o) => o.key));
+  return (
+    <section aria-label="Target environments">
+      <h3 className="mb-2 text-sm font-semibold">Environments</h3>
+      <div className="flex flex-wrap gap-2">
+        {options.map((o) => {
+          const on = chosen.includes(o.key);
+          const mappable = o.mappedFrom.length > 0;
+          return (
+            <label
+              key={o.key}
+              className={cx("flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-sm", on ? "border-accent bg-selected" : "border-line", !mappable && "opacity-60")}
+              title={mappable ? `From ${o.mappedFrom.join(", ")}` : "No source environment is mapped to it (Mapping)"}
+            >
+              <input type="checkbox" checked={on} disabled={disabled || !mappable} onChange={() => toggle(o.key)} aria-label={`Migrate to ${o.key}`} />
+              <span className="font-mono">{o.key}</span>
+              {o.critical && <Badge tone="red">critical</Badge>}
+              <span className="text-xs text-fg-muted">{mappable ? `from ${o.mappedFrom.join(", ")}` : "not mapped"}</span>
+            </label>
+          );
+        })}
+      </div>
+      {chosen.length === 0 && <p className="mt-1.5 text-xs text-warning">Choose at least one environment.</p>}
     </section>
   );
 }
