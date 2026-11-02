@@ -370,6 +370,32 @@ export class Executor {
     run.stopReason = `Cancelled${inFlight ? ` during “${rec.label}”` : ` before “${rec.label}”`}; ${pending} step${pending === 1 ? '' : 's'} still pending. Resume from Runs to continue where it stopped.`;
   }
 
+  /**
+   * Whether a step must read its LaunchDarkly resource before writing. The plan read the project's
+   * listings before planning, so an item it marked new is created straight away and a 409 (it
+   * appeared since) falls through to the read-and-check in the create's catch. The read stays for
+   * items that exist (their pre-image is what undo restores) and for a step resumed after a
+   * crash, where the create may already have gone out.
+   */
+  private mustRead(rec: StepRecord, s: { exists: boolean }): boolean {
+    return s.exists || !!rec.created || rec.preImage !== undefined;
+  }
+
+  /**
+   * A create answered 409: the item exists after all (the listing the plan used was older than the
+   * item, or an interrupted attempt created it before the journal recorded it). Ours counts as this
+   * step's create; a foreign one is taken over only when the plan said to adopt it, and otherwise
+   * the user re-plans, exactly as if a read had found it first.
+   */
+  private foundAfterConflict(rec: StepRecord, s: { adopt: boolean }, ours: boolean, current: NonNullable<StepRecord['preImage']>, appeared: string): void {
+    if (ours) {
+      rec.created = true;
+      return;
+    }
+    if (!s.adopt) throw new Error(appeared);
+    if (rec.preImage === undefined) rec.preImage = current;
+  }
+
   private async save(run: RunRecord) {
     await this.opts.journal.save(run);
     this.opts.onProgress?.(structuredClone(run));
@@ -418,7 +444,7 @@ export class Executor {
    */
   private async aiConfig(run: RunRecord, rec: StepRecord, s: Extract<PlanStep, { op: 'upsert_ai_config' }>): Promise<string> {
     const d = s.desired;
-    let current = await this.c.getAiConfig(this.p, s.key, this.signal);
+    let current = this.mustRead(rec, s) ? await this.c.getAiConfig(this.p, s.key, this.signal) : null;
     if (current && !rec.created && rec.preImage === undefined) {
       if (!s.adopt && !ownsSegment({ key: current.key, tags: current.tags ?? [] }, s.provenance.sourceAlias)) throw new Error(`AI Config “${s.key}” appeared since planning and wasn't created by this app. Re-plan to decide.`);
       rec.preImage = current;
@@ -429,13 +455,14 @@ export class Executor {
       if (run.dryRun) return `Would create AI Config “${s.key}” (${d.tags.join(', ')}); its variations are added in LaunchDarkly by hand.`;
       try {
         current = await this.c.createAiConfig(this.p, { key: d.key, name: d.name, description, tags: d.tags, mode: d.mode, ...maintainer }, this.signal);
+        rec.created = true;
       } catch (e) {
         if (!(e instanceof LdWriteError && e.status === 409)) throw e;
         current = await this.c.getAiConfig(this.p, s.key, this.signal);
-        if (!current || !ownsSegment({ key: current.key, tags: current.tags ?? [] }, s.provenance.sourceAlias)) throw e;
+        if (!current) throw e;
+        this.foundAfterConflict(rec, s, ownsSegment({ key: current.key, tags: current.tags ?? [] }, s.provenance.sourceAlias), current, `AI Config “${s.key}” appeared since planning and wasn't created by this app. Re-plan to decide.`);
       }
-      rec.created = true;
-      return `Created AI Config “${s.key}”. Add its variations in LaunchDarkly: StatSig's API does not expose prompt versions.`;
+      if (rec.created) return `Created AI Config “${s.key}”. Add its variations in LaunchDarkly: StatSig's API does not expose prompt versions.`;
     }
     const body: Parameters<LdWriter['patchAiConfig']>[2] = {};
     if (current.name !== d.name) body.name = d.name;
@@ -465,7 +492,7 @@ export class Executor {
 
   private async metric(run: RunRecord, rec: StepRecord, s: Extract<PlanStep, { op: 'upsert_metric' }>): Promise<string> {
     const d = s.desired;
-    let current = await this.c.getMetric(this.p, s.key, this.signal);
+    let current = this.mustRead(rec, s) ? await this.c.getMetric(this.p, s.key, this.signal) : null;
     if (current && !rec.created && rec.preImage === undefined) {
       const same = current.kind === 'custom' && current.eventKey === d.eventKey;
       if (!s.adopt && !same && !ownsSegment({ tags: current.tags ?? [] }, s.provenance.sourceAlias)) throw new Error(`Metric “${s.key}” appeared since planning and wasn't created by this app. Re-plan to decide.`);
@@ -476,13 +503,16 @@ export class Executor {
       const body = { key: d.key, name: d.name, description: d.description, kind: d.kind, eventKey: d.eventKey, isNumeric: d.isNumeric, successCriteria: d.successCriteria, tags: d.tags, analysisUnits: d.analysisUnits };
       try {
         current = await this.c.createMetric(this.p, body, this.signal);
+        rec.created = true;
       } catch (e) {
         if (!(e instanceof LdWriteError && e.status === 409)) throw e;
         current = await this.c.getMetric(this.p, s.key, this.signal);
-        if (!current || !ownsSegment({ tags: current.tags ?? [] }, s.provenance.sourceAlias)) throw e;
+        if (!current) throw e;
+        // A metric on the same event is reused, as the read above would have done.
+        const same = current.kind === 'custom' && current.eventKey === d.eventKey;
+        this.foundAfterConflict(rec, { adopt: s.adopt || same }, ownsSegment({ tags: current.tags ?? [] }, s.provenance.sourceAlias), current, `Metric “${s.key}” appeared since planning and wasn't created by this app. Re-plan to decide.`);
       }
-      rec.created = true;
-      return `Created metric “${s.key}” on event “${d.eventKey}”.`;
+      if (rec.created) return `Created metric “${s.key}” on event “${d.eventKey}”.`;
     }
     // Same event under the same key: the metric already is what the bandit needs. Only tag it.
     const ops: JsonPatchOp[] = [];
@@ -504,7 +534,7 @@ export class Executor {
     }
     const env = flag.environments?.[s.ldEnv];
     const iteration = banditIteration(d, flag, env?.version ?? 0);
-    let current = await this.c.getExperiment(this.p, s.ldEnv, s.key, this.signal);
+    let current = this.mustRead(rec, s) ? await this.c.getExperiment(this.p, s.ldEnv, s.key, this.signal) : null;
     if (current && !rec.created && rec.preImage === undefined) {
       if (!s.adopt && !ownsSegment({ tags: current.tags ?? [] }, s.provenance.sourceAlias)) throw new Error(`Experiment “${s.key}” appeared in ${s.ldEnv} since planning and wasn't created by this app. Re-plan to decide.`);
       rec.preImage = current;
@@ -514,13 +544,14 @@ export class Executor {
       const body = { key: d.key, name: d.name, description: withFooter(d.description, footer(s.provenance, this.now())), type: 'mab', tags: d.tags, iteration };
       try {
         current = await this.c.createExperiment(this.p, s.ldEnv, body, this.signal);
+        rec.created = true;
       } catch (e) {
         if (!(e instanceof LdWriteError && e.status === 409)) throw e;
         current = await this.c.getExperiment(this.p, s.ldEnv, s.key, this.signal);
-        if (!current || !ownsSegment({ tags: current.tags ?? [] }, s.provenance.sourceAlias)) throw e;
+        if (!current) throw e;
+        this.foundAfterConflict(rec, s, ownsSegment({ tags: current.tags ?? [] }, s.provenance.sourceAlias), current, `Experiment “${s.key}” appeared in ${s.ldEnv} since planning and wasn't created by this app. Re-plan to decide.`);
       }
-      rec.created = true;
-      return `Created bandit “${s.key}” in ${s.ldEnv} as a draft: ${banditSummary(d)}.`;
+      if (rec.created) return `Created bandit “${s.key}” in ${s.ldEnv} as a draft: ${banditSummary(d)}.`;
     }
     // An iteration that ran (or runs) is the customer's experiment history: never replaced.
     const status = current.draftIteration?.status ?? current.currentIteration?.status;
@@ -551,23 +582,19 @@ export class Executor {
 
   private async segment(run: RunRecord, rec: StepRecord, s: Extract<PlanStep, { op: 'upsert_segment' }>): Promise<string> {
     const d = s.desired;
-    let current = await this.c.getSegment(this.p, s.ldEnv, s.key, this.signal);
+    let current = this.mustRead(rec, s) ? await this.c.getSegment(this.p, s.ldEnv, s.key, this.signal) : null;
     if (current && !rec.created && rec.preImage === undefined) {
       // Re-check ownership: the LD project may have changed since planning.
       if (!s.adopt && !ownsSegment({ key: current.key, tags: current.tags ?? [] }, s.provenance.sourceAlias)) throw new Error(`Segment “${s.key}” appeared in ${s.ldEnv} since planning and wasn't created by this app. Re-plan to decide.`);
       if (!rec.created) rec.preImage = current;
     }
-    if (current && !!current.unbounded !== !!d.unbounded)
-      throw new Error(
-        d.unbounded
-          ? `Segment “${s.key}” exists in ${s.ldEnv} as a standard segment; LaunchDarkly can't turn it into a big segment in place. Delete or rename it in LaunchDarkly, then sync again.`
-          : `Segment “${s.key}” exists in ${s.ldEnv} as a big segment; this list now fits a standard segment. Delete or rename it in LaunchDarkly, then sync again.`,
-      );
     const description = withFooter(d.description, footer(s.provenance, this.now()));
     if (!current) {
       if (run.dryRun) return `Would create ${d.unbounded ? 'big ' : ''}segment “${s.key}” in ${s.ldEnv} with ${segmentSummary(d)}.`;
       try {
         current = await this.c.createSegment(this.p, s.ldEnv, { key: s.key, name: d.name, description, tags: d.tags, ...(d.unbounded ? { unbounded: true, unboundedContextKind: d.unbounded.contextKind } : {}) }, this.signal);
+        rec.created = true;
+        if (d.unbounded) this.learned(rec, { key: 'big_segments', status: 'available', evidence: `created big segment ${s.key}` });
       } catch (e) {
         if (e instanceof LdWriteError && d.unbounded && (e.status === 400 || e.status === 403 || e.status === 404 || e.status === 405)) {
           this.learned(rec, { key: 'big_segments', status: e.status === 403 ? 'not_permitted' : 'unavailable', evidence: `POST big segment → ${e.status}` });
@@ -575,11 +602,17 @@ export class Executor {
         }
         if (!(e instanceof LdWriteError && e.status === 409)) throw e;
         current = await this.c.getSegment(this.p, s.ldEnv, s.key, this.signal);
-        if (!current || !ownsSegment({ key: current.key, tags: current.tags ?? [] }, s.provenance.sourceAlias)) throw e;
+        if (!current) throw e;
+        this.foundAfterConflict(rec, s, ownsSegment({ key: current.key, tags: current.tags ?? [] }, s.provenance.sourceAlias), current, `Segment “${s.key}” appeared in ${s.ldEnv} since planning and wasn't created by this app. Re-plan to decide.`);
       }
-      rec.created = true;
-      if (d.unbounded) this.learned(rec, { key: 'big_segments', status: 'available', evidence: `created big segment ${s.key}` });
     }
+    // Checked after the create too: a segment found through a 409 may be of the other kind.
+    if (!!current.unbounded !== !!d.unbounded)
+      throw new Error(
+        d.unbounded
+          ? `Segment “${s.key}” exists in ${s.ldEnv} as a standard segment; LaunchDarkly can't turn it into a big segment in place. Delete or rename it in LaunchDarkly, then sync again.`
+          : `Segment “${s.key}” exists in ${s.ldEnv} as a big segment; this list now fits a standard segment. Delete or rename it in LaunchDarkly, then sync again.`,
+      );
     if (d.unbounded) return this.bigSegment(run, rec, s, current, description);
 
     // LD caps target operations at 1,500 per request, however the request is written. Small member
@@ -684,7 +717,7 @@ export class Executor {
 
   private async shell(run: RunRecord, rec: StepRecord, s: Extract<PlanStep, { op: 'upsert_flag_shell' }>): Promise<string> {
     const d = s.desired;
-    let flag = await this.c.getFlag(this.p, s.key, this.signal);
+    let flag = this.mustRead(rec, s) ? await this.c.getFlag(this.p, s.key, this.signal) : null;
     if (flag && !rec.created && rec.preImage === undefined) {
       const owner = flagOwner({ key: flag.key, tags: flag.tags ?? [], customProperties: flag.customProperties ?? {} });
       if (!s.adopt && !owner) throw new Error(`Flag “${s.key}” appeared since planning and wasn't created by this app. Re-plan to decide.`);
@@ -706,16 +739,18 @@ export class Executor {
       };
       try {
         flag = await this.c.createFlag(this.p, body, this.signal);
+        rec.created = true;
       } catch (e) {
         if (!(e instanceof LdWriteError && e.status === 409)) throw e;
-        // A retried create after an interrupted run: it's ours if it carries our provenance.
         flag = await this.c.getFlag(this.p, s.key, this.signal);
-        const owner = flag && flagOwner({ key: flag.key, tags: flag.tags ?? [], customProperties: flag.customProperties ?? {} });
-        if (!flag || owner?.id !== d.customProperties[PROP.id]?.value[0]) throw e;
+        if (!flag) throw e;
+        const owner = flagOwner({ key: flag.key, tags: flag.tags ?? [], customProperties: flag.customProperties ?? {} });
+        this.foundAfterConflict(rec, s, owner?.id === d.customProperties[PROP.id]?.value[0], flag, `Flag “${s.key}” appeared since planning and wasn't created by this app. Re-plan to decide.`);
       }
-      rec.created = true;
-      this.flags.set(s.key, flag);
-      return `Created flag “${s.key}”.`;
+      if (rec.created) {
+        this.flags.set(s.key, flag);
+        return `Created flag “${s.key}”.`;
+      }
     }
     const ops = shellPatch(flag, d);
     this.flags.set(s.key, flag);

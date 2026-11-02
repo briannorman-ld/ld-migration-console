@@ -47,6 +47,7 @@ function fakeLd(over: Partial<Record<keyof LdWriter, (...a: never[]) => unknown>
     getAiConfig: async (_p, key) => (calls.push(`get ai ${key}`), aiConfigs.get(key) ?? null),
     createAiConfig: async (_p, body) => {
       calls.push(`create ai ${body.key}`);
+      if (aiConfigs.has(body.key)) throw new LdWriteError(409, '/ai-configs', { message: 'Duplicate key' });
       const a = { key: body.key, name: body.name, description: body.description ?? '', tags: body.tags ?? [], ...(body.maintainerId ? { _maintainer: { kind: 'member', member: { _id: body.maintainerId } } } : {}) };
       aiConfigs.set(a.key, a);
       return a;
@@ -56,6 +57,7 @@ function fakeLd(over: Partial<Record<keyof LdWriter, (...a: never[]) => unknown>
     getMetric: async (_p, key) => (calls.push(`get metric ${key}`), metrics.get(key) ?? null),
     createMetric: async (_p, body) => {
       calls.push(`create metric ${body.key}`);
+      if (metrics.has(body.key as string)) throw new LdWriteError(409, '/metrics', { message: 'Duplicate key' });
       const m = { key: body.key as string, name: body.name as string, kind: 'custom', eventKey: body.eventKey as string, tags: (body.tags as string[]) ?? [] };
       metrics.set(m.key, m);
       return m;
@@ -65,6 +67,7 @@ function fakeLd(over: Partial<Record<keyof LdWriter, (...a: never[]) => unknown>
     getExperiment: async (_p, env, key) => (calls.push(`get experiment ${env}/${key}`), experiments.get(`${env}/${key}`) ?? null),
     createExperiment: async (_p, env, body) => {
       calls.push(`create experiment ${env}/${body.key}`);
+      if (experiments.has(`${env}/${body.key}`)) throw new LdWriteError(409, '/experiments', { message: 'Duplicate key' });
       const e = { key: body.key as string, name: body.name as string, type: body.type as string, tags: (body.tags as string[]) ?? [], draftIteration: { status: 'not_started', hypothesis: '' }, iteration: body.iteration };
       experiments.set(`${env}/${e.key}`, e);
       return e;
@@ -268,12 +271,10 @@ describe('Executor', () => {
   it('resumes an interrupted run, recognizing a create that already happened by its provenance', async () => {
     const ld = fakeLd();
     const { ex, run } = setup(ld.client, [shell('a'), env('a')]);
-    // The tab closed after LD created the flag but before the journal recorded it.
+    // The tab closed after LD created the flag but before the journal recorded it: the retried
+    // create answers 409 and the flag is recognised as ours by its provenance.
     await ld.client.createFlag('p', { ...(shell('a') as Extract<PlanStep, { op: 'upsert_flag_shell' }>).desired });
     run.steps[0]!.status = 'running';
-    const getFlag = ld.client.getFlag;
-    let first = true;
-    ld.client.getFlag = async (p, k) => (first && k === 'a' ? ((first = false), null) : getFlag(p, k));
     const out = await ex.run(run);
     expect(out.status).toBe('done');
     expect(out.steps[0]!.created).toBe(true);
@@ -478,7 +479,11 @@ describe('segment members over LaunchDarkly’s 1,500-target request limit', () 
     const segments = new Map<string, Record<string, unknown>>();
     const ld = fakeLd({
       getSegment: async (_p: string, _e: string, key: string) => segments.get(key) ?? null,
-      createSegment: async (_p: string, _e: string, b: Record<string, unknown>) => (segments.set(b.key as string, { key: b.key, name: b.name, tags: b.tags, included: [] }), segments.get(b.key as string)!),
+      createSegment: async (_p: string, _e: string, b: Record<string, unknown>) => {
+        if (segments.has(b.key as string)) throw new LdWriteError(409, '/segments', { message: 'Duplicate key' });
+        segments.set(b.key as string, { key: b.key, name: b.name, tags: b.tags, included: [] });
+        return segments.get(b.key as string)!;
+      },
       patchSegmentJson: async (_p: string, _e: string, key: string, ops: { path: string; value?: unknown }[]) => (ld.calls.push(`json segment ${key} ${ops.map((o) => o.path).join(',')}`), segments.get(key)!),
     });
     return ld;
@@ -524,7 +529,11 @@ describe('big segments (PLAN §8.3 big_segment)', () => {
     const segments = new Map<string, Record<string, unknown>>();
     const ld = fakeLd({
       getSegment: async (_p: string, _e: string, key: string) => segments.get(key) ?? null,
-      createSegment: async (_p: string, _e: string, b: Record<string, unknown>) => (segments.set(b.key as string, { key: b.key, name: b.name, tags: b.tags, unbounded: b.unbounded ?? false }), segments.get(b.key as string)!),
+      createSegment: async (_p: string, _e: string, b: Record<string, unknown>) => {
+        if (segments.has(b.key as string)) throw new LdWriteError(409, '/segments', { message: 'Duplicate key' });
+        segments.set(b.key as string, { key: b.key, name: b.name, tags: b.tags, unbounded: b.unbounded ?? false });
+        return segments.get(b.key as string)!;
+      },
       patchSegmentJson: async (_p: string, _e: string, key: string, ops: { path: string }[]) => (ld.calls.push(`json segment ${key} ${ops.map((o) => o.path).join(',')}`), segments.get(key)!),
       deleteSegment: async (_p: string, _e: string, key: string) => void (ld.calls.push(`delete segment ${key}`), segments.delete(key)),
     });
@@ -735,12 +744,12 @@ describe('segment provenance footer', () => {
       ld.flags.set('promo', jsonFlag(ld, 'promo'));
       ld.metrics.set('promo_click', { key: 'promo_click', kind: 'custom', eventKey: 'promo_click', tags: ['other'] });
       ld.experiments.set('test/promo', { key: 'promo', name: 'promo', type: 'mab', tags: ['migrated-from-statsig', 'migration-src-web'], draftIteration: { status: 'not_started', hypothesis: '' } });
-      const { ex, run } = setup(ld.client, [metric, bandit('promo')]);
+      const { ex, run } = setup(ld.client, [{ ...metric, exists: true } as PlanStep, { ...bandit('promo'), exists: true } as PlanStep]);
       const out = await ex.run(run);
       expect(out.status).toBe('done');
       expect(ld.calls.filter((c) => !c.startsWith('get'))).toEqual(['json metric promo_click /tags', 'iteration test/promo']);
       ld.experiments.set('test/promo', { key: 'promo', name: 'promo', type: 'mab', tags: ['migrated-from-statsig', 'migration-src-web'], currentIteration: { status: 'running', hypothesis: '' } });
-      const again = await ex.run(newRun({ id: 'run-2', workspaceId: 'w', projectKey: 'p', label: 't', dryRun: false, steps: [bandit('promo')], now: new Date() }));
+      const again = await ex.run(newRun({ id: 'run-2', workspaceId: 'w', projectKey: 'p', label: 't', dryRun: false, steps: [{ ...bandit('promo'), exists: true } as PlanStep], now: new Date() }));
       expect(again.steps[0]!.message).toMatch(/running iteration; left as is/);
     });
 
@@ -797,7 +806,8 @@ describe('prompts → AI Configs (upsert_ai_config, PLAN §6)', () => {
     const created = ld.aiConfigs.get('support_reply_assistant')!;
     expect(created.tags).toEqual(['migrated-from-statsig', 'migration-src-web', 'search']);
     expect(parseFooter(created.description)).toMatchObject({ from: 'statsig', src: 'web', id: 'support_reply_assistant', fp: 'fp1' });
-    expect(ld.calls).toEqual(['get ai support_reply_assistant', 'create ai support_reply_assistant']);
+    // No read first: the plan's listing said it was new.
+    expect(ld.calls).toEqual(['create ai support_reply_assistant']);
 
     // Same desired state, new fingerprint: the footer changes, nothing else.
     ld.calls.length = 0;
@@ -829,5 +839,71 @@ describe('prompts → AI Configs (upsert_ai_config, PLAN §6)', () => {
     await created.ex.run(created.run);
     await created.ex.undo(created.run);
     expect(fresh.aiConfigs.has('support_reply_assistant')).toBe(false);
+  });
+});
+
+describe('reads before writes', () => {
+  const plain = (exists: boolean, key = 'beta_testers'): PlanStep => ({
+    id: `segment:test:${key}`,
+    deps: [],
+    op: 'upsert_segment',
+    ldEnv: 'test',
+    key,
+    exists,
+    adopt: false,
+    desired: { key, ldEnv: 'test', statsigEnv: 'staging', name: 'Beta testers', description: '', tags: ['migrated-from-statsig', 'migration-src-web'], rules: [], included: ['u1'], includedContexts: [] },
+    provenance: { sourceKind: 'statsig', sourceAlias: 'web', statsigType: 'segment', statsigId: key, statsigFingerprint: 'fp', decisionSetHash: 'dh' },
+  });
+  const segmentLd = (existing?: Record<string, unknown>) => {
+    const reads: string[] = [];
+    const segments = new Map<string, Record<string, unknown>>(existing ? [[existing.key as string, existing]] : []);
+    const ld = fakeLd({
+      getSegment: async (_p: string, _e: string, key: string) => (reads.push(key), segments.get(key) ?? null),
+      createSegment: async (_p: string, _e: string, b: Record<string, unknown>) => {
+        ld.calls.push(`create segment ${b.key}`);
+        if (segments.has(b.key as string)) throw new LdWriteError(409, '/segments', { message: 'Duplicate key' });
+        segments.set(b.key as string, { key: b.key, name: b.name, tags: b.tags, included: [] });
+        return segments.get(b.key as string)!;
+      },
+      patchSegmentJson: async (_p: string, _e: string, key: string) => (ld.calls.push(`json segment ${key}`), segments.get(key)!),
+    });
+    return { ld, reads };
+  };
+  const exec = (ld: ReturnType<typeof fakeLd>, steps: PlanStep[]) => {
+    const ex = new Executor({ client: ld.client, projectKey: 'p', journal: { save: async () => undefined }, now: () => new Date('2026-11-02T00:00:00Z') });
+    return ex.run(newRun({ id: 'run-reads', workspaceId: 'w', projectKey: 'p', label: 't', dryRun: false, steps, now: new Date('2026-11-02T00:00:00Z') }));
+  };
+
+  it('creates an item the plan marked new without reading it first', async () => {
+    const { ld, reads } = segmentLd();
+    const out = await exec(ld, [plain(false)]);
+    expect(out.steps[0]!.status).toBe('done');
+    expect(out.steps[0]!.created).toBe(true);
+    expect(reads).toEqual([]);
+    expect(ld.calls.filter((c) => c.includes('segment'))).toEqual(['create segment beta_testers', 'json segment beta_testers']);
+  });
+
+  it('reads an item the plan marked existing, for its pre-image', async () => {
+    const { ld, reads } = segmentLd({ key: 'beta_testers', name: 'Beta testers', tags: ['migrated-from-statsig', 'migration-src-web'], included: [] });
+    const out = await exec(ld, [plain(true)]);
+    expect(out.steps[0]!.status).toBe('done');
+    expect(out.steps[0]!.created).toBeUndefined();
+    expect(out.steps[0]!.preImage).toMatchObject({ key: 'beta_testers' });
+    expect(reads).toEqual(['beta_testers']);
+    expect(ld.calls.filter((c) => c.includes('segment'))).toEqual(['json segment beta_testers']);
+  });
+
+  it('a 409 on the create reads the item after all: ours counts as created, a foreign one asks for a re-plan', async () => {
+    const ours = segmentLd({ key: 'beta_testers', name: 'Beta testers', tags: ['migrated-from-statsig', 'migration-src-web'], included: [] });
+    const done = await exec(ours.ld, [plain(false)]);
+    expect(done.steps[0]!.status).toBe('done');
+    expect(done.steps[0]!.created).toBe(true);
+    expect(ours.reads).toEqual(['beta_testers']);
+
+    const foreign = segmentLd({ key: 'beta_testers', name: 'Beta testers', tags: ['theirs'], included: [] });
+    const failed = await exec(foreign.ld, [plain(false)]);
+    expect(failed.steps[0]!.status).toBe('failed');
+    expect(failed.steps[0]!.error).toMatch(/appeared in test since planning .* Re-plan/);
+    expect(foreign.ld.calls.filter((c) => c.startsWith('json'))).toEqual([]);
   });
 });

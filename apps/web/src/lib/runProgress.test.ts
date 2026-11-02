@@ -6,9 +6,9 @@ import { describeRemaining, formatDuration, runProgress } from './runProgress.ts
 const T0 = Date.parse('2026-11-02T10:00:00Z');
 const at = (ms: number) => new Date(T0 + ms).toISOString();
 
-/** A segment step weighs 3 requests, a context kind 1 (planner `requestsFor`). */
+/** An existing segment step weighs 3 requests (read, create or patch, targets), a context kind 1 (planner `requestsFor`). */
 const segment = (key: string): PlanStep =>
-  ({ id: `segment:test:${key}`, deps: [], op: 'upsert_segment', ldEnv: 'test', key, exists: false, adopt: false, desired: { key, name: key, rules: [], included: [], includedContexts: [] }, provenance: {} }) as unknown as PlanStep;
+  ({ id: `segment:test:${key}`, deps: [], op: 'upsert_segment', ldEnv: 'test', key, exists: true, adopt: false, desired: { key, name: key, rules: [], included: [], includedContexts: [] }, provenance: {} }) as unknown as PlanStep;
 const kind = (key: string): PlanStep => ({ id: `context_kind:${key}`, deps: [], op: 'ensure_context_kind', key, name: key, unitType: key });
 
 function step(plan: PlanStep, status: StepRecord['status'], startMs?: number, endMs?: number): StepRecord {

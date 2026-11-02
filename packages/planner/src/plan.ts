@@ -1032,12 +1032,17 @@ function rollUpFlags(items: PlanItem[], steps: PlanStep[], envOrder: string[]): 
   return out;
 }
 
-/** Writes per step, including the reads that capture pre-images. */
+/** Writes per step, including the read that captures the pre-image of an item that exists. */
 const REQUESTS: Record<PlanStep['op'], number> = { ensure_context_kind: 1, upsert_segment: 3, upsert_flag_shell: 2, update_flag_env: 2, ensure_randomization_unit: 2, upsert_metric: 2, create_bandit: 3, upsert_ai_config: 2 };
 
-/** A big segment adds the CSV import and its status polls; scheduled changes add a list, a delete each and a create each. */
+/**
+ * A new item is created without reading it first (the plan's listing already said it is absent);
+ * a big segment adds the CSV import and its status polls; scheduled changes add a list, a delete
+ * each and a create each.
+ */
 export function requestsFor(s: PlanStep): number {
   let n = REQUESTS[s.op];
+  if ('exists' in s && !s.exists) n -= 1;
   if (s.op === 'upsert_segment' && s.desired.unbounded) n += 4;
   if (s.op === 'update_flag_env' && s.desired.scheduledChanges?.length) n += 1 + 2 * s.desired.scheduledChanges.length;
   return n;
