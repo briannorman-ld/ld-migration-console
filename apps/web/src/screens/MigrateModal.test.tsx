@@ -1,9 +1,27 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { MappingProfile } from '@sslm/mapper';
+import 'fake-indexeddb/auto';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { acmeSnapshot, CAPS, NOW, server } from '../../../../packages/mapper/test/fixtures.ts';
+import type { MigrationContext } from '../lib/useMigration.ts';
+import { buildPlan } from '../lib/migration.ts';
+
+const refresh = vi.hoisted(() => {
+  let resolve!: () => void;
+  const promise = new Promise<void>((r) => (resolve = r));
+  return { promise, resolve: () => resolve(), calls: 0 };
+});
+vi.mock('../lib/ld.ts', async (orig) => ({
+  ...(await orig<typeof import('../lib/ld.ts')>()),
+  refreshLdState: vi.fn(() => {
+    refresh.calls++;
+    return refresh.promise;
+  }),
+  ldSessionSnapshot: () => ({ status: 'connected' }),
+}));
+import type { MappingProfile, Resolution } from '@sslm/mapper';
 import type { SourceRecord } from '@sslm/store';
 import type { PlanFlag } from '@sslm/planner';
-import { EnvChooser, envChoices, FlagsTable } from './MigrateModal.tsx';
+import { EnvChooser, envChoices, FlagsTable, MigrateModal } from './MigrateModal.tsx';
 
 const sources: SourceRecord[] = [
   { id: 's-web', workspaceId: 'w', alias: 'web', label: 'acme-web', kind: 'console_api', createdAt: '2026-10-22T10:00:00Z' },
@@ -72,5 +90,56 @@ describe('target environments in the plan', () => {
     expect(first.textContent).toContain('blocked');
     // No environment column: the flag itself is created once for the project.
     expect(screen.queryByText('LaunchDarkly env')).toBeNull();
+  });
+});
+
+describe('opening the plan', () => {
+  beforeAll(() => server.listen());
+  afterAll(() => server.close());
+  afterEach(cleanup);
+
+  it('shows the plan from the current LaunchDarkly listing at once, and lets it run only once the fresh read has landed', async () => {
+    const web = await acmeSnapshot('web');
+    const gate = web.gates.find((g) => g.id === 'new_checkout_flow')!;
+    const m = {
+      ld: { status: 'connected', projectKey: 'shop', instance: 'us', matrix: { projectKey: 'shop', instance: 'us', capabilities: [], environments: [{ key: 'test', name: 'Test', critical: false }] }, flags: { items: [], loadedAt: NOW }, segments: { test: [] }, contextKinds: ['user'] },
+      connected: true,
+      ldEnvs: [{ key: 'test', name: 'Test', critical: false }],
+      profile: { version: 1, sources: { [web.source.sourceId]: { envMapping: { staging: 'test' }, unitTypeKinds: {} } }, attributes: {}, policies: {} },
+      resolutions: new Map(),
+      resolutionList: [],
+      capabilities: CAPS,
+      directory: { members: [], teams: [], membersReadable: false, teamsReadable: false },
+      idLists: {},
+      coverage: {},
+      now: NOW,
+      exclusions: new Map(),
+      resolve: vi.fn(),
+      saveResolutions: vi.fn(),
+      setPolicy: vi.fn(),
+    } as unknown as MigrationContext;
+    // Accept the recommended answers first, so the plan has steps and only the check holds the
+    // buttons. A new map each round, as useMigration makes one: the mapping memo keys on it.
+    for (let i = 0; i < 5; i++) {
+      const plan = buildPlan({ ...m, selection: { gates: [gate.uid], autotunes: [] }, ldEnvs: ['test'], snapshots: [web] });
+      if (plan.decisions.length === 0) break;
+      const answers = plan.decisions.map((d): [string, Resolution] => [d.id, { id: d.id, type: d.type, optionKey: d.recommended ?? d.options[0]!.key, scope: 'resource', fingerprint: d.fingerprint, decidedAt: NOW }]);
+      (m as { resolutions: ReadonlyMap<string, unknown> }).resolutions = new Map([...m.resolutions, ...answers]);
+    }
+    const src: SourceRecord = { id: web.source.sourceId, workspaceId: 'w', alias: 'web', label: 'acme-web', kind: 'config_spec', createdAt: NOW };
+    render(<MigrateModal workspaceId="w" selection={{ gates: [gate.uid], autotunes: [] }} ldEnvs={['test']} sources={[src]} snapshots={[web]} m={m} onClose={vi.fn()} />);
+    // The plan is on screen before the read completes, and the footer says the read is in progress.
+    expect(screen.getAllByText('new_checkout_flow').length).toBeGreaterThan(0);
+    expect(screen.getByText('Checking LaunchDarkly for the latest state…')).toBeTruthy();
+    const dryRun = screen.getByRole('button', { name: 'Dry run' }) as HTMLButtonElement;
+    expect(dryRun.disabled).toBe(true);
+    expect(refresh.calls).toBe(1);
+    await act(async () => {
+      refresh.resolve();
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    expect(screen.queryByText('Checking LaunchDarkly for the latest state…')).toBeNull();
+    expect(screen.queryByText(/Could not read the latest LaunchDarkly state/)).toBeNull();
+    expect(dryRun.disabled).toBe(false);
   });
 });

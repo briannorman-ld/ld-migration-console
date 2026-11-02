@@ -16,7 +16,7 @@ import {
   Input,
   Spinner,
 } from "../components/ui.tsx";
-import { refreshLdState } from "../lib/ld.ts";
+import { ldSessionSnapshot, refreshLdState } from "../lib/ld.ts";
 import {
   buildPlan,
   cancelRun,
@@ -59,6 +59,13 @@ type Phase =
   | { kind: "result"; run: RunRecord }
   | { kind: "error"; message: string };
 
+/**
+ * The background check that runs when the modal opens: a fresh read of the LD project and the
+ * deferred ID lists. The plan shows at once from the session's current listing and rebuilds as
+ * the check lands; Dry run and Migrate wait for `ready`, so a run never goes out on stale state.
+ */
+type Check = { kind: "checking"; message: string } | { kind: "ready" } | { kind: "error"; message: string };
+
 /** The migrate flow (PLAN §9): plan → resolve decisions → dry run → confirm → execute → results/undo. */
 export function MigrateModal({
   workspaceId,
@@ -78,10 +85,10 @@ export function MigrateModal({
   m: MigrationContext;
   onClose: () => void;
 }) {
-  const [phase, setPhase] = useState<Phase>({
-    kind: "loading",
-    message: "Reading the LaunchDarkly project…",
-  });
+  // With a listing in the session (live, or the copy saved on the last read) the plan shows at
+  // once; only a workspace that has never read the project waits for the first read.
+  const [phase, setPhase] = useState<Phase>(() => (m.ld.flags ? { kind: "plan" } : { kind: "loading", message: "Reading the LaunchDarkly project…" }));
+  const [check, setCheck] = useState<Check>({ kind: "checking", message: "Checking LaunchDarkly for the latest state…" });
   const [confirm, setConfirm] = useState("");
   const [showSteps, setShowSteps] = useState(false);
   const [lastDry, setLastDry] = useState<RunRecord>();
@@ -98,25 +105,36 @@ export function MigrateModal({
   const activeRun = useActiveRun(workspaceId);
   const cancelling = useCancelling(workspaceId);
 
-  // Load what the plan needs: segments in the target environments and deferred ID lists.
-  useEffect(() => {
-    let cancelled = false;
+  // Load what a run needs: the latest LD state, segments in the target environments and the
+  // deferred ID lists. The plan on screen rebuilds as each part lands (the session changes).
+  const runCheck = (cancelled: () => boolean) => {
+    setCheck({ kind: "checking", message: "Checking LaunchDarkly for the latest state…" });
     (async () => {
       try {
         await refreshLdState(workspaceId, { segmentEnvs: ldEnvs });
+        const ldError = ldSessionSnapshot(workspaceId).error;
+        if (ldError) throw new Error(ldError);
         await fetchDeferredIdLists(
           workspaceId,
           sources,
           snapshots,
           m.idLists,
-          (message) => !cancelled && setPhase({ kind: "loading", message }),
+          (message) => !cancelled() && setCheck({ kind: "checking", message }),
         );
-        if (!cancelled) setPhase({ kind: "plan" });
+        if (cancelled()) return;
+        setCheck({ kind: "ready" });
+        setPhase((p) => (p.kind === "loading" ? { kind: "plan" } : p));
       } catch (e) {
-        if (!cancelled)
-          setPhase({ kind: "error", message: (e as Error).message });
+        if (cancelled()) return;
+        const message = (e as Error).message;
+        setCheck({ kind: "error", message });
+        setPhase((p) => (p.kind === "loading" ? { kind: "error", message } : p));
       }
     })();
+  };
+  useEffect(() => {
+    let cancelled = false;
+    runCheck(() => cancelled);
     return () => {
       cancelled = true;
     };
@@ -198,6 +216,9 @@ export function MigrateModal({
   };
 
   const busy = phase.kind === "running" || phase.kind === "loading";
+  // A run needs the check to have landed and every chosen environment's segments in the session
+  // (an environment ticked later loads its segments through the effect above).
+  const fresh = check.kind === "ready" && (!needsEnv || ldEnvs.every((e) => !!m.ld.segments?.[e]));
   return (
     <div
       className="fixed inset-0 z-50 flex items-stretch justify-center bg-overlay p-6 backdrop-blur-[2px]"
@@ -230,6 +251,20 @@ export function MigrateModal({
 
           {plan && (phase.kind === "plan" || phase.kind === "error") && (
             <>
+              {check.kind === "error" && (
+                <Callout tone="red">
+                  <span className="flex flex-wrap items-center gap-3">
+                    <span>Could not read the latest LaunchDarkly state: {check.message} The plan below is from the last read; nothing runs until a fresh read succeeds.</span>
+                    <Button
+                      variant="secondary"
+                      className="ml-auto py-1 text-xs"
+                      onClick={() => runCheck(() => false)}
+                    >
+                      Retry
+                    </Button>
+                  </span>
+                </Callout>
+              )}
               {plan.errors.map((e) => (
                 <Callout key={e} tone="red">
                   {e}
@@ -418,7 +453,13 @@ export function MigrateModal({
         <footer className="flex flex-wrap items-center gap-3 border-t border-line bg-surface-2 px-5 py-3">
           {plan && phase.kind === "plan" && (
             <>
-              <span className="text-sm text-fg-muted">
+              <span className="flex items-center gap-2 text-sm text-fg-muted">
+                {check.kind === "checking" && (
+                  <span className="flex items-center gap-1.5" role="status">
+                    <Spinner /> {check.message}
+                  </span>
+                )}
+                {check.kind === "checking" && <span aria-hidden>·</span>}
                 {plan.ready ? (
                   "Ready."
                 ) : plan.steps.length ? (
@@ -433,7 +474,7 @@ export function MigrateModal({
               <Button
                 variant="secondary"
                 className="ml-auto"
-                disabled={busy || planning || plan.steps.length === 0 || (needsEnv && ldEnvs.length === 0)}
+                disabled={busy || planning || !fresh || plan.steps.length === 0 || (needsEnv && ldEnvs.length === 0)}
                 onClick={() => void run(true)}
               >
                 Dry run
@@ -442,6 +483,7 @@ export function MigrateModal({
                 disabled={
                   busy ||
                   planning ||
+                  !fresh ||
                   plan.steps.length === 0 ||
                   (needsEnv && ldEnvs.length === 0) ||
                   !confirmed ||
