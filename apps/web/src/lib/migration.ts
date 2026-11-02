@@ -39,7 +39,7 @@ import {
   type LdProjectState,
   type Plan,
 } from "@sslm/planner";
-import { StatsigConsoleClient } from "@sslm/statsig-client";
+import { STATSIG_CONSOLE_BASE_URL, StatsigConsoleClient } from "@sslm/statsig-client";
 import type { SourceRecord, RunJournalRecord } from "@sslm/store";
 import { demoKey, startDemoMock } from "./demo.ts";
 import { learnCapability, ldClient, ldSessionSnapshot, mergeLdFlags, mergeLdSegments, refreshLdState, type LdSession } from "./ld.ts";
@@ -347,6 +347,60 @@ export interface IdListFetchReport {
   blocked: { sourceId: string; reason: string }[];
 }
 
+/** A Console API client that can read a source's ID lists, and which source's key it uses. */
+export interface ConsoleAccess {
+  client: StatsigConsoleClient;
+  /** The source whose Console API key is used: the source itself, or a Console API source of the same project for a config spec. */
+  via: { sourceId: string; label: string; own: boolean };
+}
+
+/** Why a source's ID lists can't be read from StatSig right now. */
+export interface ConsoleAccessBlocked {
+  blocked: string;
+  /** True when entering a read-only Console API key for this source would unblock it. */
+  needsKey: boolean;
+}
+
+/**
+ * How a source's ID-list members can be read from StatSig (PLAN §4.2). A Console API source uses
+ * its own key. A config spec carries only hashed IDs, but the same project's members are one
+ * Console API call away: use a read-only key entered for the spec source, or borrow the key of a
+ * Console API source in the workspace, preferring one whose snapshot holds `segmentId`. The caller
+ * then reconciles what StatSig returns with the spec's hashes, so nothing is taken on trust.
+ */
+export async function consoleAccessFor(source: SourceRecord, sources: SourceRecord[], snapshots: CanonicalSnapshot[], segmentId?: string): Promise<ConsoleAccess | ConsoleAccessBlocked> {
+  const keyFor = async (s: SourceRecord): Promise<string | undefined> => {
+    if (s.isDemo && s.kind === "console_api") {
+      await startDemoMock();
+      return demoKey();
+    }
+    return secrets.get("statsig", s.id);
+  };
+  const open = async (s: SourceRecord, own: boolean): Promise<ConsoleAccess | undefined> => {
+    const apiKey = await keyFor(s);
+    if (!apiKey) return undefined;
+    return { client: new StatsigConsoleClient({ baseUrl: s.baseUrl ?? STATSIG_CONSOLE_BASE_URL, apiKey }), via: { sourceId: s.id, label: s.label, own } };
+  };
+  if (source.kind === "console_api") {
+    return (await open(source, true)) ?? { blocked: `No Console API key for ${source.label} in memory. Enter it under Connections (or unlock the vault), then retry.`, needsKey: false };
+  }
+  if (source.kind !== "config_spec") return { blocked: "ID lists can only be read through the StatSig Console API.", needsKey: false };
+  const own = await open(source, true);
+  if (own) return own;
+  const hasSegment = (s: SourceRecord) => !!segmentId && !!snapshots.find((snap) => snap.source.sourceId === s.id)?.segments.some((seg) => seg.id === segmentId && seg.segmentType !== "rule_based");
+  const consoles = sources.filter((s) => s.kind === "console_api" && s.workspaceId === source.workspaceId && s.id !== source.id).sort((a, b) => Number(hasSegment(b)) - Number(hasSegment(a)));
+  for (const s of consoles) {
+    const access = await open(s, false);
+    if (access) return access;
+  }
+  return {
+    blocked: consoles.length
+      ? `A config spec carries only hashed IDs. ${consoles.map((s) => s.label).join(", ")} could read them, but ${consoles.length === 1 ? "its" : "their"} Console API key is not in memory: unlock the vault or enter a read-only key here.`
+      : "A config spec carries only hashed IDs. Enter a read-only Console API key for this StatSig project to read them from StatSig, or upload a raw-ID CSV.",
+    needsKey: true,
+  };
+}
+
 /** Fetch members of deferred ID-list segments up to `max` IDs (default: the automatic limit) from Console API sources. */
 export async function fetchDeferredIdLists(workspaceId: string, sources: SourceRecord[], snapshots: CanonicalSnapshot[], have: IdLists, onProgress?: (m: string) => void, max = ID_LIST_AUTO_MAX): Promise<IdLists> {
   return (await fetchDeferredIdListsReport(workspaceId, sources, snapshots, have, onProgress, max)).idLists;
@@ -362,23 +416,18 @@ export async function fetchDeferredIdListsReport(workspaceId: string, sources: S
     const pending = deferred.filter((s) => (s.idList?.count ?? 0) <= max);
     report.tooBig.push(...deferred.filter((s) => (s.idList?.count ?? 0) > max).map((s) => s.id));
     if (!pending.length) continue;
-    if (source?.kind !== "console_api" || !source.baseUrl) {
+    if (source?.kind !== "console_api") {
       report.blocked.push({ sourceId: snap.source.sourceId, reason: "ID lists can only be read through the Console API; a config spec carries hashed IDs." });
       continue;
     }
-    let apiKey: string | undefined;
-    if (source.isDemo) {
-      await startDemoMock();
-      apiKey = await demoKey();
-    } else apiKey = secrets.get("statsig", source.id);
-    if (!apiKey) {
-      report.blocked.push({ sourceId: source.id, reason: "No Console API key for this source. Enter it under Connections, then retry." });
+    const access = await consoleAccessFor(source, sources, snapshots);
+    if ("blocked" in access) {
+      report.blocked.push({ sourceId: source.id, reason: access.blocked });
       continue;
     }
-    const client = new StatsigConsoleClient({ baseUrl: source.baseUrl, apiKey });
     for (const seg of pending) {
       onProgress?.(`Loading ${seg.idList?.count ?? ""} IDs for segment ${seg.id}…`);
-      const list = await client.getIdList(seg.id);
+      const list = await access.client.getIdList(seg.id);
       out[seg.uid] = list.ids;
       report.loaded.push(seg.id);
       await store.saveIdList({ uid: seg.uid, workspaceId, sourceId: source.id, fetchedAt: new Date().toISOString(), ids: list.ids, origin: "console" });

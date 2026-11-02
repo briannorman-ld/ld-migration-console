@@ -1,12 +1,13 @@
 import { useLiveQuery } from 'dexie-react-hooks';
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { parseIdListFile } from '@sslm/adapters';
 import { entityUid, type CanonicalSnapshot, type Segment, type SnapshotWarning } from '@sslm/canonical';
 import { LIST_SEGMENT_MAX } from '@sslm/mapper';
 import type { IdListHashesRecord, IdListRecord, SourceRecord } from '@sslm/store';
 import { PagerBar, usePager } from '../components/Pager.tsx';
-import { Badge, Button, Callout, Card, Spinner } from '../components/ui.tsx';
-import { fetchDeferredIdListsReport, ID_LIST_AUTO_MAX, ID_LIST_FETCH_MAX, type IdListFetchReport } from '../lib/migration.ts';
+import { Badge, Button, Callout, Card, Input, Spinner } from '../components/ui.tsx';
+import { consoleAccessFor, fetchDeferredIdListsReport, ID_LIST_AUTO_MAX, ID_LIST_FETCH_MAX, type ConsoleAccess, type ConsoleAccessBlocked, type IdListFetchReport } from '../lib/migration.ts';
+import { secrets } from '../lib/secrets.ts';
 import { store } from '../lib/store.ts';
 import type { MigrationContext } from '../lib/useMigration.ts';
 import { pipeline } from '../pipeline/client.ts';
@@ -23,8 +24,9 @@ const n = (x: number | undefined) => (x ?? 0).toLocaleString('en-US');
 /**
  * Schema mismatches, skipped endpoints, partial-spec hints: never silently swallowed. The ID-list
  * panel handles the lists a source can't deliver on its own: deferred Console API lists (loaded on
- * request, including the big ones), and a config spec's hashed lists, which need the `get_id_lists`
- * files and a raw-ID CSV to reconcile (PLAN §4.2).
+ * request, including the big ones), and a config spec's hashed lists, which are read from StatSig
+ * through a Console API key when one is available, or reconciled from the `get_id_lists` files and
+ * a raw-ID CSV otherwise (PLAN §4.2).
  */
 export function WarningsView({
   workspaceId,
@@ -45,7 +47,7 @@ export function WarningsView({
     <div className="space-y-4">
       <h2 className="font-display text-xl font-semibold tracking-tight">Source warnings</h2>
       {sources.map((s) => (
-        <SourceWarnings key={s.id} workspaceId={workspaceId} source={s} snapshot={snapshots[s.id]} m={m} idListRecs={idListRecs} hashRecs={hashRecs} onResync={() => onResync(s)} />
+        <SourceWarnings key={s.id} workspaceId={workspaceId} source={s} sources={sources} snapshot={snapshots[s.id]} snapshots={snapshots} m={m} idListRecs={idListRecs} hashRecs={hashRecs} onResync={() => onResync(s)} />
       ))}
     </div>
   );
@@ -56,7 +58,9 @@ type Fetch = { kind: 'idle' } | { kind: 'running'; message: string } | { kind: '
 function SourceWarnings({
   workspaceId,
   source,
+  sources,
   snapshot,
+  snapshots,
   m,
   idListRecs,
   hashRecs,
@@ -64,12 +68,15 @@ function SourceWarnings({
 }: {
   workspaceId: string;
   source: SourceRecord;
+  sources: SourceRecord[];
   snapshot: CanonicalSnapshot | undefined;
+  snapshots: Record<string, CanonicalSnapshot | undefined>;
   m: MigrationContext | null;
   idListRecs: IdListRecord[];
   hashRecs: IdListHashesRecord[];
   onResync: () => void;
 }) {
+  const allSnapshots = useMemo(() => Object.values(snapshots).filter((x): x is CanonicalSnapshot => !!x), [snapshots]);
   const w: SnapshotWarning[] = snapshot?.warnings ?? [];
   const pager = usePager(w);
   const [fetch, setFetch] = useState<Fetch>({ kind: 'idle' });
@@ -148,7 +155,7 @@ function SourceWarnings({
           </Callout>
         </div>
       )}
-      {snapshot && lists.length > 0 && m && <IdListsPanel workspaceId={workspaceId} source={source} snapshot={snapshot} segments={lists} m={m} idListRecs={idListRecs} hashRecs={hashRecs} />}
+      {snapshot && lists.length > 0 && m && <IdListsPanel workspaceId={workspaceId} source={source} sources={sources} snapshots={allSnapshots} segments={lists} m={m} idListRecs={idListRecs} hashRecs={hashRecs} />}
       {w.length === 0 ? (
         <div className="p-4">
           <Callout tone="green">No schema mismatches or skipped endpoints.</Callout>
@@ -157,7 +164,7 @@ function SourceWarnings({
         <>
           {tooBig > 0 && fetch.kind === 'idle' && (
             <div className="px-4 pt-2 text-xs text-fg-muted">
-              {tooBig} deferred list{tooBig === 1 ? ' is' : 's are'} above {ID_LIST_FETCH_MAX.toLocaleString()} IDs and can't be loaded through the Console API budget; export the list from StatSig and upload it as a raw-ID CSV below.
+              {tooBig} deferred list{tooBig === 1 ? ' is' : 's are'} above {ID_LIST_FETCH_MAX.toLocaleString()} IDs and can't be loaded through the Console API budget; export the list from StatSig and upload it as a raw-ID CSV below (the Console API returns 100 IDs per request).
             </div>
           )}
           <PagerBar pager={pager} label="warnings" className="px-4 py-2" />
@@ -183,16 +190,21 @@ function SourceWarnings({
 }
 
 type Busy = { uid: string; message: string } | null;
+type Access = { kind: 'checking' } | ({ kind: 'ok' } & ConsoleAccess) | ({ kind: 'blocked' } & ConsoleAccessBlocked);
 
 /**
- * One row per ID list the source can't deliver ready to use. Uploads stay in IndexedDB (customer
- * data, local only); hashing runs in the pipeline worker. The mapper reads the result through
- * `idLists` and `coverage`, so the Decisions page updates as soon as a list is reconciled.
+ * One row per ID list the source can't deliver ready to use. The first choice is always to read
+ * the members from StatSig: a Console API source with its own key, a config spec through a key
+ * entered here or borrowed from a Console API source of the workspace. A raw-ID CSV is the fallback
+ * (no key, or a list above the Console API budget). Uploads and fetched lists stay in IndexedDB
+ * (customer data, local only); hashing runs in the pipeline worker. The mapper reads the result
+ * through `idLists` and `coverage`, so the Decisions page updates as soon as a list is in.
  */
 function IdListsPanel({
   workspaceId,
   source,
-  snapshot,
+  sources,
+  snapshots,
   segments,
   m,
   idListRecs,
@@ -200,7 +212,8 @@ function IdListsPanel({
 }: {
   workspaceId: string;
   source: SourceRecord;
-  snapshot: CanonicalSnapshot;
+  sources: SourceRecord[];
+  snapshots: CanonicalSnapshot[];
   segments: Segment[];
   m: MigrationContext;
   idListRecs: IdListRecord[];
@@ -208,8 +221,70 @@ function IdListsPanel({
 }) {
   const [busy, setBusy] = useState<Busy>(null);
   const [error, setError] = useState<string>();
+  const [access, setAccess] = useState<Access>({ kind: 'checking' });
+  const [keyDraft, setKeyDraft] = useState('');
+  const [keyOpen, setKeyOpen] = useState(false);
   const hashInput = useRef<Record<string, HTMLInputElement | null>>({});
   const rawInput = useRef<Record<string, HTMLInputElement | null>>({});
+
+  // Can this source's lists be read from StatSig right now? Re-checked when a key is entered or the vault unlocks.
+  useEffect(() => {
+    let live = true;
+    const check = () => {
+      void consoleAccessFor(source, sources, snapshots).then((a) => {
+        if (live) setAccess('blocked' in a ? { kind: 'blocked', ...a } : { kind: 'ok', ...a });
+      });
+    };
+    check();
+    const unsubscribe = secrets.subscribe(check);
+    return () => {
+      live = false;
+      unsubscribe();
+    };
+  }, [source, sources, snapshots]);
+
+  const applyKey = () => {
+    const key = keyDraft.trim();
+    if (!key) return;
+    secrets.set('statsig', source.id, key, workspaceId);
+    setKeyDraft('');
+    setKeyOpen(false);
+  };
+
+  const loadFromStatsig = async (seg: Segment) => {
+    setError(undefined);
+    setBusy({ uid: seg.uid, message: 'Connecting to StatSig…' });
+    try {
+      const a = await consoleAccessFor(source, sources, snapshots, seg.id);
+      if ('blocked' in a) throw new Error(a.blocked);
+      setBusy({ uid: seg.uid, message: `Reading ${n(seg.idList?.count)} IDs from StatSig${a.via.own ? '' : ` through ${a.via.label}`}…` });
+      const list = await a.client.getIdList(seg.id);
+      if (list.ids.length === 0) throw new Error(`StatSig returned no IDs for segment ${seg.id}${a.via.own ? '' : ` through ${a.via.label}: is it the same StatSig project?`}.`);
+      const hashes = hashRecs.find((r) => r.uid === seg.uid)?.hashes;
+      let coverage: IdListRecord['coverage'];
+      if (seg.idList?.hashed && hashes) {
+        // The spec's hashes check the fetch; StatSig's own members stay authoritative, so a hash the
+        // files don't know (a list that grew since the files were exported) is not an "extra".
+        setBusy({ uid: seg.uid, message: `Checking ${n(list.ids.length)} IDs against ${n(hashes.length)} hashes…` });
+        const result = await pipeline().reconcileIdList({ ids: list.ids, hashes, count: seg.idList?.count });
+        coverage = { ...result.coverage, extra: 0 };
+      }
+      await store.saveIdList({
+        uid: seg.uid,
+        workspaceId,
+        sourceId: source.id,
+        fetchedAt: new Date().toISOString(),
+        ids: list.ids,
+        origin: 'console',
+        ...(a.via.own ? {} : { via: { sourceId: a.via.sourceId, label: a.via.label } }),
+        ...(coverage ? { coverage } : {}),
+      });
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
 
   const uploadHashes = async (seg: Segment, files: FileList | null) => {
     if (!files?.length) return;
@@ -224,12 +299,13 @@ function IdListsPanel({
         names.push(f.name);
       }
       await store.saveIdListHashes({ uid: seg.uid, workspaceId, sourceId: source.id, listName: seg.idList?.hashed?.listName ?? seg.id, uploadedAt: new Date().toISOString(), fileNames: names, hashes: [...set] });
-      // A raw upload made before the hashes arrived was unverified: check it now.
-      const raw = idListRecs.find((r) => r.uid === seg.uid && r.origin === 'upload');
-      if (raw) {
-        setBusy({ uid: seg.uid, message: `Re-checking ${n(raw.ids.length)} uploaded IDs against ${n(set.size)} hashes…` });
-        const result = await pipeline().reconcileIdList({ rawCsv: raw.ids.join('\n'), hashes: [...set], count: seg.idList?.count });
-        await store.saveIdList({ ...raw, fetchedAt: new Date().toISOString(), ids: result.ids, coverage: result.coverage });
+      // A raw upload or StatSig read made before the hashes arrived was unverified: check it now.
+      const rec = idListRecs.find((r) => r.uid === seg.uid);
+      if (rec) {
+        setBusy({ uid: seg.uid, message: `Re-checking ${n(rec.ids.length)} IDs against ${n(set.size)} hashes…` });
+        const result = await pipeline().reconcileIdList({ ids: rec.ids, hashes: [...set], count: seg.idList?.count });
+        if (rec.origin === 'upload') await store.saveIdList({ ...rec, fetchedAt: new Date().toISOString(), ids: result.ids, coverage: result.coverage });
+        else await store.saveIdList({ ...rec, fetchedAt: new Date().toISOString(), coverage: { ...result.coverage, extra: 0 } });
       }
     } catch (e) {
       setError((e as Error).message);
@@ -255,16 +331,59 @@ function IdListsPanel({
     }
   };
 
+  const spec = source.kind === 'config_spec';
+  const viaLabel = access.kind === 'ok' && !access.via.own ? access.via.label : undefined;
+
   return (
     <div className="border-b border-line-soft px-4 py-3">
       <div className="mb-2 flex flex-wrap items-center gap-2">
         <span className="text-sm font-medium">ID lists</span>
         <span className="text-xs text-fg-muted">
-          {source.kind === 'config_spec'
-            ? 'A config spec names large lists but ships their members only as hashes (get_id_lists). Upload those files, then a CSV of the raw IDs; the console hashes the IDs in your browser and reports coverage. Nothing leaves this machine.'
-            : `Lists above ${ID_LIST_AUTO_MAX.toLocaleString()} IDs are not loaded automatically. Load them here (or upload a CSV export); above ${LIST_SEGMENT_MAX.toLocaleString()} IDs they migrate as LD big segments.`}
+          {spec
+            ? 'A config spec names large lists but ships their members only as hashes (get_id_lists). The console reads the members from StatSig with a read-only Console API key and checks them against the hashes; without a key, upload the hash files and a CSV of the raw IDs instead. Everything is hashed and stored in this browser only.'
+            : `Lists above ${ID_LIST_AUTO_MAX.toLocaleString()} IDs are not loaded automatically: load each from StatSig here (up to ${ID_LIST_FETCH_MAX.toLocaleString()} IDs, the Console API budget), or upload a CSV export. Above ${LIST_SEGMENT_MAX.toLocaleString()} IDs they migrate as LD big segments.`}
         </span>
       </div>
+      {spec && access.kind === 'ok' && (
+        <p className="mb-2 text-xs text-fg-muted" data-testid="id-list-access">
+          Reading from StatSig {viaLabel ? `through the Console API key of ${viaLabel}` : 'with the Console API key entered for this source'}.
+          {!viaLabel && (
+            <Button variant="ghost" className="ml-2 py-0.5 text-xs" onClick={() => secrets.forget('statsig', source.id)}>
+              Forget key
+            </Button>
+          )}
+        </p>
+      )}
+      {access.kind === 'blocked' && (
+        <div className="mb-2" data-testid="id-list-access">
+          <Callout tone="blue">
+            <span>{access.blocked}</span>
+            {access.needsKey && !keyOpen && (
+              <Button variant="secondary" className="ml-2 py-0.5 text-xs" onClick={() => setKeyOpen(true)}>
+                Enter a Console API key
+              </Button>
+            )}
+            {access.needsKey && keyOpen && (
+              <form
+                className="mt-2 flex flex-wrap items-center gap-2"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  applyKey();
+                }}
+              >
+                <Input type="password" autoComplete="off" aria-label="Console API key (read-only)" placeholder="console-…" value={keyDraft} onChange={(e) => setKeyDraft(e.target.value)} className="w-72" />
+                <Button type="submit" className="py-1 text-xs" disabled={!keyDraft.trim()}>
+                  Use key
+                </Button>
+                <Button type="button" variant="ghost" className="py-1 text-xs" onClick={() => setKeyOpen(false)}>
+                  Cancel
+                </Button>
+                <span className="text-xs text-fg-muted">Read-only key for the same StatSig project. Kept encrypted on this device, sent only to statsigapi.net.</span>
+              </form>
+            )}
+          </Callout>
+        </div>
+      )}
       {error && (
         <div className="mb-2">
           <Callout tone="red">{error}</Callout>
@@ -278,6 +397,9 @@ function IdListsPanel({
           const count = seg.idList?.count ?? rec?.ids.length;
           const pct = cov && cov.total ? Math.floor((cov.matched / cov.total) * 1000) / 10 : undefined;
           const big = (rec?.ids.length ?? count ?? 0) > LIST_SEGMENT_MAX;
+          const loaded = !!rec || !!seg.idList?.ids;
+          const overBudget = (seg.idList?.count ?? 0) > ID_LIST_FETCH_MAX;
+          const canFetch = access.kind === 'ok' && !overBudget;
           return (
             <li key={seg.uid} className="flex flex-wrap items-center gap-2 py-2">
               <span className="font-mono text-xs">{seg.id}</span>
@@ -287,9 +409,13 @@ function IdListsPanel({
               {big && <Badge tone="violet" title={`Above LD's ${LIST_SEGMENT_MAX.toLocaleString()}-ID list limit: migrates as a big segment (CSV import, Enterprise)`}>big segment</Badge>}
               {!rec && seg.idList?.hashed && <Badge tone="amber">hashed: needs raw IDs</Badge>}
               {!rec && !seg.idList?.hashed && !seg.idList?.ids && <Badge tone="amber">not loaded</Badge>}
-              {rec?.origin !== 'upload' && (rec || seg.idList?.ids) && <Badge tone="green">loaded</Badge>}
-              {rec?.origin === 'upload' && cov && (
-                <Badge tone={cov.verified ? (cov.missing === 0 ? 'green' : 'amber') : 'blue'} title={cov.verified ? `${n(cov.matched)} of ${n(cov.total)} hashes matched; ${n(cov.missing)} missing; ${n(cov.extra)} uploaded IDs not in the list` : 'No hash file uploaded: checked against the count only'}>
+              {rec?.origin !== 'upload' && loaded && (
+                <Badge tone="green" title={rec?.via ? `Read from StatSig through the Console API key of ${rec.via.label}` : 'Read from StatSig through the Console API'}>
+                  {rec?.via ? `loaded from StatSig via ${rec.via.label}` : rec?.origin === 'console' && spec ? 'loaded from StatSig' : 'loaded'}
+                </Badge>
+              )}
+              {cov && (
+                <Badge tone={cov.verified ? (cov.missing === 0 ? 'green' : 'amber') : 'blue'} title={cov.verified ? `${n(cov.matched)} of ${n(cov.total)} hashes matched; ${n(cov.missing)} missing${cov.extra ? `; ${n(cov.extra)} uploaded IDs not in the list` : ''}` : 'No hash file uploaded: checked against the count only'}>
                   {cov.verified ? `reconciled ${pct}%` : `uploaded, unverified (${n(cov.matched)}/${n(cov.total)})`}
                 </Badge>
               )}
@@ -305,20 +431,42 @@ function IdListsPanel({
                 </span>
               )}
               <div className="ml-auto flex items-center gap-2">
+                {overBudget && !loaded && (
+                  <span className="text-xs text-fg-muted" title={`The Console API returns 100 IDs per request; ${n(seg.idList?.count)} IDs would take ${n(Math.ceil((seg.idList?.count ?? 0) / 100))} requests. Export the list from StatSig and upload it instead.`}>
+                    above the Console API budget
+                  </span>
+                )}
+                {!overBudget && (access.kind !== 'blocked' || !loaded) && (
+                  <Button
+                    variant={loaded ? 'ghost' : 'primary'}
+                    className="py-1 text-xs"
+                    disabled={!!busy || !canFetch}
+                    onClick={() => void loadFromStatsig(seg)}
+                    title={
+                      access.kind === 'blocked'
+                        ? access.blocked
+                        : access.kind === 'checking'
+                          ? 'Checking the Console API key…'
+                          : `Read the ${n(seg.idList?.count)} IDs through the StatSig Console API${viaLabel ? ` (key of ${viaLabel})` : ''}${seg.idList?.hashed ? ', then check them against the hashes' : ''}`
+                    }
+                  >
+                    {loaded ? 'Reload from StatSig' : 'Load from StatSig'}
+                  </Button>
+                )}
                 {seg.idList?.hashed && (
                   <>
                     <input ref={(el) => void (hashInput.current[seg.uid] = el)} type="file" multiple className="hidden" onChange={(e) => void uploadHashes(seg, e.target.files).then(() => (e.target.value = ''))} />
-                    <Button variant="secondary" className="py-1 text-xs" disabled={!!busy} onClick={() => hashInput.current[seg.uid]?.click()} title="The get_id_lists file(s) for this list: one +hash or -hash per line. Several files apply oldest first.">
+                    <Button variant="secondary" className="py-1 text-xs" disabled={!!busy} onClick={() => hashInput.current[seg.uid]?.click()} title="The get_id_lists file(s) for this list: one +hash or -hash per line. Several files apply oldest first. Optional when the list is read from StatSig; they verify it.">
                       {hashes ? 'Add hash file' : 'Upload hash file'}
                     </Button>
                   </>
                 )}
                 <input ref={(el) => void (rawInput.current[seg.uid] = el)} type="file" accept=".csv,.txt,text/csv,text/plain" className="hidden" onChange={(e) => void uploadRaw(seg, e.target.files).then(() => (e.target.value = ''))} />
-                <Button variant="secondary" className="py-1 text-xs" disabled={!!busy} onClick={() => rawInput.current[seg.uid]?.click()} title="A CSV (first column) or one ID per line. Hashed in the browser and compared with the StatSig list.">
+                <Button variant="secondary" className="py-1 text-xs" disabled={!!busy} onClick={() => rawInput.current[seg.uid]?.click()} title="Fallback when StatSig can't be read: a CSV (first column) or one ID per line, hashed in the browser and compared with the StatSig list.">
                   {rec?.origin === 'upload' ? 'Replace raw IDs' : 'Upload raw IDs'}
                 </Button>
-                {rec?.origin === 'upload' && (
-                  <Button variant="ghost" className="py-1 text-xs" disabled={!!busy} onClick={() => void store.deleteIdList(seg.uid)}>
+                {rec && (
+                  <Button variant="ghost" className="py-1 text-xs" disabled={!!busy} onClick={() => void store.deleteIdList(seg.uid)} title="Forget this list's members on this device">
                     Remove
                   </Button>
                 )}
@@ -327,7 +475,7 @@ function IdListsPanel({
           );
         })}
       </ul>
-      {m.coverage && Object.keys(m.coverage).length > 0 && <p className="mt-2 text-xs text-fg-muted">Partial coverage is a decision (hashed_id_list) on the Decisions page: accept it to migrate the matched IDs, or upload a fuller CSV.</p>}
+      {m.coverage && Object.keys(m.coverage).length > 0 && <p className="mt-2 text-xs text-fg-muted">Partial coverage is a decision (hashed_id_list) on the Decisions page: accept it to migrate the matched IDs, or reload the list from StatSig / upload a fuller CSV.</p>}
     </div>
   );
 }

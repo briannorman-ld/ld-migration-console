@@ -286,9 +286,9 @@ describe('hashed ID lists and reconciliation (PLAN §4.2; edge case 9.4)', () =>
     const d = g.unresolved.find((x) => x.type === 'hashed_id_list')!;
     expect(d.severity).toBe('blocking');
     expect(d.subject.uid).toBe(seg().uid);
-    expect(d.explanation).toMatch(/Upload the raw IDs/);
+    expect(d.explanation).toMatch(/read the members from StatSig with a read-only Console API key, or upload the raw IDs/);
     const s = mapSegment({ ...args('wholesale_portal', { canonical: { snapshot } }), entity: seg() });
-    expect(s.skipped).toMatch(/upload the raw IDs/);
+    expect(s.skipped).toMatch(/read the IDs from StatSig or upload them/);
   });
 
   it('a reconciled upload short of 100% is an acknowledgement; accepting it migrates the matched IDs', () => {

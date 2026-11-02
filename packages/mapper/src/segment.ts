@@ -80,10 +80,10 @@ export function mapSegment(args: MapArgs<Segment>): SegmentMapResult {
       if (size.hashed || ctx.coverage?.[seg.uid]) {
         const { choice } = hashedListChoice(ctx, seg, fragment);
         if (choice === 'skip') throw new SkipItem('its hashed ID list is not reconciled closely enough yet');
-        if (choice !== 'accept') throw new SkipItem('its ID list is hashed (config spec): upload the raw IDs to reconcile it');
+        if (choice !== 'accept') throw new SkipItem('its ID list is hashed (config spec): read the IDs from StatSig or upload them to reconcile it');
         const cov = ctx.coverage?.[seg.uid];
         if (cov && (cov.missing > 0 || cov.extra > 0 || !cov.verified))
-          fidelity.push({ fidelity: cov.missing > 0 || !cov.verified ? 'partial' : 'full', message: cov.verified ? `Reconciled raw-ID upload: ${cov.matched.toLocaleString('en-US')} of ${cov.total.toLocaleString('en-US')} StatSig hashes matched${cov.missing ? `, ${cov.missing.toLocaleString('en-US')} missing` : ''}${cov.extra ? `, ${cov.extra.toLocaleString('en-US')} uploaded IDs not in the list left out` : ''}.` : `Raw-ID upload of ${cov.matched.toLocaleString('en-US')} IDs against StatSig's count of ${cov.total.toLocaleString('en-US')}; no hash file was uploaded, so membership is unverified.` });
+          fidelity.push({ fidelity: cov.missing > 0 || !cov.verified ? 'partial' : 'full', message: cov.verified ? `Reconciled raw IDs: ${cov.matched.toLocaleString('en-US')} of ${cov.total.toLocaleString('en-US')} StatSig hashes matched${cov.missing ? `, ${cov.missing.toLocaleString('en-US')} missing` : ''}${cov.extra ? `, ${cov.extra.toLocaleString('en-US')} uploaded IDs not in the list left out` : ''}.` : `Raw-ID upload of ${cov.matched.toLocaleString('en-US')} IDs against StatSig's count of ${cov.total.toLocaleString('en-US')}; no hash file was uploaded, so membership is unverified.` });
       }
       if (!size.ids) throw new SkipItem('its ID list was not fetched from StatSig');
       const unit = resolveUnit(ctx, seg.idType);

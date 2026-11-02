@@ -37,7 +37,7 @@ self.onmessage = async (ev: MessageEvent<PipelineRequest>) => {
       const snapshot = normalizeConsoleSnapshot(raw, { source: { sourceId: req.source.sourceId, sourceKind: 'console_api', alias: req.source.alias } });
       post({ id: req.id, type: 'result', snapshot });
     } else if (req.type === 'reconcile-id-list') {
-      const result = await reconcileIdList(parseRawIdCsv(req.rawCsv), req.hashes ? new Set(req.hashes) : undefined, req.count);
+      const result = await reconcileIdList(req.ids ?? parseRawIdCsv(req.rawCsv ?? ''), req.hashes ? new Set(req.hashes) : undefined, req.count);
       post({ id: req.id, type: 'reconciled', result });
     } else {
       const parsed = await parseSpecBytes(new Uint8Array(req.bytes), req.filename);

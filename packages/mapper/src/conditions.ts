@@ -914,7 +914,7 @@ export function hashedListChoice(ctx: ConditionContext, seg: Segment, fragment: 
         subject: { sourceId: seg.source.sourceId, kind: 'segment', uid: seg.uid, id: seg.id, location: `${n(seg.idList?.count)} hashed IDs` },
         path: 'hashed',
         title: `Segment “${seg.id}” has only hashed IDs`,
-        explanation: `The config spec ships this ID list as one-way hashes (the first 8 characters of base64(sha256(id))), which can't be turned back into IDs. Upload the raw IDs as a CSV under Source warnings › ID lists: the console hashes them in the browser, reports how many of StatSig's hashes they cover, and migrates the list once you accept that coverage. Or decide how to handle the rule now.`,
+        explanation: `The config spec ships this ID list as one-way hashes (the first 8 characters of base64(sha256(id))), which can't be turned back into IDs. Under Source warnings › ID lists, read the members from StatSig with a read-only Console API key, or upload the raw IDs as a CSV: the console hashes them in the browser, reports how many of StatSig's hashes they cover, and migrates the list once you accept that coverage. Or decide how to handle the rule now.`,
         sourceFragment: fragment,
         fingerprintOf: { segment: seg.id, hashed: true },
         options: [DROP_CONDITION, DROP_RULE, SKIP],
@@ -924,7 +924,7 @@ export function hashedListChoice(ctx: ConditionContext, seg: Segment, fragment: 
   }
   if (!cov || (cov.verified && cov.missing === 0) || (!cov.verified && cov.matched >= cov.total)) return { choice: 'accept', resolved: true };
   const pct = cov.total ? Math.floor((cov.matched / cov.total) * 1000) / 10 : 0;
-  const what = cov.verified ? `${n(cov.matched)} of StatSig's ${n(cov.total)} hashes matched (${pct}%); ${n(cov.missing)} hashes have no raw ID in the upload` : `the upload has ${n(cov.matched)} IDs against StatSig's count of ${n(cov.total)} (${pct}%); no hash file was uploaded, so the IDs themselves are unverified`;
+  const what = cov.verified ? `${n(cov.matched)} of StatSig's ${n(cov.total)} hashes matched (${pct}%); ${n(cov.missing)} hashes have no raw ID` : `the upload has ${n(cov.matched)} IDs against StatSig's count of ${n(cov.total)} (${pct}%); no hash file was uploaded, so the IDs themselves are unverified`;
   return ctx.decisions.chooseEx(
     {
       type: 'hashed_id_list',

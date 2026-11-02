@@ -11,8 +11,11 @@ export interface PipelineSource {
 export type PipelineRequest =
   | { id: number; type: 'crawl-console'; source: PipelineSource; baseUrl: string; apiKey: string; eagerIdListMax?: number; kinds?: EntityKind[] }
   | { id: number; type: 'parse-spec'; source: PipelineSource; bytes: ArrayBuffer; filename: string }
-  /** Hash a raw-ID upload and compare it with a hashed StatSig list (PLAN §4.2). `hashes` absent = only the count is known. */
-  | { id: number; type: 'reconcile-id-list'; rawCsv: string; hashes?: string[]; count?: number }
+  /**
+   * Hash raw IDs and compare them with a hashed StatSig list (PLAN §4.2): `rawCsv` for an upload,
+   * `ids` for a list read through the Console API. `hashes` absent = only the count is known.
+   */
+  | { id: number; type: 'reconcile-id-list'; rawCsv?: string; ids?: string[]; hashes?: string[]; count?: number }
   | { id: number; type: 'cancel'; target: number };
 
 export type PipelineEvent =

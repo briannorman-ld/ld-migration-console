@@ -57,7 +57,7 @@ export class Pipeline {
   }
 
   /** Hash a raw-ID upload off the UI thread and reconcile it with StatSig's hashed list. */
-  reconcileIdList(args: { rawCsv: string; hashes?: string[]; count?: number }): Promise<ReconcileResult> {
+  reconcileIdList(args: { rawCsv?: string; ids?: string[]; hashes?: string[]; count?: number }): Promise<ReconcileResult> {
     const id = this.nextId++;
     return new Promise<ReconcileResult>((resolveReconciled, reject) => {
       this.pending.set(id, { resolve: () => undefined, resolveReconciled, reject });

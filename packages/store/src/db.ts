@@ -108,6 +108,8 @@ export interface IdListRecord {
   /** Where the IDs came from; absent = Console API fetch (M3 records). */
   origin?: "console" | "upload";
   fileName?: string;
+  /** Console fetches for a config-spec source: whose Console API key read the list (the spec source's own, or a Console API source of the workspace). */
+  via?: { sourceId: string; label: string };
   /** Reconciliation against StatSig's hashed list, for uploads (mapper `IdListCoverage`). */
   coverage?: { total: number; matched: number; missing: number; extra: number; verified: boolean };
 }
