@@ -9,7 +9,7 @@ import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import { readSync, type CanonicalSnapshot } from '@sslm/canonical';
 import { alertsSince, ldVersionsAtSync, latestSamples, monitorRows, pruneSamples, shouldSample, type MonitorAlert, type MonitorRow, type MonitoredItem } from '@sslm/monitoring';
 import { flagOwner } from '@sslm/planner';
-import type { MonitorSampleRecord, MonitorStateRecord } from '@sslm/store';
+import type { MonitorSampleRecord, MonitorStateRecord, RunJournalRecord } from '@sslm/store';
 import { ldClient, ldSessionSnapshot, refreshLdState, type LdSession } from './ld.ts';
 import { envTargets, ldFlagState, mapAutotuneFor, mapConfigFor, mapGateFor, mapNeutralFlagFor, type MappingInputs } from './migration.ts';
 import { store } from './store.ts';
@@ -153,12 +153,17 @@ export interface MonitoringData {
   loaded: boolean;
 }
 
-/** Live monitoring rows from IndexedDB (last check, switches, samples, runs) and the mapping results. */
-export function useMonitoring(workspaceId: string, items: MonitoredItem[], ld: LdSession): MonitoringData {
+/**
+ * Live monitoring rows from IndexedDB (last check, switches, samples, runs) and the mapping results.
+ * `runs` is the workspace's run journal when the caller already has it live (WorkspaceScreen does;
+ * each record carries pre-images, so it is read once per change, not once per subscriber).
+ */
+export function useMonitoring(workspaceId: string, items: MonitoredItem[], ld: LdSession, runs?: RunJournalRecord[]): MonitoringData {
   const state = useLiveQuery(() => store.getMonitorState(workspaceId), [workspaceId]);
   const settings = useLiveQuery(() => store.listMonitorItems(workspaceId), [workspaceId]);
   const samples = useLiveQuery(() => store.listMonitorSamples(workspaceId), [workspaceId]);
-  const runs = useLiveQuery(() => store.listRuns(workspaceId), [workspaceId]);
+  const ownRuns = useLiveQuery(() => (runs ? undefined : store.listRuns(workspaceId)), [workspaceId, !!runs]);
+  runs ??= ownRuns;
   const versions = useMemo(() => ldVersionsAtSync(runs ?? []), [runs]);
   return useMemo(() => {
     const loaded = settings !== undefined && samples !== undefined && runs !== undefined;

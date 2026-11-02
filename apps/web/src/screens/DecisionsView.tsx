@@ -35,7 +35,6 @@ import {
 } from "../lib/decisionSummary.ts";
 import { KIND_LABEL } from "../lib/kinds.ts";
 import {
-  collectDecisions,
   decisionLogCsv,
   decisionLogMarkdown,
   download,
@@ -55,11 +54,14 @@ import type { MigrationContext } from "../lib/useMigration.ts";
  */
 export function DecisionsView({
   snapshots,
+  decisions: all,
   m,
   workspaceName,
   env,
 }: {
   snapshots: CanonicalSnapshot[];
+  /** Every decision in the workspace (collectDecisions), open and decided; the sidebar counts come from the same list. */
+  decisions: DecisionInstance[];
   m: MigrationContext;
   workspaceName: string;
   env: string;
@@ -71,10 +73,6 @@ export function DecisionsView({
   const [showAnswered, setShowAnswered] = useState(false);
   const [filters, setFilters] = useState<DecisionFilters>(NO_FILTERS);
   const [expanded, setExpanded] = useState<string>();
-  const all = useMemo(
-    () => collectDecisions(snapshots, m.profile, m.connected, m),
-    [snapshots, m],
-  );
   const open = useMemo(() => all.filter((d) => !d.resolvedWith), [all]);
   const decided = useMemo(() => all.filter((d) => d.resolvedWith), [all]);
   const summary = useMemo(

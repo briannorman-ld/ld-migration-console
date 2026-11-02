@@ -156,8 +156,8 @@ export interface MappingInputs {
   now: string;
 }
 
-/** The mapper's view of the LD account's people: what the session read, and whether it could. */
-export function ldDirectory(ld: LdSession): LdDirectory {
+/** The mapper's view of the LD account's people: what the session read, and whether it could. Reads only `members`, `teams` and `matrix`. */
+export function ldDirectory(ld: Pick<LdSession, 'members' | 'teams' | 'matrix'>): LdDirectory {
   const cap = (k: string) => ld.matrix?.capabilities.find((c) => c.key === k)?.status;
   return {
     members: (ld.members ?? []).map((m) => ({ id: m._id, email: m.email })),
@@ -170,21 +170,40 @@ export function ldDirectory(ld: LdSession): LdDirectory {
 /*
  * Mapping memo. The explorers, the Decisions view, the readiness line and collectDecisions all map
  * the same entities with the same inputs, and React re-renders on every click, so without this the
- * whole project was re-mapped (0.06 ms per gate per environment: half a second on a real project)
- * for each selection, filter keystroke or nav change. Results are keyed on the identity of the
- * inputs (a new MigrationContext after a decision or profile change) and of the snapshot (a new
- * object after a sync), then by entity and environment, and are treated as immutable by callers.
+ * whole project was re-mapped (0.15 ms per gate per environment: half a second on a real project)
+ * for each selection, filter keystroke or nav change. Results are keyed on the identity of what the
+ * mapper reads: the profile, the resolutions, the ID lists and their coverage, the capabilities
+ * and the LD directory (each a new object only when it changed; useMigration keeps them stable),
+ * then the snapshot (a new object after a sync), then entity, environment and `now`. The
+ * MigrationContext that carries them changes identity on every LD session patch (a probe step, a
+ * flag refresh, a monitoring check), which must not throw the whole project's mapping away.
+ * Results are treated as immutable by callers.
  */
-const mapMemo = new WeakMap<MappingInputs, WeakMap<CanonicalSnapshot, Map<string, unknown>>>();
+type MemoLeaf = Map<string, unknown>;
+const mapMemo = new WeakMap<object, WeakMap<object, WeakMap<object, WeakMap<object, WeakMap<object, WeakMap<object, WeakMap<CanonicalSnapshot, MemoLeaf>>>>>>>();
+
+function nested<K extends object, V extends object>(map: WeakMap<K, V>, key: K, make: () => V): V {
+  let v = map.get(key);
+  if (!v) map.set(key, (v = make()));
+  return v;
+}
+
+/** Stands in for an input a caller left out (tests build partial contexts), so it still keys the memo. */
+const MISSING = {};
+const part = (v: unknown): object => (v !== null && typeof v === 'object' ? v : MISSING);
 
 function memoized<T>(i: MappingInputs, snapshot: CanonicalSnapshot, key: string, compute: () => T): T {
-  let bySnapshot = mapMemo.get(i);
-  if (!bySnapshot) mapMemo.set(i, (bySnapshot = new WeakMap()));
-  let byKey = bySnapshot.get(snapshot);
-  if (!byKey) bySnapshot.set(snapshot, (byKey = new Map()));
-  if (byKey.has(key)) return byKey.get(key) as T;
+  const byResolutions = nested(mapMemo, part(i.profile), () => new WeakMap());
+  const byIdLists = nested(byResolutions, part(i.resolutions), () => new WeakMap());
+  const byCoverage = nested(byIdLists, part(i.idLists), () => new WeakMap());
+  const byCapabilities = nested(byCoverage, part(i.coverage), () => new WeakMap());
+  const byDirectory = nested(byCapabilities, part(i.capabilities), () => new WeakMap());
+  const bySnapshot = nested(byDirectory, part(i.directory), () => new WeakMap());
+  const byKey = nested(bySnapshot, snapshot, () => new Map<string, unknown>());
+  const full = `${key}|${i.now}`;
+  if (byKey.has(full)) return byKey.get(full) as T;
   const value = compute();
-  byKey.set(key, value);
+  byKey.set(full, value);
   return value;
 }
 

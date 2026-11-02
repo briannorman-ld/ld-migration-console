@@ -25,12 +25,18 @@ describe('mapping memo', () => {
     collectDecisions([web], profile, false, inputs);
     expect(mapGateFor(web, gate, env, inputs)).toBe(first);
 
-    // A different environment, a new inputs object (a decision was saved) or a new snapshot (a sync) each miss.
+    // The MigrationContext is rebuilt on every LD session patch; made of the same parts, it still hits.
+    expect(mapGateFor(web, gate, env, { ...inputs })).toBe(first);
+    // A different environment, a new resolutions map (a decision was saved), a new profile, new ID
+    // lists, a different `now` or a new snapshot (a sync) each miss.
     const other = envTargets(profile, web, false)[1]!;
     expect(mapGateFor(web, gate, other, inputs)).not.toBe(first);
-    expect(mapGateFor(web, gate, env, { ...inputs })).not.toBe(first);
+    expect(mapGateFor(web, gate, env, { ...inputs, resolutions: new Map() })).not.toBe(first);
+    expect(mapGateFor(web, gate, env, { ...inputs, profile: { ...profile } })).not.toBe(first);
+    expect(mapGateFor(web, gate, env, { ...inputs, idLists: {} })).not.toBe(first);
+    expect(mapGateFor(web, gate, env, { ...inputs, now: '2026-01-01T00:00:00.000Z' })).not.toBe(first);
     expect(mapGateFor({ ...web }, gate, env, inputs)).not.toBe(first);
     // Equal content either way.
-    expect(mapGateFor(web, gate, env, { ...inputs })).toEqual(first);
+    expect(mapGateFor(web, gate, env, { ...inputs, resolutions: new Map() })).toEqual(first);
   });
 });

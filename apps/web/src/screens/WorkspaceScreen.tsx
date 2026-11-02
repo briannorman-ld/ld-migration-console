@@ -54,6 +54,7 @@ import { UnitTypesView } from "./UnitTypesView.tsx";
 import { unitTypeUsage, unsettledUnitTypes } from "../lib/unitTypes.ts";
 import { SelectionBar, viewFor } from "../components/SelectionBar.tsx";
 import { loadSelection, saveSelection, toSelection } from "../lib/selection.ts";
+import type { GuideInput } from "../lib/guide.ts";
 import { GuideView } from "./GuideView.tsx";
 import { MigrateModal } from "./MigrateModal.tsx";
 import { MonitoringView } from "./MonitoringView.tsx";
@@ -156,15 +157,31 @@ export function WorkspaceScreen({
   useEffect(() => saveSelection(workspaceId, selected), [workspaceId, selected]);
   const runs = useLiveQuery(() => store.listRuns(workspaceId), [workspaceId]);
 
+  // A crawl reports every request, response and page as its own event, each in its own task, and
+  // each one used to re-render the whole screen (hundreds of times a second on a fast source).
+  // Patches queue here and land in one state update per animation frame, in order.
+  const syncQueue = useRef<{ id: string; f: (cur: SyncState) => SyncState }[]>([]);
+  const syncFlush = useRef<number>(undefined);
+  const patchSync = (id: string, f: (cur: SyncState) => SyncState) => {
+    syncQueue.current.push({ id, f });
+    syncFlush.current ??= requestAnimationFrame(() => {
+      syncFlush.current = undefined;
+      const batch = syncQueue.current;
+      syncQueue.current = [];
+      setSync((x) => {
+        const next = { ...x };
+        for (const { id, f } of batch) next[id] = f(next[id] ?? { running: true, log: [] });
+        return next;
+      });
+    });
+  };
+  useEffect(() => () => { if (syncFlush.current !== undefined) cancelAnimationFrame(syncFlush.current); }, []);
+
   const runSync = async (s: SourceRecord) => {
-    const patch = (f: (cur: SyncState) => SyncState) =>
-      setSync((x) => ({
-        ...x,
-        [s.id]: f(x[s.id] ?? { running: true, log: [] }),
-      }));
+    const patch = (f: (cur: SyncState) => SyncState) => patchSync(s.id, f);
     const push = (e: SyncLogEntry) =>
       patch((cur) => ({ ...cur, log: appendLog(cur.log, e) }));
-    setSync((x) => ({ ...x, [s.id]: { running: true, log: [] } }));
+    patch(() => ({ running: true, log: [] }));
     try {
       await syncSource(workspaceId, s, {
         onProgress: (p) => {
@@ -179,7 +196,7 @@ export function WorkspaceScreen({
         },
         onTransport: (e) => push(describeTransportEvent(e)),
       });
-      setSync((x) => ({ ...x, [s.id]: { running: false, log: [] } }));
+      patch(() => ({ running: false, log: [] }));
     } catch (e) {
       patch((cur) => ({ ...cur, running: false, error: (e as Error).message }));
     }
@@ -300,7 +317,7 @@ export function WorkspaceScreen({
     () => (m ? monitoredItems(visibleSnaps, m, m.connected) : []),
     [m, visibleSnaps],
   );
-  const monitoring = useMonitoring(workspaceId, monitorItems, ld);
+  const monitoring = useMonitoring(workspaceId, monitorItems, ld, runs);
   useMonitorSchedule(workspaceId, ld, visibleSnaps, !viewingPast);
   useMonitorNotifications(workspaceId, monitoring);
 
@@ -320,6 +337,21 @@ export function WorkspaceScreen({
       () => undefined,
     );
   }, [m, visibleSnaps, sources, workspaceId]);
+
+  // One object per change, so the guide recomputes its model only when something in it moved.
+  const guideInput: GuideInput = useMemo(
+    () => ({
+      sources: visible,
+      snapshots: visibleSnaps,
+      m,
+      env,
+      decisions: allDecisions,
+      ...(m ? { exclusions: new Set(m.exclusions.keys()) } : {}),
+      monitoring: { attention: monitoring.attention, rows: monitoring.rows.length, loaded: monitoring.loaded },
+      interruptedRuns: interrupted.length,
+    }),
+    [visible, visibleSnaps, m, env, allDecisions, monitoring.attention, monitoring.rows.length, monitoring.loaded, interrupted.length],
+  );
 
   const explorerNav = {
     connections: () => setView({ kind: "connections" }),
@@ -773,16 +805,7 @@ export function WorkspaceScreen({
               workspaceId={workspaceId}
               workspace={workspace}
               m={m}
-              input={{
-                sources: visible,
-                snapshots: visibleSnaps,
-                m,
-                env,
-                decisions: allDecisions,
-                ...(m ? { exclusions: new Set(m.exclusions.keys()) } : {}),
-                monitoring: { attention: monitoring.attention, rows: monitoring.rows.length, loaded: monitoring.loaded },
-                interruptedRuns: interrupted.length,
-              }}
+              input={guideInput}
               onEnvChange={setEnv}
               onMigrate={(selection, ldEnvs) => setMigrate({ selection, ldEnvs })}
               nav={{
@@ -884,6 +907,7 @@ export function WorkspaceScreen({
             visible.length > 0 && (
               <DecisionsView
                 snapshots={visibleSnaps}
+                decisions={allDecisions}
                 m={m}
                 workspaceName={workspace.name}
                 env={env}

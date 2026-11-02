@@ -42,10 +42,18 @@ export function useMigration(workspaceId: string, snapshots: CanonicalSnapshot[]
   // Time conditions are evaluated against the time the workspace was opened (deterministic per session).
   const [now] = useState(() => new Date().toISOString());
 
+  // Each mapping input keeps its identity until what it is made of changes: the mapping memo
+  // (lib/migration.ts) keys on them, and the session object `ld` below changes on every probe
+  // step, flag refresh and monitoring check, which must not re-map the whole project.
+  const resolutions = useMemo(() => (resolutionList ? new Map(resolutionList.map((r) => [r.id, r])) : undefined), [resolutionList]);
+  const exclusions = useMemo(() => (exclusionRecs ? new Map(exclusionRecs.map((r) => [r.uid, r])) : undefined), [exclusionRecs]);
+  const capabilities = useMemo(() => mapperCapabilities(ld.matrix, ld.contextKinds), [ld.matrix, ld.contextKinds]);
+  const directory = useMemo(() => ldDirectory(ld), [ld.members, ld.teams, ld.matrix]);
+  const idLists = useMemo(() => (idListRecs ? Object.fromEntries(idListRecs.map((r) => [r.uid, r.ids])) : undefined), [idListRecs]);
+  const coverage = useMemo(() => (idListRecs ? Object.fromEntries(idListRecs.flatMap((r) => (r.coverage ? [[r.uid, r.coverage] as const] : []))) : undefined), [idListRecs]);
+
   return useMemo(() => {
-    if (!profile || !resolutionList || !idListRecs || !exclusionRecs) return null;
-    const resolutions = new Map(resolutionList.map((r) => [r.id, r]));
-    const exclusions = new Map(exclusionRecs.map((r) => [r.uid, r]));
+    if (!profile || !resolutionList || !resolutions || !exclusions || !idLists || !coverage) return null;
     return {
       ld,
       connected: ld.status === 'connected' && !!ld.matrix,
@@ -53,10 +61,10 @@ export function useMigration(workspaceId: string, snapshots: CanonicalSnapshot[]
       profile,
       resolutions,
       resolutionList,
-      capabilities: mapperCapabilities(ld.matrix, ld.contextKinds),
-      directory: ldDirectory(ld),
-      idLists: Object.fromEntries(idListRecs.map((r) => [r.uid, r.ids])),
-      coverage: Object.fromEntries(idListRecs.flatMap((r) => (r.coverage ? [[r.uid, r.coverage] as const] : []))),
+      capabilities,
+      directory,
+      idLists,
+      coverage,
       now,
       resolve: (decisions, optionKey) => store.saveResolutions(workspaceId, resolutionsFor(decisions, optionKey, new Date().toISOString())),
       saveResolutions: (rs) => store.saveResolutions(workspaceId, rs),
@@ -72,7 +80,7 @@ export function useMigration(workspaceId: string, snapshots: CanonicalSnapshot[]
       exclude: (uids, reason) => store.setExclusions(workspaceId, uids.map((uid) => (reason ? { uid, reason } : { uid }))),
       include: (uids) => store.deleteExclusions(workspaceId, uids),
     };
-  }, [profile, resolutionList, idListRecs, exclusionRecs, ld, ldEnvs, now, workspaceId]);
+  }, [profile, resolutionList, resolutions, exclusions, capabilities, directory, idLists, coverage, ld, ldEnvs, now, workspaceId]);
 }
 
 /**
