@@ -12,7 +12,7 @@
  */
 import { normalizeCondition, toArray, type CanonicalSnapshot, type Condition, type Segment } from '@sslm/canonical';
 import { DROP_CONDITION, DROP_RULE, SKIP, type DecisionCollector, plannedContextKinds, plannedKindOptions } from './decisions.ts';
-import { attributeFor, attributeOption, kindFor, sanitizeKey, unitFromChoice, type UnitTarget } from './profile.ts';
+import { attributeFor, attributeOption, configuredUnit, defaultKindFor, sanitizeKey, unitFromChoice, type UnitTarget } from './profile.ts';
 import type { DecisionOption, DecisionSubject, Dependency, DesiredRule, DesiredTarget, FidelityNote, IdListCoverages, IdLists, LdClause, LdOperator, LdRollout, MapperCapabilities, MappingProfile } from './types.ts';
 
 export type Dnf = LdClause[][];
@@ -104,10 +104,10 @@ export function resolveKind(ctx: ConditionContext, unitType: string): string {
 export function resolveUnit(ctx: ConditionContext, unitType: string): UnitTarget {
   const cached = ctx.kindCache.get(unitType.toLowerCase());
   if (cached) return cached;
-  const proposed = kindFor(ctx.profile, ctx.sourceId, unitType);
-  const configured = Object.keys(ctx.profile.sources[ctx.sourceId]?.unitTypeKinds ?? {}).some((k) => k.toLowerCase() === unitType.toLowerCase());
-  let unit: UnitTarget = { contextKind: proposed, attribute: 'key' };
-  if (proposed !== 'user' && !configured && !ctx.capabilities.existingContextKinds.includes(proposed)) {
+  const configured = configuredUnit(ctx.profile, ctx.sourceId, unitType);
+  const proposed = configured?.contextKind ?? defaultKindFor(unitType);
+  let unit: UnitTarget = configured ?? { contextKind: proposed, attribute: 'key' };
+  if (!configured && proposed !== 'user' && !ctx.capabilities.existingContextKinds.includes(proposed)) {
     const existing = ctx.capabilities.existingContextKinds.filter((k) => k !== proposed && k !== 'user');
     const canCreate = ctx.capabilities.contextKinds !== 'not_permitted' && ctx.capabilities.contextKinds !== 'unavailable';
     const options: DecisionOption[] = [

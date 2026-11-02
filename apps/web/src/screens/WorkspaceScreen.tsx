@@ -50,6 +50,8 @@ import { FlagSideBySide } from "./GatesSideBySide.tsx";
 import { LdPanel } from "./LdPanel.tsx";
 import { LdSourceSideBySide, type LdSourceResource } from "./LdSourceSideBySide.tsx";
 import { MappingView } from "./MappingView.tsx";
+import { UnitTypesView } from "./UnitTypesView.tsx";
+import { unitTypeUsage, unsettledUnitTypes } from "../lib/unitTypes.ts";
 import { SelectionBar, viewFor } from "../components/SelectionBar.tsx";
 import { loadSelection, saveSelection, toSelection } from "../lib/selection.ts";
 import { GuideView } from "./GuideView.tsx";
@@ -70,6 +72,7 @@ export type View =
   | { kind: "add-source" }
   | { kind: "decisions" }
   | { kind: "mapping" }
+  | { kind: "unit-types" }
   | { kind: "runs" }
   | { kind: "monitoring" }
   | { kind: "snapshots"; sourceId?: string }
@@ -268,6 +271,25 @@ export function WorkspaceScreen({
   const blockingCount = openDecisions.filter(
     (d) => d.decision.severity === "blocking",
   ).length;
+  // Unit types still on their default while LD lacks the kind: each item asks (Unit types page).
+  const unsettledKinds = useMemo(
+    () =>
+      m
+        ? visibleSnaps.reduce(
+            (n, snap) =>
+              n +
+              unsettledUnitTypes(
+                m.profile,
+                m.resolutionList,
+                snap.source.sourceId,
+                unitTypeUsage(snap).map((u) => u.name),
+                m.capabilities.existingContextKinds,
+              ).length,
+            0,
+          )
+        : 0,
+    [m, visibleSnaps],
+  );
   const interrupted = (runs ?? []).filter((r) => isInterrupted(r, workspaceId));
 
   // Monitoring (PLAN §14): a read-only LD check on connect and every 15 minutes while the tab is
@@ -301,6 +323,7 @@ export function WorkspaceScreen({
     connections: () => setView({ kind: "connections" }),
     ld: () => setView({ kind: "ld" }),
     mapping: () => setView({ kind: "mapping" }),
+    unitTypes: () => setView({ kind: "unit-types" }),
     decisions: () => setView({ kind: "decisions" }),
   };
 
@@ -555,6 +578,13 @@ export function WorkspaceScreen({
             <span>Mapping</span>
           </NavItem>
           <NavItem
+            active={view.kind === "unit-types"}
+            onClick={() => setView({ kind: "unit-types" })}
+          >
+            <span>Unit types</span>
+            {unsettledKinds > 0 && <Badge tone="amber">{unsettledKinds}</Badge>}
+          </NavItem>
+          <NavItem
             active={view.kind === "runs"}
             onClick={() => setView({ kind: "runs" })}
           >
@@ -709,6 +739,7 @@ export function WorkspaceScreen({
               view.kind === "ld-source" ||
               view.kind === "decisions" ||
               view.kind === "mapping" ||
+              view.kind === "unit-types" ||
               view.kind === "monitoring") && (
               <Callout tone="blue">
                 {(sources ?? []).length === 0 ? (
@@ -821,6 +852,7 @@ export function WorkspaceScreen({
           {viewingPast &&
             (view.kind === "decisions" ||
               view.kind === "mapping" ||
+              view.kind === "unit-types" ||
               view.kind === "runs" ||
               view.kind === "monitoring") && (
               <Callout>
@@ -850,11 +882,24 @@ export function WorkspaceScreen({
             m &&
             visible.length > 0 && (
               <MappingView
-              workspaceId={workspaceId}
-              sources={visible}
+                workspaceId={workspaceId}
+                sources={visible}
                 snapshots={snapshots ?? {}}
                 m={m}
                 onConnect={() => setView({ kind: "ld" })}
+                onUnitTypes={() => setView({ kind: "unit-types" })}
+              />
+            )}
+          {!viewingPast &&
+            view.kind === "unit-types" &&
+            m &&
+            visible.length > 0 && (
+              <UnitTypesView
+                sources={visible}
+                snapshots={snapshots ?? {}}
+                m={m}
+                onConnect={() => setView({ kind: "ld" })}
+                onDecisions={() => setView({ kind: "decisions" })}
               />
             )}
           {!viewingPast && view.kind === "runs" && m && (

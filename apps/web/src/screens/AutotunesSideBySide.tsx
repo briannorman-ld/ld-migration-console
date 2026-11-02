@@ -35,6 +35,7 @@ export interface ExplorerNav {
   connections: () => void;
   ld: () => void;
   mapping: () => void;
+  unitTypes: () => void;
   decisions: () => void;
 }
 

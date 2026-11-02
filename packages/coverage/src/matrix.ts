@@ -75,7 +75,7 @@ export const COVERAGE: CoverageEntry[] = [
     ld: 'Context kinds',
     status: 'decisions',
     how: 'userID → user, stableID → device, a custom unit type → a context kind of the same name, created on first use.',
-    detail: 'Custom unit IDs are never collapsed into user. A unit type that has no context kind in LD yet raises a unit_type_kind decision (create it under the proposed key or a key you type, keep the unit type as an attribute of the user context, or pick an existing kind; never the user key).',
+    detail: 'Custom unit IDs are never collapsed into user. The Unit types page sets, once per unit type, which context kind its IDs key (created by the migration if LD lacks it) or which attribute of the user context carries them, and warns when two unit types share a kind. A unit type left on its default whose kind is missing in LD raises a unit_type_kind decision per item (create it under the proposed key or a key you type, keep the unit type as an attribute of the user context, or pick an existing kind; never the user key).',
     decisions: ['unit_type_kind'],
     edgeCases: ['3.1', '3.2', '3.4', '3.5'],
     docs: { statsig: `${SS}/guides/experiment-on-custom-id-types`, ld: `${LD}/home/observability/contexts` },

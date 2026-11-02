@@ -14,6 +14,7 @@ export interface GuideNav {
   connections: () => void;
   ld: () => void;
   mapping: () => void;
+  unitTypes: () => void;
   decisions: () => void;
   resource: (kind: EntityKind) => void;
   runs: () => void;
@@ -262,6 +263,15 @@ function Contexts({ workspaceId, g, m, nav, onMigrate }: { workspaceId: string; 
         to it: a new context kind (created on the first migration), an attribute of the user context, or a kind another unit type already uses.
       </p>
       {g.contexts.unitTypes.length === 0 && <Callout tone="blue">{g.ldEnvs.length ? 'The sources in this environment declare no unit types; userID maps to the user context.' : 'Map the environment first (step 2).'}</Callout>}
+      {g.contexts.open.length > 0 && (
+        <p className="text-xs text-fg-muted">
+          Answer here per item, or set every unit type once on the{' '}
+          <button type="button" className="text-link hover:underline" onClick={nav.unitTypes}>
+            Unit types
+          </button>{' '}
+          page.
+        </p>
+      )}
       {g.contexts.open.map((d) => (
         <DecisionCard key={d.decision.id} decision={d.decision} onChoose={(o) => m && void m.resolve([d.decision], o)} />
       ))}
@@ -313,8 +323,8 @@ function Contexts({ workspaceId, g, m, nav, onMigrate }: { workspaceId: string; 
       {g.contexts.unitTypes.length > 0 && g.contexts.open.length === 0 && g.contexts.decided.length === 0 && kinds.length === 0 && (
         <p className="text-xs text-fg-muted">
           Every unit type here already has a context kind in LaunchDarkly, or is userID. Change a mapping on the{' '}
-          <button type="button" className="text-link hover:underline" onClick={nav.mapping}>
-            Mapping
+          <button type="button" className="text-link hover:underline" onClick={nav.unitTypes}>
+            Unit types
           </button>{' '}
           page.
         </p>

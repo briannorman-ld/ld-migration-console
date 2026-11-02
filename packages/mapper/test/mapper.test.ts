@@ -104,6 +104,29 @@ describe('operator pitfalls (CLAUDE.md, PLAN §10.3)', () => {
     const r = mapGate(args('b2b_bulk_ordering', { profile }));
     expect(types(r)).not.toContain('unit_type_kind');
     expect(r.env.rules[0]!.clauses[0]!.contextKind).toBe('account');
+    expect(r.dependencies).toContainEqual({ kind: 'context_kind', key: 'account', entityId: 'companyID' });
+  });
+
+  it('the Unit types page can keep a unit type as a user attribute for every item (profile `attribute:<name>`)', () => {
+    const profile = profileFor(web, MAPPING);
+    profile.sources[web.source.sourceId]!.unitTypeKinds.companyID = attributeOption('account_id');
+    const r = mapGate(args('b2b_bulk_ordering', { profile }));
+    expect(types(r)).not.toContain('unit_type_kind');
+    expect(r.dependencies.filter((x) => x.kind === 'context_kind')).toEqual([]);
+    expect(r.env.targets).toEqual([]);
+    const ruleClauses = r.env.rules.filter((x) => x.description !== 'companyID overrides').flatMap((x) => x.clauses);
+    expect(ruleClauses[0]).toMatchObject({ contextKind: 'user', attribute: 'account_id' });
+    expect(r.env.rules.filter((x) => x.description === 'companyID overrides')).toHaveLength(2);
+    // Case-insensitive, like StatSig's customIDs lookup.
+    const ci = profileFor(web, MAPPING);
+    ci.sources[web.source.sourceId]!.unitTypeKinds.COMPANYID = 'account';
+    expect(mapGate(args('b2b_bulk_ordering', { profile: ci })).env.rules[0]!.clauses[0]!.contextKind).toBe('account');
+    // A value LD would refuse is not a configuration: the mapper proposes the default and asks.
+    const bad = profileFor(web, MAPPING);
+    bad.sources[web.source.sourceId]!.unitTypeKinds.companyID = 'not a key!';
+    const b = mapGate(args('b2b_bulk_ordering', { profile: bad }));
+    expect(types(b)).toContain('unit_type_kind');
+    expect(b.env.rules[0]!.clauses[0]!.contextKind).toBe('company');
   });
 
   it('case-folded patterns escape regex metacharacters', () => {

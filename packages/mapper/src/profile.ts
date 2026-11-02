@@ -100,13 +100,36 @@ export function kindFromChoice(choice: string, proposed: string): string {
   return key && isValidContextKindKey(key) ? key : proposed;
 }
 
-export function kindFor(profile: MappingProfile, sourceId: string, unitType: string): string {
+/**
+ * The profile's entry for a unit type, if any. StatSig compares unit types case-insensitively
+ * (customIDs lookup), so an exact match wins and a case-insensitive one is accepted.
+ */
+export function configuredValue(profile: MappingProfile, sourceId: string, unitType: string): string | undefined {
   const sp = profile.sources[sourceId];
   const exact = sp?.unitTypeKinds[unitType];
   if (exact) return exact;
-  // StatSig compares unit types case-insensitively (customIDs lookup).
   const ci = sp && Object.entries(sp.unitTypeKinds).find(([k]) => k.toLowerCase() === unitType.toLowerCase());
-  return ci?.[1] ?? defaultKindFor(unitType);
+  return ci?.[1];
+}
+
+/**
+ * Where the profile (the Unit types page) sends a unit type: a context kind key, or
+ * `attribute:<name>` to keep it as an attribute of the `user` context. A value LD would not
+ * accept counts as not configured, so the mapper falls back to the default and asks.
+ */
+export function configuredUnit(profile: MappingProfile, sourceId: string, unitType: string): UnitTarget | undefined {
+  const v = configuredValue(profile, sourceId, unitType);
+  if (!v) return undefined;
+  if (v.startsWith('attribute:')) {
+    const a = v.slice('attribute:'.length);
+    return isValidAttributeName(a) ? { contextKind: 'user', attribute: a } : undefined;
+  }
+  return isValidContextKindKey(v) ? { contextKind: v, attribute: 'key' } : undefined;
+}
+
+/** The context kind a unit type maps to by profile or by default (`user` when kept as a user attribute). */
+export function kindFor(profile: MappingProfile, sourceId: string, unitType: string): string {
+  return configuredUnit(profile, sourceId, unitType)?.contextKind ?? defaultKindFor(unitType);
 }
 
 /**

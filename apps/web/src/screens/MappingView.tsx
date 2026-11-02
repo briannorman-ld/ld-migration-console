@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type { CanonicalSnapshot } from '@sslm/canonical';
 import { defaultKindFor, sanitizeKey, type MappingProfile } from '@sslm/mapper';
 import type { SourceRecord } from '@sslm/store';
-import { Badge, Button, Callout, Card, Input, Select, Spinner } from '../components/ui.tsx';
+import { Badge, Button, Callout, Card, Select, Spinner } from '../components/ui.tsx';
 import { createLdEnvironment } from '../lib/ld.ts';
 import type { MigrationContext } from '../lib/useMigration.ts';
 
@@ -10,7 +10,7 @@ import type { MigrationContext } from '../lib/useMigration.ts';
  * Mapping profile (PLAN §7, §12): per source, which LD environment each StatSig environment
  * migrates to, and which LD context kind each unit type becomes.
  */
-export function MappingView({ workspaceId, sources, snapshots, m, onConnect }: { workspaceId: string; sources: SourceRecord[]; snapshots: Record<string, CanonicalSnapshot | undefined>; m: MigrationContext; onConnect: () => void }) {
+export function MappingView({ workspaceId, sources, snapshots, m, onConnect, onUnitTypes }: { workspaceId: string; sources: SourceRecord[]; snapshots: Record<string, CanonicalSnapshot | undefined>; m: MigrationContext; onConnect: () => void; onUnitTypes: () => void }) {
   const save = (fn: (p: MappingProfile) => void) => {
     const next: MappingProfile = structuredClone(m.profile);
     fn(next);
@@ -125,26 +125,27 @@ export function MappingView({ workspaceId, sources, snapshots, m, onConnect }: {
               </div>
               <div>
                 <div className="mb-2 text-xs font-semibold tracking-wide text-fg-muted uppercase">Unit types → context kinds</div>
-                <table className="w-full text-sm">
-                  <tbody className="divide-y divide-line-soft">
-                    {snap.unitTypes.map((u) => (
-                      <UnitTypeRow
-                        key={u.name}
-                        unitType={u.name}
-                        value={sp.unitTypeKinds[u.name]}
-                        existing={m.capabilities.existingContextKinds}
-                        onChange={(kind) =>
-                          save((p) => {
-                            const t = (p.sources[s.id] ??= { envMapping: {}, unitTypeKinds: {} }).unitTypeKinds;
-                            if (kind) t[u.name] = kind;
-                            else delete t[u.name];
-                          })
-                        }
-                      />
-                    ))}
-                  </tbody>
-                </table>
-                <p className="mt-2 text-xs text-fg-muted">Custom unit IDs get their own context kind; they are never folded into “user”. Kinds that don't exist in LD are created during the migration.</p>
+                <ul className="space-y-1 text-sm">
+                  {snap.unitTypes.map((u) => {
+                    const v = Object.entries(sp.unitTypeKinds).find(([k]) => k.toLowerCase() === u.name.toLowerCase())?.[1];
+                    const target = v?.startsWith('attribute:') ? `user attribute ${v.slice('attribute:'.length)}` : (v ?? defaultKindFor(u.name));
+                    return (
+                      <li key={u.name} className="flex items-center gap-2">
+                        <span className="font-mono">{u.name}</span>
+                        <span className="text-fg-subtle">→</span>
+                        <span className="font-mono">{target}</span>
+                        {!v && <span className="text-xs text-fg-subtle">default</span>}
+                      </li>
+                    );
+                  })}
+                </ul>
+                <p className="mt-2 text-xs text-fg-muted">
+                  Where each unit type's IDs go in LD is chosen on the{' '}
+                  <button type="button" className="text-link hover:underline" onClick={onUnitTypes}>
+                    Unit types
+                  </button>{' '}
+                  page: a context kind (created during the migration if LD lacks it) or an attribute of the user context. Custom unit IDs are never folded into “user”.
+                </p>
               </div>
             </div>
           </Card>
@@ -154,33 +155,3 @@ export function MappingView({ workspaceId, sources, snapshots, m, onConnect }: {
   );
 }
 
-function UnitTypeRow({ unitType, value, existing, onChange }: { unitType: string; value?: string; existing: string[]; onChange: (kind: string | null) => void }) {
-  const proposed = defaultKindFor(unitType);
-  const [draft, setDraft] = useState(value ?? '');
-  return (
-    <tr>
-      <td className="py-1.5 pr-3 font-mono">{unitType}</td>
-      <td className="py-1.5 text-fg-subtle">→</td>
-      <td className="py-1.5">
-        <div className="flex items-center gap-2">
-          <Input
-            aria-label={`Context kind for ${unitType}`}
-            className="w-36 py-1 font-mono"
-            placeholder={proposed}
-            value={draft}
-            list="ld-context-kinds"
-            onChange={(e) => setDraft(e.target.value)}
-            onBlur={() => onChange(draft.trim() || null)}
-          />
-          <datalist id="ld-context-kinds">
-            {existing.map((k) => (
-              <option key={k} value={k} />
-            ))}
-          </datalist>
-          {!value && <span className="text-xs text-fg-subtle">default “{proposed}”{proposed !== 'user' && !existing.includes(proposed) ? ' (asks first)' : ''}</span>}
-          {value && !existing.includes(value) && <Badge tone="blue">will be created</Badge>}
-        </div>
-      </td>
-    </tr>
-  );
-}

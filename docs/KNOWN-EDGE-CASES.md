@@ -62,9 +62,9 @@ Decision types referenced below are defined in `packages/mapper/src/types.ts` (`
 
 | # | Edge case | StatSig | LaunchDarkly | Handling | Demo example |
 |---|---|---|---|---|---|
-| 3.1 | Custom unit IDs | `userID`, `stableID`, custom (`companyID`, `deviceID`). | Context kinds; `user` is built in. | ⚙️ `userID` → `user`, `stableID` → `device`, `fooID` → `foo`; ✅ `unit_type_kind` when the kind doesn't exist in LD: create it (proposed or typed key), keep the unit type as a `user` attribute (clauses, `bucketBy`, overrides → a rule), or reuse a kind another unit type creates. Never the `user` key (CLAUDE.md). | `b2b_bulk_ordering`, `anon_homepage_variant`, mobile `device_beta_program` |
-| 3.2 | Two unit types defaulting to one kind | `stableID` and `deviceID` in one project. | Both default to `device`. | 🚧 No warning; the second would silently share the kind. | `acme-mobile` has both |
-| 3.3 | Unit type lookup | `customIDs` are looked up case-insensitively. | n/a | ⚙️ `kindFor` matches case-insensitively. | — |
+| 3.1 | Custom unit IDs | `userID`, `stableID`, custom (`companyID`, `deviceID`). | Context kinds; `user` is built in. | ⚙️ `userID` → `user`, `stableID` → `device`, `fooID` → `foo`; the **Unit types** page sets each unit type's kind (or `user` attribute) once for every item, in the mapping profile (`unitTypeKinds`: a kind key or `attribute:<name>`); ✅ `unit_type_kind` per item when the kind doesn't exist in LD and the page has no entry: create it (proposed or typed key), keep the unit type as a `user` attribute (clauses, `bucketBy`, overrides → a rule), or reuse a kind another unit type creates. Never the `user` key (CLAUDE.md). | `b2b_bulk_ordering`, `anon_homepage_variant`, mobile `device_beta_program` |
+| 3.2 | Two unit types defaulting to one kind | `stableID` and `deviceID` in one project. | Both default to `device`. | ⚙️ The Unit types page warns when two unit types of one source map to one kind, by default or by choice (`sharedKinds`); the user gives one another kind or keeps it as a `user` attribute. The mapper itself still lets them share. | `acme-mobile` has both |
+| 3.3 | Unit type lookup | `customIDs` are looked up case-insensitively. | n/a | ⚙️ `configuredUnit` / `kindFor` match the profile case-insensitively; the Unit types page merges case variants into one row. | — |
 | 3.4 | Custom-ID overrides on a userID gate | `passingCustomIDs` without saying which unit type. | Targets need a context kind. | 🚧 Adapter warns `ambiguous_override` and records unit type `customID`; the mapper then asks for a context kind named `custom`, which is misleading. Should ask *which* unit type. | `search_v2` override `acct_3001` |
 | 3.5 | Conditions on another unit's attributes | A `userID` gate may test `unit_id(companyID)`. | The SDK must send a multi-context with both kinds. | 📝 implied by the clause's context kind; 🚧 the generated *context contract* (PLAN §10.5) is not built yet. | `b2b_bulk_ordering`, `enterprise_sso` |
 | 3.6 | `segmentMatch` and context kinds | Segment `idType` decides whose ID is checked. | The mapper emits `contextKind: "user"` on every `segmentMatch` clause; LD segments carry `includedContexts` per kind. | ❓ Verify that LD ignores the clause's kind for `segmentMatch` with non-user segments. | `enterprise_sso` (companyID segment), mobile `device_beta_program` |
@@ -286,20 +286,19 @@ availability and provenance (`migration.type = config`) work exactly as for gate
 | 16.2 | Same name, different targeting | 📅 `source_collision`: prefix both (`web.x`, `mobile.x`), primary wins, pick a source, or a discriminator flag. Renames propagate to `segmentMatch`, prerequisites and inlined references. | `new_checkout_flow`, `dark_mode`, `search_v2` |
 | 16.3 | Shared segment name, different rules | 📅 as 16.2. | `beta_testers` |
 | 16.4 | Shared event across sources | 📅 confirm once per event that it means the same thing. | `purchase` |
-| 16.5 | Unit types with the same name | 📅 merged by name; decision if their meaning differs. Also 3.2 within one source. | `companyID` in both |
+| 16.5 | Unit types with the same name | ⚙️ The Unit types page's *Across sources* table lists unit types that more than one source uses and flags the ones the sources send to different kinds, so the user aligns them (or keeps them apart on purpose). 📅 a `source_collision`-style decision when their meaning differs. Also 3.2 within one source. | `companyID` in both |
 | 16.6 | Same key from both sources today | ⚙️ refused (DEMO.md). | — |
 
 ---
 
 ## 17. Mapper backlog (every 🚧 above, in priority order)
 
-1. **Custom-ID overrides on a userID gate** (3.4): ask which unit type, instead of inventing a `custom` kind.
-2. **Two unit types defaulting to one context kind** (3.2): warn in the mapping profile.
-3. **Prerequisite cycles** (7.8): make the mapper decision blocking instead of relying on the planner error.
-4. **Sanitized-key collisions between StatSig names** (1.1) and **tag merges by lower-casing** (1.4).
-5. **Dates** (5.3, 6.8): `on` in UTC vs local day; attribute values in epoch seconds; add to the context contract.
-6. **Context contract** (3.5, 5.8, 5.9, 6.6): generate the document PLAN §10.5 promises, so the attribute-name, type and multi-context requirements collected above reach developers.
-7. **`maintainer_unknown`** (1.5) and `analysis_list` / `user_store_id_list` segments (9.10), override-list size (8.5).
+1. **Custom-ID overrides on a userID gate** (3.4): ask which unit type, instead of inventing a `custom` kind. The Unit types page lists `customID` as an undeclared unit type meanwhile.
+2. **Prerequisite cycles** (7.8): make the mapper decision blocking instead of relying on the planner error.
+3. **Sanitized-key collisions between StatSig names** (1.1) and **tag merges by lower-casing** (1.4).
+4. **Dates** (5.3, 6.8): `on` in UTC vs local day; attribute values in epoch seconds; add to the context contract.
+5. **Context contract** (3.5, 5.8, 5.9, 6.6): generate the document PLAN §10.5 promises, so the attribute-name, type and multi-context requirements collected above reach developers.
+6. **`maintainer_unknown`** (1.5) and `analysis_list` / `user_store_id_list` segments (9.10), override-list size (8.5).
 
 ---
 
