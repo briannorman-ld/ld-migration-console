@@ -2,7 +2,8 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { MappingProfile } from '@sslm/mapper';
 import type { SourceRecord } from '@sslm/store';
-import { EnvChooser, envChoices } from './MigrateModal.tsx';
+import type { PlanFlag } from '@sslm/planner';
+import { EnvChooser, envChoices, FlagsTable } from './MigrateModal.tsx';
 
 const sources: SourceRecord[] = [
   { id: 's-web', workspaceId: 'w', alias: 'web', label: 'acme-web', kind: 'console_api', createdAt: '2026-10-22T10:00:00Z' },
@@ -48,5 +49,28 @@ describe('target environments in the plan', () => {
     cleanup();
     render(<EnvChooser options={options} chosen={[]} onChange={onChange} />);
     expect(screen.getByText('Choose at least one environment.')).toBeTruthy();
+  });
+
+  it('lists each flag once at project level, saying whether it is new, created by the console or adopted, with the outcome per environment', () => {
+    const base: Omit<PlanFlag, 'ldKey' | 'exists' | 'owned' | 'adopt' | 'status' | 'envs'> = { uid: 's-web/gate/x', kind: 'gate', entityId: 'x', sourceId: 's-web', flagKind: 'boolean', variations: [{ value: true, name: 'Pass' }, { value: false, name: 'Fail' }] };
+    const flags: PlanFlag[] = [
+      { ...base, ldKey: 'new_checkout_flow', exists: false, owned: false, adopt: false, status: 'ready', envs: [{ ldEnv: 'test', status: 'ready' }, { ldEnv: 'production', status: 'blocked', reason: '1 open decision' }] },
+      { ...base, ldKey: 'kill_switch_payments', exists: true, owned: true, adopt: false, status: 'ready', envs: [{ ldEnv: 'test', status: 'ready' }] },
+      { ...base, ldKey: 'legacy_banner', exists: true, owned: false, adopt: true, status: 'ready', envs: [{ ldEnv: 'test', status: 'ready' }] },
+      { ...base, ldKey: 'holdout_gate', exists: false, owned: false, adopt: false, status: 'blocked', reason: '2 open decisions', envs: [{ ldEnv: 'test', status: 'blocked', reason: '2 open decisions' }] },
+    ];
+    render(<FlagsTable flags={flags} />);
+    expect(screen.getAllByRole('row')).toHaveLength(5);
+    expect(screen.getAllByText('new')).toHaveLength(2);
+    expect(screen.getByText('in LD (created by this console)')).toBeTruthy();
+    expect(screen.getByText('exists in LD · adopting')).toBeTruthy();
+    expect(screen.getAllByText('create')).toHaveLength(1);
+    expect(screen.getAllByText('update')).toHaveLength(2);
+    expect(screen.getByText('2 open decisions')).toBeTruthy();
+    const first = screen.getAllByRole('row')[1]!;
+    expect(first.textContent).toContain('production');
+    expect(first.textContent).toContain('blocked');
+    // No environment column: the flag itself is created once for the project.
+    expect(screen.queryByText('LD env')).toBeNull();
   });
 });

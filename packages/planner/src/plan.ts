@@ -160,10 +160,42 @@ export interface PlanItem {
   fidelity?: FidelityReport;
   decisions: DecisionPoint[];
   exists: boolean;
+  /** For flags: LD has it and the console created it (provenance present). */
+  owned?: boolean;
+}
+
+/**
+ * One LD flag of the plan, at project level (PLAN §7 "Changes at project level affect every
+ * environment"): the flag is created once and exists in every LD environment; `envs` are the
+ * environments this plan configures targeting in. The rest keep LD's default (off) and show as
+ * not migrated.
+ */
+export interface PlanFlag {
+  uid: string;
+  kind: 'gate' | 'config' | 'autotune' | 'flag';
+  entityId: string;
+  sourceId: string;
+  ldKey: string;
+  /** `boolean` for gates, `multivariate` (JSON) for configs, autotunes and multivariate source flags. */
+  flagKind: 'boolean' | 'multivariate';
+  variations: { value: unknown; name: string }[];
+  /** The flag already exists in LD. */
+  exists: boolean;
+  /** It exists, was not created by the console, and the user chose to adopt it. */
+  adopt: boolean;
+  /** It exists and carries the console's provenance (an earlier run created it, maybe for another environment). */
+  owned: boolean;
+  /** `ready` when the shell step runs (targeting is ready in at least one environment). */
+  status: ItemStatus;
+  reason?: string;
+  /** Per-environment outcome, in the plan's environment order. */
+  envs: { ldEnv: string; statsigEnv?: string; status: ItemStatus; reason?: string }[];
 }
 
 export interface Plan {
   items: PlanItem[];
+  /** The flags, rolled up at project level: one row per LD key (PLAN §9 "Plan"). */
+  flags: PlanFlag[];
   steps: PlanStep[];
   /** Every open decision across the plan, deduplicated by id. */
   decisions: DecisionPoint[];
@@ -336,6 +368,7 @@ export function planMigration(req: PlanRequest): Plan {
     // Ownership guard (PLAN §15) and consolidation collisions (§12, M8).
     const ldFlag = req.ld.flags.get(r.flagKey);
     item.exists = !!ldFlag;
+    item.owned = !!ldFlag && !!flagOwner(ldFlag);
     let adopt = false;
     const other = shellOwner.get(r.flagKey);
     if (other && other !== gate.uid) return finishItem(item, 'error', `${describeOwner(other)} also produces LD key “${r.flagKey}” (${other.includes('/config/') ? 'StatSig keeps gates and configs in separate namespaces, LD has one key space' : 'consolidation arrives in M8; migrate one source at a time'})`);
@@ -445,6 +478,7 @@ export function planMigration(req: PlanRequest): Plan {
     // Ownership guard (PLAN §15), the gate ↔ config key space (KNOWN-EDGE-CASES 1.2 / 10.8) and consolidation collisions (§12, M8).
     const ldFlag = req.ld.flags.get(r.flagKey);
     item.exists = !!ldFlag;
+    item.owned = !!ldFlag && !!flagOwner(ldFlag);
     let adopt = false;
     const other = shellOwner.get(r.flagKey);
     if (other && other !== config.uid) return void finishItem(item, 'error', `${describeOwner(other)} also produces LD key “${r.flagKey}”: StatSig keeps gates and configs in separate namespaces, LD has one key space. Rename one in StatSig or migrate one at a time.`);
@@ -578,6 +612,7 @@ export function planMigration(req: PlanRequest): Plan {
 
     const ldFlag = req.ld.flags.get(r.flagKey);
     item.exists = !!ldFlag;
+    item.owned = !!ldFlag && !!flagOwner(ldFlag);
     let adopt = false;
     const other = shellOwner.get(r.flagKey);
     if (other && other !== a.uid) {
@@ -727,6 +762,7 @@ export function planMigration(req: PlanRequest): Plan {
 
     const ldFlag = req.ld.flags.get(r.flagKey);
     item.exists = !!ldFlag;
+    item.owned = !!ldFlag && !!flagOwner(ldFlag);
     let adopt = false;
     const other = shellOwner.get(r.flagKey);
     if (other && other !== flag.uid) return finishItem(item, 'error', `${describeOwner(other)} also produces LD key “${r.flagKey}” (migrate one source at a time; consolidation arrives in M8)`);
@@ -871,11 +907,12 @@ export function planMigration(req: PlanRequest): Plan {
     }
   }
 
-  const ordered = topoSort([...steps.values()], errors);
+  const ordered = topoSort([...steps.values()], errors, req.ldEnvs);
   const all = [...items.values()];
   const requested = all.filter((i) => !i.dependency);
   return {
     items: all,
+    flags: rollUpFlags(all, ordered, req.ldEnvs),
     steps: ordered,
     decisions: [...decisions.values()],
     stale: [...stale.values()],
@@ -884,6 +921,43 @@ export function planMigration(req: PlanRequest): Plan {
     ready: errors.length === 0 && requested.every((i) => i.status === 'ready' || i.status === 'skipped') && all.every((i) => i.status !== 'blocked' && i.status !== 'error'),
     requests: ordered.reduce((n, s) => n + requestsFor(s), 0),
   };
+}
+
+/** One row per LD flag key from the per-environment items; `ready` when its shell step survived. */
+function rollUpFlags(items: PlanItem[], steps: PlanStep[], envOrder: string[]): PlanFlag[] {
+  const shells = new Map(steps.flatMap((s) => (s.op === 'upsert_flag_shell' ? [[s.key, s] as const] : [])));
+  const byKey = new Map<string, PlanItem[]>();
+  for (const i of items) {
+    if (i.kind !== 'gate' && i.kind !== 'config' && i.kind !== 'autotune' && i.kind !== 'flag') continue;
+    byKey.set(i.ldKey, [...(byKey.get(i.ldKey) ?? []), i]);
+  }
+  const rank: Record<ItemStatus, number> = { ready: 0, blocked: 1, error: 2, skipped: 3 };
+  const envIndex = (e: string) => (envOrder.indexOf(e) < 0 ? envOrder.length : envOrder.indexOf(e));
+  const out: PlanFlag[] = [];
+  for (const [ldKey, xs] of byKey) {
+    const shell = shells.get(ldKey);
+    const first = xs[0]!;
+    const envs = [...xs].sort((a, b) => envIndex(a.ldEnv) - envIndex(b.ldEnv)).map((i) => ({ ldEnv: i.ldEnv, ...(i.statsigEnv ? { statsigEnv: i.statsigEnv } : {}), status: i.status, ...(i.reason ? { reason: i.reason } : {}) }));
+    // Without a shell step nothing is written: report the least-bad environment outcome as the reason.
+    const worst = [...xs].sort((a, b) => rank[a.status] - rank[b.status])[0]!;
+    const variations = shell?.desired.variations.map((v) => ({ value: v.value, name: v.name })) ?? [];
+    out.push({
+      uid: first.uid,
+      kind: first.kind as PlanFlag['kind'],
+      entityId: first.entityId,
+      sourceId: first.sourceId,
+      ldKey,
+      flagKind: shell ? (variations.every((v) => typeof v.value === 'boolean') ? 'boolean' : 'multivariate') : first.kind === 'gate' ? 'boolean' : 'multivariate',
+      variations,
+      exists: xs.some((i) => i.exists),
+      adopt: shell?.adopt ?? false,
+      owned: xs.some((i) => i.owned),
+      status: shell ? 'ready' : worst.status === 'ready' ? 'blocked' : worst.status,
+      ...(shell ? {} : worst.reason ? { reason: worst.reason } : {}),
+      envs,
+    });
+  }
+  return out;
 }
 
 /** Writes per step, including the reads that capture pre-images. */
@@ -897,11 +971,25 @@ export function requestsFor(s: PlanStep): number {
   return n;
 }
 
-/** Kahn's algorithm, stable by step id. Steps in a cycle are reported and left out. */
-export function topoSort(steps: PlanStep[], errors: string[]): PlanStep[] {
+/**
+ * Kahn's algorithm, stable by step id. Project-level steps come first (context kinds,
+ * randomization units, metrics, every flag shell): a flag is created once and exists
+ * in every environment. Then each environment in `envOrder` with its segments, targeting and
+ * bandits, so a run reads "create the flags, then configure development, then staging". Steps in
+ * a cycle are reported and left out.
+ */
+export function topoSort(steps: PlanStep[], errors: string[], envOrder: string[] = []): PlanStep[] {
   const byId = new Map(steps.map((s) => [s.id, s]));
   const indegree = new Map(steps.map((s) => [s.id, s.deps.filter((d) => byId.has(d)).length]));
-  const order = (id: string) => `${['context_kind', 'randomization_unit', 'metric', 'segment', 'shell', 'env', 'bandit'].indexOf(id.split(':')[0]!)}:${id}`;
+  const PROJECT = ['context_kind', 'randomization_unit', 'metric', 'shell'];
+  const PER_ENV = ['segment', 'env', 'bandit'];
+  const order = (id: string) => {
+    const [op, env] = id.split(':') as [string, string?];
+    const p = PROJECT.indexOf(op);
+    if (p >= 0) return `0:${p}:${id}`;
+    const e = envOrder.indexOf(env ?? '');
+    return `1:${String(e < 0 ? envOrder.length : e).padStart(3, '0')}:${PER_ENV.indexOf(op)}:${id}`;
+  };
   const queue = steps.filter((s) => indegree.get(s.id) === 0).map((s) => s.id).sort((a, b) => order(a).localeCompare(order(b)));
   const out: PlanStep[] = [];
   while (queue.length) {

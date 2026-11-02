@@ -3,7 +3,7 @@ import type { CanonicalSnapshot } from "@sslm/canonical";
 import type { RunRecord, StepStatus } from "@sslm/executor";
 import { LD_INSTANCES } from "@sslm/ld-client";
 import type { DecisionPoint } from "@sslm/mapper";
-import { recommendedResolutions, type ItemStatus } from "@sslm/planner";
+import { recommendedResolutions, type ItemStatus, type PlanFlag, type PlanItem } from "@sslm/planner";
 import type { SourceRecord } from "@sslm/store";
 import { DecisionCard, FIDELITY_TONE } from "../components/DecisionCard.tsx";
 import {
@@ -132,7 +132,11 @@ export function MigrateModal({
     [phase.kind, selection, ldEnvs, snapshots, m],
   );
   const requested = plan?.items.filter((i) => !i.dependency) ?? [];
-  const deps = plan?.items.filter((i) => i.dependency) ?? [];
+  // Flags are project-level (created once, present in every environment); targeting, segments
+  // and bandits are per environment. Metrics and AI Configs are project-level too (empty ldEnv).
+  const flags = plan?.flags ?? [];
+  const projectItems = plan?.items.filter((i) => i.ldEnv === "") ?? [];
+  const itemsIn = (env: string) => (plan?.items ?? []).filter((i) => i.ldEnv === env).sort((a, b) => Number(a.dependency) - Number(b.dependency));
   const groups = useMemo(() => {
     const g = new Map<string, DecisionPoint[]>();
     for (const d of plan?.decisions ?? [])
@@ -200,7 +204,7 @@ export function MigrateModal({
       <Card className="flex w-full max-w-5xl flex-col overflow-hidden shadow-raised">
         <header className="flex items-center gap-3 border-b border-line px-5 py-3">
           <h2 className="font-display text-xl font-semibold tracking-tight">
-            Migrate {label}
+            Migrate {describeSelection(selection)}
           </h2>
           {m.ld.projectKey && <Badge tone="blue">LD · {m.ld.projectKey}</Badge>}
           <CloseButton
@@ -222,24 +226,49 @@ export function MigrateModal({
 
           {plan && (phase.kind === "plan" || phase.kind === "error") && (
             <>
-              {needsEnv && <EnvChooser options={envOptions} chosen={ldEnvs} onChange={setLdEnvs} disabled={busy} />}
               {plan.errors.map((e) => (
                 <Callout key={e} tone="red">
                   {e}
                 </Callout>
               ))}
-              <section>
-                <h3 className="mb-2 text-sm font-semibold">Items</h3>
-                <ItemsTable items={requested} />
-                {deps.length > 0 && (
-                  <>
-                    <h4 className="mt-3 mb-1.5 text-xs font-semibold tracking-wide text-fg-muted uppercase">
-                      Pulled in as dependencies
-                    </h4>
-                    <ItemsTable items={deps} />
-                  </>
-                )}
-              </section>
+              {(flags.length > 0 || projectItems.length > 0) && (
+                <section aria-label="Flags">
+                  <h3 className="text-sm font-semibold">
+                    {flags.length > 0 ? `${flags.length} flag${flags.length === 1 ? "" : "s"}` : "Project-level items"}
+                    <span className="ml-2 font-normal text-fg-muted">created once, for the whole project</span>
+                  </h3>
+                  {flags.length > 0 && (
+                    <p className="mt-0.5 mb-2 text-xs text-fg-muted">
+                      A LaunchDarkly flag exists in every environment as soon as it is created. This run creates or updates each flag once, then
+                      writes its targeting only in the environments chosen below; the other environments keep the flag off and show as not migrated.
+                    </p>
+                  )}
+                  {flags.length > 0 && <FlagsTable flags={flags} />}
+                  {projectItems.length > 0 && (
+                    <>
+                      <h4 className="mt-3 mb-1.5 text-xs font-semibold tracking-wide text-fg-muted uppercase">
+                        Also at project level
+                      </h4>
+                      <ItemsTable items={projectItems} />
+                    </>
+                  )}
+                </section>
+              )}
+              {needsEnv && (
+                <section aria-label="Environment targeting">
+                  <EnvChooser
+                    options={envOptions}
+                    chosen={ldEnvs}
+                    onChange={setLdEnvs}
+                    disabled={busy}
+                    title="Configure targeting in"
+                    hint="Rules, rollouts, individual targets and segments are per environment. Add every environment to configure now, or come back for the others later."
+                  />
+                  {ldEnvs.map((env) => (
+                    <EnvSection key={env} env={env} choice={envOptions.find((o) => o.key === env)} items={itemsIn(env)} critical={plan.confirmEnvs.includes(env)} />
+                  ))}
+                </section>
+              )}
 
               {groups.length > 0 && (
                 <section className="space-y-2">
@@ -451,17 +480,12 @@ export function MigrateModal({
   );
 }
 
-function ItemsTable({
-  items,
-}: {
-  items: NonNullable<ReturnType<typeof buildPlan>>["items"];
-}) {
+function ItemsTable({ items }: { items: PlanItem[] }) {
   return (
     <table className="w-full text-sm">
       <thead className="text-left text-xs text-fg-muted">
         <tr>
           <th className="py-1 pr-3 font-medium">Item</th>
-          <th className="py-1 pr-3 font-medium">LD env</th>
           <th className="py-1 pr-3 font-medium">Status</th>
           <th className="py-1 font-medium">Details</th>
         </tr>
@@ -472,12 +496,17 @@ function ItemsTable({
             <td className="py-1.5 pr-3">
               <span className="font-mono text-[13px]">{i.ldKey}</span>{" "}
               <Badge>{i.kind}</Badge>
-              {i.exists && <Badge tone="amber">exists in LD</Badge>}
-            </td>
-            <td className="py-1.5 pr-3 font-mono text-xs">
-              {i.ldEnv}
-              {i.statsigEnv && i.statsigEnv !== i.ldEnv && (
-                <span className="text-fg-subtle"> ← {i.statsigEnv}</span>
+              {i.dependency && (
+                <>
+                  {" "}
+                  <Badge title={`Needed by ${i.requiredBy.map((u) => u.split("/").slice(2).join("/")).join(", ")}`}>dependency</Badge>
+                </>
+              )}
+              {i.exists && i.kind !== "gate" && i.kind !== "config" && i.kind !== "autotune" && i.kind !== "flag" && (
+                <>
+                  {" "}
+                  <Badge tone="amber">exists in LD</Badge>
+                </>
               )}
             </td>
             <td className="py-1.5 pr-3">
@@ -500,6 +529,82 @@ function ItemsTable({
         ))}
       </tbody>
     </table>
+  );
+}
+
+/** How the flag relates to what is in LD today: new, created by the console earlier, or a foreign flag being adopted. */
+function flagPresence(f: PlanFlag): { label: string; tone: "slate" | "green" | "amber" } {
+  if (!f.exists) return { label: "new", tone: "slate" };
+  if (f.owned) return { label: "in LD (created by this console)", tone: "green" };
+  if (f.adopt) return { label: "exists in LD · adopting", tone: "amber" };
+  return { label: "exists in LD", tone: "amber" };
+}
+
+/** The flags of the plan, one row each: project-level, so no environment column (PLAN §7). */
+export function FlagsTable({ flags }: { flags: PlanFlag[] }) {
+  return (
+    <table className="w-full text-sm">
+      <thead className="text-left text-xs text-fg-muted">
+        <tr>
+          <th className="py-1 pr-3 font-medium">Flag</th>
+          <th className="py-1 pr-3 font-medium">Type</th>
+          <th className="py-1 pr-3 font-medium">In LD</th>
+          <th className="py-1 pr-3 font-medium">Status</th>
+          <th className="py-1 font-medium">Targeting</th>
+        </tr>
+      </thead>
+      <tbody className="divide-y divide-line-soft">
+        {flags.map((f) => {
+          const presence = flagPresence(f);
+          return (
+            <tr key={f.ldKey} className="align-top">
+              <td className="py-1.5 pr-3">
+                <span className="font-mono text-[13px]">{f.ldKey}</span> <Badge>{f.kind}</Badge>
+              </td>
+              <td className="py-1.5 pr-3 text-xs text-fg-muted">
+                {f.flagKind === "boolean" ? "boolean" : `JSON · ${f.variations.length} variation${f.variations.length === 1 ? "" : "s"}`}
+              </td>
+              <td className="py-1.5 pr-3">
+                <Badge tone={presence.tone}>{presence.label}</Badge>
+              </td>
+              <td className="py-1.5 pr-3">
+                <Badge tone={ITEM_TONE[f.status]}>{f.status === "ready" ? (f.exists ? "update" : "create") : f.status}</Badge>
+              </td>
+              <td className="py-1.5 text-xs text-fg-muted">
+                {f.status !== "ready" && f.reason ? (
+                  f.reason
+                ) : (
+                  <span className="flex flex-wrap gap-x-2 gap-y-0.5">
+                    {f.envs.map((e) => (
+                      <span key={e.ldEnv} className="whitespace-nowrap">
+                        <span className="font-mono text-fg">{e.ldEnv}</span> <Badge tone={ITEM_TONE[e.status]}>{e.status}</Badge>
+                      </span>
+                    ))}
+                  </span>
+                )}
+              </td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+}
+
+/** One environment's targeting: the items configured there, dependencies (segments, prerequisites) included. */
+function EnvSection({ env, choice, items, critical }: { env: string; choice: EnvChoice | undefined; items: PlanItem[]; critical: boolean }) {
+  return (
+    <div className="mt-4" aria-label={`Targeting in ${env}`}>
+      <h4 className="mb-1.5 flex flex-wrap items-center gap-2 text-sm">
+        <span className="font-mono font-semibold">{env}</span>
+        {critical && <Badge tone="red">critical</Badge>}
+        {choice && choice.mappedFrom.length > 0 && <span className="text-xs text-fg-muted">from {choice.mappedFrom.join(", ")}</span>}
+        <span className="text-xs text-fg-muted">
+          · {items.length} item{items.length === 1 ? "" : "s"}
+        </span>
+      </h4>
+      {items.length > 0 ? <ItemsTable items={items} /> : <p className="text-xs text-fg-muted">Nothing to configure in this environment.</p>}
+    </div>
   );
 }
 
@@ -697,11 +802,13 @@ export function envChoices(m: Pick<MigrationContext, "ldEnvs" | "profile">, sour
  * per environment, so this is where "only staging" or "test and production" is decided; an
  * environment no source maps to cannot be chosen (map it first).
  */
-export function EnvChooser({ options, chosen, onChange, disabled }: { options: EnvChoice[]; chosen: string[]; onChange: (keys: string[]) => void; disabled?: boolean }) {
+export function EnvChooser({ options, chosen, onChange, disabled, title = "Environments", hint }: { options: EnvChoice[]; chosen: string[]; onChange: (keys: string[]) => void; disabled?: boolean; title?: string; hint?: string }) {
   const toggle = (key: string) => onChange(chosen.includes(key) ? chosen.filter((k) => k !== key) : options.filter((o) => o.key === key || chosen.includes(o.key)).map((o) => o.key));
   return (
-    <section aria-label="Target environments">
-      <h3 className="mb-2 text-sm font-semibold">Environments</h3>
+    <div role="group" aria-label="Target environments">
+      <h3 className="text-sm font-semibold">{title}</h3>
+      {hint && <p className="mt-0.5 mb-2 text-xs text-fg-muted">{hint}</p>}
+      {!hint && <div className="mb-2" />}
       <div className="flex flex-wrap gap-2">
         {options.map((o) => {
           const on = chosen.includes(o.key);
@@ -721,7 +828,7 @@ export function EnvChooser({ options, chosen, onChange, disabled }: { options: E
         })}
       </div>
       {chosen.length === 0 && <p className="mt-1.5 text-xs text-warning">Choose at least one environment.</p>}
-    </section>
+    </div>
   );
 }
 

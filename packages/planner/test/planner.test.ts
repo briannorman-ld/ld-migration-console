@@ -65,7 +65,7 @@ describe('planMigration', () => {
     expect(planMigration(request([], { contextKinds: [{ key: 'user', unitType: 'userID' }] })).steps).toEqual([]);
   });
 
-  it('blocks until decisions are made, then orders segments → shells → environments', () => {
+  it('blocks until decisions are made, then orders shells → segments → environments', () => {
     const blocked = planMigration(request(['new_checkout_flow']));
     expect(blocked.ready).toBe(false);
     expect(blocked.steps).toEqual([]);
@@ -73,8 +73,34 @@ describe('planMigration', () => {
 
     const plan = planMigration(acceptAll(request(['new_checkout_flow'])));
     expect(plan.ready).toBe(true);
-    expect(plan.steps.map((s) => s.id)).toEqual(['segment:test:beta_testers', 'shell:new_checkout_flow', 'env:test:new_checkout_flow']);
+    expect(plan.steps.map((s) => s.id)).toEqual(['shell:new_checkout_flow', 'segment:test:beta_testers', 'env:test:new_checkout_flow']);
     expect(plan.items.find((i) => i.entityId === 'beta_testers')).toMatchObject({ kind: 'segment', dependency: true, status: 'ready' });
+  });
+
+  it('creates every flag once, then configures each environment in turn, and rolls flags up at project level (PLAN §7)', () => {
+    const owned: LdProjectState = {
+      ...EMPTY_LD,
+      flags: new Map([[
+        'kill_switch_payments',
+        { key: 'kill_switch_payments', tags: ['migrated-from-statsig', 'statsig-source-web'], customProperties: { 'migration.id': { value: ['kill_switch_payments'] }, 'migration.source': { value: ['web'] }, 'migration.type': { value: ['gate'] } }, kind: 'boolean' },
+      ]]),
+    };
+    const plan = planMigration(acceptAll(request(['new_checkout_flow', 'kill_switch_payments'], { ldEnvs: ['test', 'production'], ld: owned })));
+    expect(plan.errors).toEqual([]);
+    const ids = plan.steps.map((s) => s.id);
+    // Project level first: both shells. Then test's segment and targeting, then production's.
+    expect(ids.slice(0, 2)).toEqual(['shell:kill_switch_payments', 'shell:new_checkout_flow']);
+    expect(ids.slice(2)).toEqual(['segment:test:beta_testers', 'env:test:kill_switch_payments', 'env:test:new_checkout_flow', 'segment:production:beta_testers', 'env:production:kill_switch_payments', 'env:production:new_checkout_flow']);
+    expect(plan.flags.map((f) => [f.ldKey, f.flagKind, f.status, f.exists, f.owned, f.adopt, f.envs.map((e) => `${e.ldEnv}:${e.status}`)])).toEqual([
+      ['new_checkout_flow', 'boolean', 'ready', false, false, false, ['test:ready', 'production:ready']],
+      ['kill_switch_payments', 'boolean', 'ready', true, true, false, ['test:ready', 'production:ready']],
+    ]);
+    expect(plan.flags[0]!.variations.map((v) => v.value)).toEqual([true, false]);
+    // A flag whose targeting is blocked everywhere has no shell step and is reported as blocked.
+    const blocked = planMigration(request(['new_checkout_flow']));
+    expect(blocked.steps).toEqual([]);
+    expect(blocked.flags.map((f) => [f.ldKey, f.status])).toEqual([['new_checkout_flow', 'blocked']]);
+    expect(blocked.flags[0]!.reason).toMatch(/open decision/);
   });
 
   it('blocks a gate whose segment cannot migrate (docs/KNOWN-EDGE-CASES.md 5.7, 9.8)', () => {
@@ -217,7 +243,7 @@ describe('dynamic configs (PLAN §10.1; edge cases 1.2, 10.1, 10.8)', () => {
     const plan = planMigration(acceptAll(request([], { configs: [cuid('shipping_thresholds'), cuid('b2b_order_limits')] })));
     expect(plan.errors).toEqual([]);
     expect(plan.ready).toBe(true);
-    expect(plan.steps.map((s) => s.id)).toEqual(['context_kind:company', 'segment:test:enterprise_accounts', 'shell:b2b_order_limits', 'shell:shipping_thresholds', 'env:test:b2b_order_limits', 'env:test:shipping_thresholds']);
+    expect(plan.steps.map((s) => s.id)).toEqual(['context_kind:company', 'shell:b2b_order_limits', 'shell:shipping_thresholds', 'segment:test:enterprise_accounts', 'env:test:b2b_order_limits', 'env:test:shipping_thresholds']);
     const shell = plan.steps.find((s) => s.id === 'shell:shipping_thresholds')!;
     expect(shell.op === 'upsert_flag_shell' && shell.desired.variations.map((v) => v.name)).toEqual(['Default', 'UK', 'Canada']);
     const env = plan.steps.find((s) => s.id === 'env:test:shipping_thresholds')!;
@@ -338,9 +364,9 @@ describe('planMigration with an LD source (PLAN §20)', () => {
     expect(plan.errors).toEqual([]);
     expect(plan.ready).toBe(true);
     expect(plan.steps.map((s) => s.id)).toEqual([
-      'segment:production:legacy-beta-orgs',
       'shell:legacy-checkout-redesign',
       'shell:legacy-pricing-tiers',
+      'segment:production:legacy-beta-orgs',
       'env:production:legacy-checkout-redesign',
       'env:production:legacy-pricing-tiers',
     ]);
