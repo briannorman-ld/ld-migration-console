@@ -147,8 +147,8 @@ Two places, and nowhere else.
 - The app prompts for an export after every run: "Back up this workspace".
 
 ### 3.4 Tokens
-- By default, tokens are **kept in memory only**. Closing the tab forgets them.
-- **Remember on this device** is optional: AES-GCM encrypted with a key derived from a passphrase (PBKDF2), stored in IndexedDB, and unlocked per session.
+- Tokens never reach disk in the clear. By default they are **kept on this device**: AES-GCM encrypted under a non-extractable WebCrypto key that is stored in IndexedDB next to the blob, so they come back on every open without a prompt while a copy of the database yields only ciphertext (changed 2026-11-02: memory-only by default lost the tokens on every reload).
+- Per workspace the user can instead **protect them with a passphrase** (key derived with PBKDF2, never stored, unlocked once per session; for shared machines) or **keep them in memory only** (closing the tab forgets them).
 - **Strict Content-Security-Policy:** `connect-src` allows only the StatSig and LD API hosts (plus the relay, if one exists). No third-party scripts and no analytics. The build is open source with Subresource Integrity, so a customer's security team can check in DevTools that tokens go only to StatSig and LD.
 - **IP allowlists:** calls come from the user's own network, so a customer's LD API-token IP allowlist behaves as it does for any of their own tooling. LD staff running the tool may need to be on an allowlisted network.
 

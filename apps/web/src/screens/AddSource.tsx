@@ -126,8 +126,8 @@ export function AddSource({ workspaceId, onDone }: { workspaceId: string; onDone
               <Label htmlFor="src-ld-token">Access token (read access to that project)</Label>
               <Input id="src-ld-token" type="password" autoComplete="off" spellCheck={false} placeholder="api-…" value={key} onChange={(e) => setKey(e.target.value)} />
               <p className="mt-1.5 text-xs text-fg-muted">
-                A Reader token is enough. It may belong to a <b>different LaunchDarkly account or instance</b> than the target project; it is kept in memory (or encrypted on this
-                device if you remember keys there) and sent only to that instance’s API. The source project is only ever read: flags, their per-environment targeting, segments
+                A Reader token is enough. It may belong to a <b>different LaunchDarkly account or instance</b> than the target project; it is kept encrypted on this device and sent
+                only to that instance’s API. The source project is only ever read: flags, their per-environment targeting, segments
                 and context kinds. Experiments and metrics are not read (they end in the source and launch new in the target).
               </p>
             </div>
@@ -138,7 +138,7 @@ export function AddSource({ workspaceId, onDone }: { workspaceId: string; onDone
               <Label htmlFor="src-key">Console API key (read-only)</Label>
               <Input id="src-key" type="password" autoComplete="off" spellCheck={false} placeholder="console-…" value={key} onChange={(e) => setKey(e.target.value)} />
               <p className="mt-1.5 text-xs text-fg-muted">
-                Kept in memory (or encrypted on this device if you remember keys there) and sent only to statsigapi.net. A Console API key belongs to <b>one StatSig project</b> (StatSig has no API that lists an
+                Kept encrypted on this device and sent only to statsigapi.net. A Console API key belongs to <b>one StatSig project</b> (StatSig has no API that lists an
                 organization’s projects), so add one source per project; several sources consolidate into this workspace’s single LaunchDarkly project.
               </p>
             </div>

@@ -25,6 +25,12 @@ export interface WorkspaceRecord {
   };
   /** Snapshots kept per source after each sync (plus any a run used). Undefined = DEFAULT_SNAPSHOT_RETENTION. */
   snapshotRetention?: number;
+  /**
+   * Where this workspace's tokens live (PLAN §3.4). Undefined = `device`: encrypted on this
+   * device under a key the browser holds, restored on open. `memory`: this tab only; the user
+   * opted out. A passphrase vault is `device` with a passphrase-derived key.
+   */
+  tokenStorage?: "device" | "memory";
 }
 
 export interface SourceRecord extends SourceDescriptor {
@@ -155,13 +161,15 @@ export interface MonitorStateRecord {
 }
 
 /**
- * "Remember on this device" (PLAN §3.4): the workspace's tokens, AES-GCM encrypted under a
- * passphrase-derived key. The only place a token ever reaches disk, and only as this blob.
+ * The workspace's tokens, AES-GCM encrypted (PLAN §3.4). The only place a token ever reaches
+ * disk, and only as this blob. `device` is the non-extractable key of a device vault: the browser
+ * can use it to decrypt the blob but cannot export it. A passphrase vault has no `device`.
  */
 export interface VaultRecord {
   workspaceId: string;
   updatedAt: string;
   blob: VaultBlob;
+  device?: CryptoKey;
 }
 
 export class MigratorDb extends Dexie {

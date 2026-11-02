@@ -77,8 +77,8 @@ export function LdPanel({ workspaceId, workspace }: { workspaceId: string; works
               onKeyDown={(e) => e.key === 'Enter' && token && acked(instance) && void connect()}
             />
             <p className="mt-1.5 text-xs text-fg-muted">
-              Kept in memory and sent only to {LD_INSTANCES[instance].origin}. Closing the tab forgets it unless you remember keys on this device (below, encrypted with a
-              passphrase). A Writer service token is recommended; this milestone only reads.
+              Sent only to {LD_INSTANCES[instance].origin}, and kept encrypted on this device so it is back when you reopen the workspace (change that below). A Writer service
+              token is recommended; this milestone only reads.
             </p>
           </div>
           <div className="flex items-center gap-3">

@@ -70,7 +70,7 @@ export function StartScreen({ onOpen }: { onOpen: (workspaceId: string) => void 
           </h1>
           <p className="mt-5 text-base leading-relaxed text-fg-muted">
             Reads your feature-flag projects from another provider, StatSig today, and compares them with one LaunchDarkly project, side by side. Every imperfect mapping becomes a decision you make once;
-            nothing is dropped or approximated silently. Everything stays in this browser: no server, no account, and tokens are kept in memory, or encrypted on this device only if you ask.
+            nothing is dropped or approximated silently. Everything stays in this browser: no server, no account, and tokens are kept encrypted in this browser, or in memory only if you prefer.
           </p>
         </div>
 

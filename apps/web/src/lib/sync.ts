@@ -57,7 +57,7 @@ export async function syncLdSource(workspaceId: string, source: SourceDescriptor
     await startDemoMock();
     token = await demoLdSourceToken();
   } else token = secrets.get("ld_source", source.id);
-  if (!token) throw new Error("Enter the LaunchDarkly read token for this source (tokens are kept in memory only).");
+  if (!token) throw new Error("Enter the LaunchDarkly read token for this source again.");
   const instance = source.ld.baseUrl ? { ...LD_INSTANCES[source.ld.instance], origin: source.ld.baseUrl } : source.ld.instance;
   const client = new LdClient({ instance, token, transport: { onEvent: (e) => h.onTransport?.(e) } });
   const raw = await readLdProject(client, source.ld.projectKey, { onProgress: h.onProgress });
@@ -84,7 +84,7 @@ export async function syncConsoleSource(
   }
   if (!apiKey)
     throw new Error(
-      "Enter the Console API key for this source (keys are kept in memory only).",
+      "Enter the Console API key for this source again.",
     );
   const onRetry = (url: string, delayMs: number, reason: string) =>
     h.onRetry?.(

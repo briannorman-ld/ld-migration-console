@@ -472,10 +472,13 @@ export class WorkspaceStore {
     return this.db.vaults.get(workspaceId);
   }
 
-  /** Only the encrypted blob is accepted here; assertNoSecrets refuses anything that looks like a raw token. */
-  async saveVault(workspaceId: string, blob: VaultBlob): Promise<void> {
-    const rec: VaultRecord = { workspaceId, updatedAt: now(), blob };
-    assertNoSecrets(rec);
+  /**
+   * Only the encrypted blob is accepted here; assertNoSecrets refuses anything that looks like a
+   * raw token. `device` is the non-extractable key of a device vault (a passphrase vault has none).
+   */
+  async saveVault(workspaceId: string, blob: VaultBlob, device?: CryptoKey): Promise<void> {
+    const rec: VaultRecord = { workspaceId, updatedAt: now(), blob, ...(device ? { device } : {}) };
+    assertNoSecrets({ ...rec, device: undefined });
     await this.db.vaults.put(rec);
   }
 
