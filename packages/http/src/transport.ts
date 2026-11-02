@@ -239,7 +239,8 @@ export class Transport {
         body = JSON.stringify(req.body);
         headers['Content-Type'] ??= 'application/json';
       }
-      const res = await this.fetchFn(req.url, { method: req.method, headers, body, signal: ctrl.signal });
+      // `no-store`: a listing re-read after a write must come from the API, never from the browser's HTTP cache.
+      const res = await this.fetchFn(req.url, { method: req.method, headers, body, signal: ctrl.signal, cache: 'no-store' });
       const text = await res.text();
       let parsed: unknown = text;
       if (text.length > 0) {
