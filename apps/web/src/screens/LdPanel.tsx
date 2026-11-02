@@ -2,7 +2,8 @@ import { useState } from 'react';
 import { LD_INSTANCES, type CapabilityStatus, type LdInstanceId } from '@sslm/ld-client';
 import type { WorkspaceRecord } from '@sslm/store';
 import { RememberKeysCard } from '../components/DeviceVault.tsx';
-import { Badge, Button, Callout, Card, cx, Input, Label, Modal, Select, Spinner } from '../components/ui.tsx';
+import { SearchSelect } from '../components/SearchSelect.tsx';
+import { Badge, Button, Callout, Card, cx, Input, Label, Modal, Spinner } from '../components/ui.tsx';
 import { chooseProject, connectLd, disconnectLd, reprobe, useLdSession } from '../lib/ld.ts';
 import { ProjectResetModal } from './ProjectResetModal.tsx';
 import { DEMO_LD_PROJECT } from '../lib/demo.ts';
@@ -102,14 +103,15 @@ export function LdPanel({ workspaceId, workspace }: { workspaceId: string; works
           <div className="flex items-end gap-3">
             <div>
               <Label htmlFor="ld-project">Target project</Label>
-              <Select id="ld-project" value={ld.projectKey ?? ''} onChange={(e) => e.target.value && void chooseProject(workspaceId, e.target.value)}>
-                <option value="">Choose a project…</option>
-                {(ld.projects ?? []).map((p) => (
-                  <option key={p.key} value={p.key}>
-                    {p.name} ({p.key})
-                  </option>
-                ))}
-              </Select>
+              <SearchSelect
+                id="ld-project"
+                className="w-[28rem] max-w-full"
+                value={ld.projectKey ?? ''}
+                options={ld.projects ?? []}
+                placeholder={ld.projects?.length ? `Search ${ld.projects.length} projects…` : 'Choose a project…'}
+                emptyText="No project matches"
+                onChange={(key) => key !== ld.projectKey && void chooseProject(workspaceId, key)}
+              />
             </div>
             {ld.projectKey && (
               <Button variant="secondary" onClick={() => reprobe(workspaceId)} disabled={!!ld.probing}>
