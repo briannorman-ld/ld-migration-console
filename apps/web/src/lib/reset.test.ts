@@ -1,5 +1,6 @@
 import 'fake-indexeddb/auto';
 import { describe, expect, it } from 'vitest';
+import { LdAuthError, LdWriteError } from '@sslm/ld-client';
 import { planReset, planSize, resetProject } from './reset.ts';
 
 type Client = Parameters<typeof resetProject>[0];
@@ -126,6 +127,52 @@ describe('resetProject', () => {
     const plan = await planReset(client, 'shop');
     await resetProject(client, plan);
     expect([...seen]).toEqual(['shop']);
+  });
+});
+
+describe('resetProject stops on systemic failures', () => {
+  it('a 429 that survived the retries stops the reset instead of crawling through every item', async () => {
+    const { client, flags, deleted } = fakeProject();
+    const plan = await planReset(client, 'p');
+    const inner = client.deleteFlag;
+    client.deleteFlag = async (p, key, signal) => {
+      if (key === 'b') throw new LdWriteError(429, '/flags/p/b', { message: 'Rate limited' });
+      return inner(p, key, signal);
+    };
+    const phases: string[] = [];
+    const report = await resetProject(client, plan, (p) => phases.push(p.phase));
+    expect(report.stopped).toEqual({ what: 'delete flag b', reason: expect.stringContaining('429') });
+    expect(deleted).toEqual(['a']);
+    expect(flags.size).toBe(3);
+    expect(report.failures).toEqual([]);
+    expect(phases.at(-1)).toBe('Stopped');
+    expect(phases).not.toContain('Deleting segments');
+  });
+
+  it('a rejected token or an unreachable LD stops it too; an ordinary refusal does not', async () => {
+    const { client } = fakeProject();
+    client.listEnvironments = async () => [
+      { _id: '1', key: 'a', name: 'A', tags: [] },
+      { _id: '2', key: 'b', name: 'B', tags: ['migrated-from-statsig'] },
+    ] as never;
+    const withEnv = await planReset(client, 'p');
+
+    client.deleteEnvironment = async () => {
+      throw new LdAuthError(401, '/projects/p/environments/b');
+    };
+    expect((await resetProject(client, withEnv)).stopped?.what).toBe('delete environment b');
+
+    client.deleteEnvironment = async () => {
+      throw new LdWriteError('unreachable', '/projects/p/environments/b', null);
+    };
+    expect((await resetProject(client, withEnv)).stopped?.what).toBe('delete environment b');
+
+    client.deleteEnvironment = async () => {
+      throw new LdWriteError(403, '/projects/p/environments/b', { message: 'Forbidden' });
+    };
+    const report = await resetProject(client, withEnv);
+    expect(report.stopped).toBeUndefined();
+    expect(report.failures).toEqual([{ what: 'delete environment b', reason: expect.stringContaining('Forbidden') }]);
   });
 });
 

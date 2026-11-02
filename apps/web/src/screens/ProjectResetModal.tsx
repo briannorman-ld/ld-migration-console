@@ -165,8 +165,13 @@ export function ProjectResetModal({ workspaceId, ld, onClose }: { workspaceId: s
           )}
           {phase.kind === 'done' && (
             <>
-              <Callout tone={phase.report.cancelled || phase.report.failures.length ? 'amber' : 'green'}>
-                {phase.report.cancelled ? 'Reset cancelled; the project still holds whatever was not reached. Before the stop it deleted' : `Project “${phase.plan.projectKey}” reset. Deleted`} {phase.report.deleted.flags} flags,{' '}
+              <Callout tone={phase.report.cancelled || phase.report.stopped || phase.report.failures.length ? 'amber' : 'green'}>
+                {phase.report.stopped
+                  ? `Reset stopped at ${phase.report.stopped.what}: ${phase.report.stopped.reason} Every remaining request would have failed the same way, so nothing else was tried. Give LaunchDarkly a minute, then open Reset again; the new preview shows what is left. Before the stop it deleted`
+                  : phase.report.cancelled
+                    ? 'Reset cancelled; the project still holds whatever was not reached. Before the stop it deleted'
+                    : `Project “${phase.plan.projectKey}” reset. Deleted`}{' '}
+                {phase.report.deleted.flags} flags,{' '}
                 {phase.report.deleted.segments} segments, {phase.report.deleted.metrics} metrics and {phase.report.deleted.environments} environments; archived {phase.report.archived.experiments} experiments and{' '}
                 {phase.report.archived.contextKinds} context kinds.
                 {phase.report.failures.length > 0 && ` LaunchDarkly refused ${phase.report.failures.length} operation${phase.report.failures.length === 1 ? '' : 's'}:`}

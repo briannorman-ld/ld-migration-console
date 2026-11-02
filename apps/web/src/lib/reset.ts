@@ -14,7 +14,7 @@
  * Nothing in StatSig is touched, ever.
  */
 import { hasMigratedTag } from '@sslm/canonical';
-import { LdWriteError, type LdClient } from '@sslm/ld-client';
+import { LdAuthError, LdWriteError, type LdClient } from '@sslm/ld-client';
 import { ldClient, refreshLdState, reprobe, type LdSession } from './ld.ts';
 import { store } from './store.ts';
 
@@ -24,6 +24,26 @@ class ResetCancelled extends Error {
     super('Reset cancelled.');
     this.name = 'ResetCancelled';
   }
+}
+
+/**
+ * Thrown when a request failed for a reason that would fail every remaining request too: a 429
+ * that survived the transport's retries (LD is still throttling us), a rejected token, or LD
+ * unreachable. Pressing on would burn a minute of backoff per item against the same limit, so
+ * the reset stops and the user runs it again later; the new preview shows what is left.
+ */
+class ResetStopped extends Error {
+  constructor(
+    readonly what: string,
+    readonly reason: string,
+  ) {
+    super(`Stopped at ${what}: ${reason}`);
+    this.name = 'ResetStopped';
+  }
+}
+
+function isSystemic(e: unknown): boolean {
+  return e instanceof LdAuthError || (e instanceof LdWriteError && (e.status === 429 || e.status === 'unreachable'));
 }
 
 export interface ResetProgress {
@@ -58,6 +78,8 @@ export interface ResetReport {
   failures: { what: string; reason: string }[];
   /** The user cancelled: the counts above are what was removed before the stop; the rest is still there. */
   cancelled?: boolean;
+  /** The reset stopped itself on a systemic failure (sustained throttling, rejected token, LD unreachable) at `what`; the rest is still there. */
+  stopped?: { what: string; reason: string };
 }
 
 type Client = Pick<
@@ -167,9 +189,13 @@ export async function resetProject(c: Client, plan: ResetPlan, onProgress?: (p: 
   try {
     await resetSteps(c, plan, report, onProgress, signal);
   } catch (e) {
-    if (!(e instanceof ResetCancelled)) throw e;
-    report.cancelled = true;
-    onProgress?.({ phase: 'Cancelled', done: 1, total: 1 });
+    if (e instanceof ResetStopped) {
+      report.stopped = { what: e.what, reason: e.reason };
+      onProgress?.({ phase: 'Stopped', done: 1, total: 1, message: e.what });
+    } else if (e instanceof ResetCancelled) {
+      report.cancelled = true;
+      onProgress?.({ phase: 'Cancelled', done: 1, total: 1 });
+    } else throw e;
   }
   return report;
 }
@@ -188,6 +214,7 @@ async function resetSteps(c: Client, plan: ResetPlan, report: ResetReport, onPro
     } catch (e) {
       if (signal?.aborted) throw new ResetCancelled();
       if (e instanceof LdWriteError && e.status === 404) return true;
+      if (isSystemic(e)) throw new ResetStopped(what, (e as Error).message);
       report.failures.push({ what, reason: (e as Error).message });
       return false;
     }
@@ -213,6 +240,7 @@ async function resetSteps(c: Client, plan: ResetPlan, report: ResetReport, onPro
       } catch (e) {
         if (signal?.aborted) throw new ResetCancelled();
         if (e instanceof LdWriteError && e.status === 404) continue;
+        if (isSystemic(e)) throw new ResetStopped(`delete flag ${key}`, (e as Error).message);
         if (pass === 4) report.failures.push({ what: `delete flag ${key}`, reason: (e as Error).message });
         else remaining.push(key);
       }
