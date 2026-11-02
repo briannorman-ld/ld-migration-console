@@ -341,7 +341,7 @@ function IdListsPanel({
         <span className="text-xs text-fg-muted">
           {spec
             ? 'A config spec names large lists but ships their members only as hashes (get_id_lists). The console reads the members from StatSig with a read-only Console API key and checks them against the hashes; without a key, upload the hash files and a CSV of the raw IDs instead. Everything is hashed and stored in this browser only.'
-            : `Lists above ${ID_LIST_AUTO_MAX.toLocaleString()} IDs are not loaded automatically: load each from StatSig here (up to ${ID_LIST_FETCH_MAX.toLocaleString()} IDs, the Console API budget), or upload a CSV export. Above ${LIST_SEGMENT_MAX.toLocaleString()} IDs they migrate as LD big segments.`}
+            : `Lists above ${ID_LIST_AUTO_MAX.toLocaleString()} IDs are not loaded automatically: load each from StatSig here (up to ${ID_LIST_FETCH_MAX.toLocaleString()} IDs, the Console API budget), or upload a CSV export. Above ${LIST_SEGMENT_MAX.toLocaleString()} IDs they migrate as LaunchDarkly big segments.`}
         </span>
       </div>
       {spec && access.kind === 'ok' && (
@@ -406,7 +406,7 @@ function IdListsPanel({
               <span className="text-xs text-fg-muted">
                 {n(count)} {seg.idType} IDs
               </span>
-              {big && <Badge tone="violet" title={`Above LD's ${LIST_SEGMENT_MAX.toLocaleString()}-ID list limit: migrates as a big segment (CSV import, Enterprise)`}>big segment</Badge>}
+              {big && <Badge tone="violet" title={`Above LaunchDarkly's ${LIST_SEGMENT_MAX.toLocaleString()}-ID list limit: migrates as a big segment (CSV import, Enterprise)`}>big segment</Badge>}
               {!rec && seg.idList?.hashed && <Badge tone="amber">hashed: needs raw IDs</Badge>}
               {!rec && !seg.idList?.hashed && !seg.idList?.ids && <Badge tone="amber">not loaded</Badge>}
               {rec?.origin !== 'upload' && loaded && (

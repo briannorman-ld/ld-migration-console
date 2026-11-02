@@ -46,8 +46,8 @@ describe('UnitTypesView', () => {
     expect(screen.getByText('companyID')).toBeTruthy();
     expect(screen.getByText('B2B account ID')).toBeTruthy();
     expect(screen.getByText('1 gate')).toBeTruthy();
-    expect(screen.getAllByText('exists in LD')).toHaveLength(3); // userID → user, stableID and deviceID → device
-    expect(screen.getByText('asks per item')).toBeTruthy(); // companyID → company, missing in LD
+    expect(screen.getAllByText('exists in LaunchDarkly')).toHaveLength(3); // userID → user, stableID and deviceID → device
+    expect(screen.getByText('asks per item')).toBeTruthy(); // companyID → company, missing in LaunchDarkly
     // deviceID defaults to device too (3.2).
     expect(screen.getByText(/all map to the context kind/).textContent).toMatch(/stableID and deviceID all map to the context kind device/);
     // userID cannot be kept as an attribute of the user context.
@@ -55,7 +55,7 @@ describe('UnitTypesView', () => {
     expect(screen.getByLabelText('Where companyID goes')).toBeTruthy();
   });
 
-  it('saves a typed context kind into the profile, and refuses keys LD would refuse', () => {
+  it('saves a typed context kind into the profile, and refuses keys LaunchDarkly would refuse', () => {
     const { saveProfile } = setup();
     const input = screen.getByLabelText('Context kind for companyID') as HTMLInputElement;
     expect(input.placeholder).toBe('company');
@@ -104,7 +104,7 @@ describe('UnitTypesView', () => {
     expect(row()).not.toMatch(/will be created/);
   });
 
-  it('shows the answer given per item so far, and offers to connect LD when disconnected', () => {
+  it('shows the answer given per item so far, and offers to connect LaunchDarkly when disconnected', () => {
     const { nav } = setup({}, {
       connected: false,
       ld: { status: 'disconnected' },

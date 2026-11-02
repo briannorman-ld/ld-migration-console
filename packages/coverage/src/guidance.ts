@@ -40,20 +40,20 @@ export function guidanceFor(entity: Entity): ItemGuidance {
     case 'config':
       return config(entity);
     case 'prompt':
-      return { status: 'decisions', verdict: 'shell migrates', detail: `Becomes an LD AI Config with this name, description, tags and maintainer${entity.version !== undefined ? ` (StatSig version ${entity.version})` : ''}; the prompt versions are not readable through the Console API, so the variations are added in LD by hand.`, coverageId: 'operations.ai' };
+      return { status: 'decisions', verdict: 'shell migrates', detail: `Becomes a LaunchDarkly AI Config with this name, description, tags and maintainer${entity.version !== undefined ? ` (StatSig version ${entity.version})` : ''}; the prompt versions are not readable through the Console API, so the variations are added in LaunchDarkly by hand.`, coverageId: 'operations.ai' };
     default:
       return { status: 'decisions', verdict: 'migrates', detail: 'Open the side-by-side view for the mapping and its decisions.', coverageId: `${entity.kind}s` };
   }
 }
 
 function experiment(e: Experiment): ItemGuidance {
-  const unit = e.idType && e.idType !== 'userID' ? ` Randomized by ${e.idType}, which must be a randomization unit in LD.` : '';
+  const unit = e.idType && e.idType !== 'userID' ? ` Randomized by ${e.idType}, which must be a randomization unit in LaunchDarkly.` : '';
   const layer = e.layerId ? ` In layer ${e.layerId}.` : '';
   switch (e.status) {
     case 'active':
       return { status: 'guided', verdict: 'running in StatSig', detail: `Ends in StatSig; migrate after the decision is made. Assignments and results never move.${layer}`, coverageId: 'experiments.running' };
     case 'setup':
-      return { status: 'planned', verdict: 'draft (planned)', detail: `Will become a JSON flag with ${e.groups.length} variations and a draft LD experiment at ${pct(e.allocation)} allocation.${unit}${layer}`, coverageId: 'experiments.setup' };
+      return { status: 'planned', verdict: 'draft (planned)', detail: `Will become a JSON flag with ${e.groups.length} variations and a draft LaunchDarkly experiment at ${pct(e.allocation)} allocation.${unit}${layer}`, coverageId: 'experiments.setup' };
     case 'decision_made': {
       const shipped = e.groups.find((g) => g.id === e.launchedGroupId || g.name === e.launchedGroupId);
       return { status: 'planned', verdict: 'concluded (planned)', detail: `Will become a flag serving ${shipped ? `“${shipped.name}”` : 'the shipped group'} at 100%; results are archived, not imported.`, coverageId: 'experiments.concluded' };
@@ -70,22 +70,22 @@ function experiment(e: Experiment): ItemGuidance {
 
 function layer(l: Layer): ItemGuidance {
   if (l.isImplicit) return { status: 'none', verdict: 'implicit', detail: 'A one-experiment layer StatSig created implicitly; the experiment migrates on its own.', coverageId: 'experiments.layers' };
-  return { status: 'planned', verdict: 'planned', detail: `${l.parameters.length} shared parameter${l.parameters.length === 1 ? '' : 's'}, ${l.experimentIds.length} experiment${l.experimentIds.length === 1 ? '' : 's'}: will become an LD layer; code using getLayer().get() gets a layer_parameters decision.`, coverageId: 'experiments.layers' };
+  return { status: 'planned', verdict: 'planned', detail: `${l.parameters.length} shared parameter${l.parameters.length === 1 ? '' : 's'}, ${l.experimentIds.length} experiment${l.experimentIds.length === 1 ? '' : 's'}: will become a LaunchDarkly layer; code using getLayer().get() gets a layer_parameters decision.`, coverageId: 'experiments.layers' };
 }
 
 function holdout(h: Holdout): ItemGuidance {
   const scope = h.isGlobal ? 'global' : `${h.gateIds.length + h.experimentIds.length + h.layerIds.length} attached item${h.gateIds.length + h.experimentIds.length + h.layerIds.length === 1 ? '' : 's'}`;
   if (!h.enabled) return { status: 'none', verdict: 'disabled', detail: 'Disabled in StatSig: nothing is held out, nothing to migrate.', coverageId: 'experiments.holdouts' };
-  return { status: 'planned', verdict: 'planned', detail: `${pct(h.passPercentage)} held out (${scope}). Will become a new LD holdout population per environment; membership is re-randomized. Gates it covers raise holdout_attached today.`, coverageId: 'experiments.holdouts' };
+  return { status: 'planned', verdict: 'planned', detail: `${pct(h.passPercentage)} held out (${scope}). Will become a new LaunchDarkly holdout population per environment; membership is re-randomized. Gates it covers raise holdout_attached today.`, coverageId: 'experiments.holdouts' };
 }
 
 function metric(m: Metric): ItemGuidance {
   const t = (m.metricType || '').toLowerCase();
-  if (m.isWarehouseNative) return { status: 'guided', verdict: 'warehouse native', detail: 'Needs an LD warehouse-native data source created by an LD admin first; then the SQL definition can be mapped (custom and ratio only).', coverageId: 'metrics.warehouse_native' };
-  if (/composite|user_accounting|dau|wau|mau|retention/.test(t)) return { status: 'none', verdict: 'no equivalent', detail: `“${m.metricType}” metrics compose other metrics or users; LD has no such metric type. Rebuild from its parts or as a metric group.`, coverageId: 'metrics.composite' };
-  if (/funnel/.test(t)) return { status: 'planned', verdict: 'planned', detail: 'Will become an LD funnel metric; each step’s event must be sent through track().', coverageId: 'metrics.cloud' };
-  if (/ratio/.test(t)) return { status: 'planned', verdict: 'planned', detail: 'Will become an LD ratio metric over two custom metrics.', coverageId: 'metrics.cloud' };
-  return { status: 'planned', verdict: 'planned', detail: `Will become an LD custom ${/sum|mean|value/.test(t) ? 'numeric' : 'conversion'} metric; the event must be sent through track().`, coverageId: 'metrics.cloud' };
+  if (m.isWarehouseNative) return { status: 'guided', verdict: 'warehouse native', detail: 'Needs a LaunchDarkly warehouse-native data source created by a LaunchDarkly admin first; then the SQL definition can be mapped (custom and ratio only).', coverageId: 'metrics.warehouse_native' };
+  if (/composite|user_accounting|dau|wau|mau|retention/.test(t)) return { status: 'none', verdict: 'no equivalent', detail: `“${m.metricType}” metrics compose other metrics or users; LaunchDarkly has no such metric type. Rebuild from its parts or as a metric group.`, coverageId: 'metrics.composite' };
+  if (/funnel/.test(t)) return { status: 'planned', verdict: 'planned', detail: 'Will become a LaunchDarkly funnel metric; each step’s event must be sent through track().', coverageId: 'metrics.cloud' };
+  if (/ratio/.test(t)) return { status: 'planned', verdict: 'planned', detail: 'Will become a LaunchDarkly ratio metric over two custom metrics.', coverageId: 'metrics.cloud' };
+  return { status: 'planned', verdict: 'planned', detail: `Will become a LaunchDarkly custom ${/sum|mean|value/.test(t) ? 'numeric' : 'conversion'} metric; the event must be sent through track().`, coverageId: 'metrics.cloud' };
 }
 
 function paramStore(p: ParamStore): ItemGuidance {

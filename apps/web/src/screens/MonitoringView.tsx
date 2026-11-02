@@ -221,7 +221,7 @@ export function MonitoringPanel(p: MonitoringPanelProps) {
         <table className="mt-3 w-full text-sm">
           <thead className="text-left text-xs text-fg-muted">
             <tr>
-              <th className="py-1 pr-3 font-medium">LD environment</th>
+              <th className="py-1 pr-3 font-medium">LaunchDarkly environment</th>
               {STAGES.map((s) => (
                 <th key={s} className="py-1 pr-3 text-right font-medium">
                   {describeLifecycle(s).split(':')[0]}
@@ -255,7 +255,7 @@ export function MonitoringPanel(p: MonitoringPanelProps) {
 
       <div className="flex flex-wrap items-center gap-2">
         <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter by StatSig ID or flag key" aria-label="Filter items" className="w-64 py-1" />
-        <Select value={env} onChange={(e) => setEnv(e.target.value)} aria-label="LD environment" className="py-1">
+        <Select value={env} onChange={(e) => setEnv(e.target.value)} aria-label="LaunchDarkly environment" className="py-1">
           <option value="all">All environments</option>
           {envs.map((e) => (
             <option key={e} value={e}>
@@ -282,9 +282,9 @@ export function MonitoringPanel(p: MonitoringPanelProps) {
           <thead className="bg-surface-2 text-left text-xs text-fg-muted">
             <tr>
               <th className="px-3 py-2 font-medium">Item</th>
-              <th className="px-3 py-2 font-medium">LD env</th>
+              <th className="px-3 py-2 font-medium">LaunchDarkly env</th>
               <th className="px-3 py-2 font-medium">Drift</th>
-              <th className="px-3 py-2 font-medium">LD traffic</th>
+              <th className="px-3 py-2 font-medium">LaunchDarkly traffic</th>
               <th className="px-3 py-2 font-medium">StatSig checks/h</th>
               <th className="px-3 py-2 font-medium">Lifecycle</th>
               <th className="px-3 py-2 font-medium">Actions</th>
@@ -354,13 +354,13 @@ export function MonitoringPanel(p: MonitoringPanelProps) {
                     )}
                     {(r.status === 'archived_in_statsig' || r.status === 'missing_in_statsig') && ldBase && (
                       <a className="rounded-md border border-line px-2 py-0.5 text-xs text-fg hover:bg-surface-hover" href={`${ldBase}/${encodeURIComponent(r.flagKey)}/settings`} target="_blank" rel="noreferrer">
-                        Retire in LD
+                        Retire in LaunchDarkly
                       </a>
                     )}
                     {r.status !== 'archived_in_statsig' && r.status !== 'missing_in_statsig' && (
                       <label className="flex items-center gap-1 text-xs text-fg-muted" title="After cutover: StatSig changes stop alerting and a sync needs an explicit confirmation">
-                        <input type="checkbox" checked={r.ldAuthoritative} onChange={(e) => p.onToggleAuthoritative(r, e.target.checked)} aria-label={`LD authoritative for ${r.id} in ${r.ldEnv}`} />
-                        LD authoritative
+                        <input type="checkbox" checked={r.ldAuthoritative} onChange={(e) => p.onToggleAuthoritative(r, e.target.checked)} aria-label={`LaunchDarkly authoritative for ${r.id} in ${r.ldEnv}`} />
+                        LaunchDarkly authoritative
                       </label>
                     )}
                   </div>

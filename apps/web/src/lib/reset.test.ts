@@ -87,13 +87,13 @@ describe('planReset', () => {
     expect(plan.environments).toEqual([{ key: 'only', name: 'Only', action: 'keep', reason: 'a project needs at least one environment' }]);
   });
 
-  it('refuses a project whose key does not match what LD returned', async () => {
+  it('refuses a project whose key does not match what LaunchDarkly returned', async () => {
     const { client } = fakeProject();
     client.getProject = async () => ({ _id: '1', key: 'other', name: 'Other' }) as never;
     await expect(planReset(client, 'p')).rejects.toThrow(/returned project “other” for key “p”/);
   });
 
-  it('records listings LD refused instead of failing, and leaves them out of the plan', async () => {
+  it('records listings LaunchDarkly refused instead of failing, and leaves them out of the plan', async () => {
     const { client } = fakeProject();
     client.listExperiments = async () => {
       throw new Error('403 Forbidden');
@@ -149,7 +149,7 @@ describe('resetProject stops on systemic failures', () => {
     expect(phases).not.toContain('Deleting segments');
   });
 
-  it('a rejected token or an unreachable LD stops it too; an ordinary refusal does not', async () => {
+  it('a rejected token or an unreachable LaunchDarkly stops it too; an ordinary refusal does not', async () => {
     const { client } = fakeProject();
     client.listEnvironments = async () => [
       { _id: '1', key: 'a', name: 'A', tags: [] },

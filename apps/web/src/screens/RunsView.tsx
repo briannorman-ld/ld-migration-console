@@ -65,7 +65,7 @@ export function RunsView({
         Runs
       </h2>
       <p className="text-sm text-fg-muted">
-        Every migration and dry run, journaled in this browser. The LD audit log
+        Every migration and dry run, journaled in this browser. The LaunchDarkly audit log
         has the authoritative write history; each write's comment names the run.
       </p>
       {error && <Callout tone="red">{error}</Callout>}
@@ -169,7 +169,7 @@ export function RunsView({
               <div className="mt-3">
                 <Callout tone="red">
                   Undo deletes the {created} resource{created === 1 ? "" : "s"}{" "}
-                  this run created (context kinds are archived, since LD can't
+                  this run created (context kinds are archived, since LaunchDarkly can't
                   delete them)
                   {updated > 0 &&
                     ` and restores the ${updated} it updated to their state before the run`}

@@ -562,7 +562,7 @@ function executor(
   ld: LdSession,
   snapshots?: RunSnapshotRefs,
 ): Executor {
-  if (!ld.projectKey) throw new Error("Choose an LD project first.");
+  if (!ld.projectKey) throw new Error("Choose a LaunchDarkly project first.");
   return new Executor({
     client: ldClient(workspaceId),
     projectKey: ld.projectKey,
@@ -778,13 +778,13 @@ export function decisionLogMarkdown(
       : []),
     "## Decided",
     "",
-    "| Type | Item | Where | LD environments | Answer | Decided |",
+    "| Type | Item | Where | LaunchDarkly environments | Answer | Decided |",
     "|---|---|---|---|---|---|",
     ...resolved.map(row),
     "",
     "## Open",
     "",
-    "| Type | Severity | Item | Where | LD environments |",
+    "| Type | Severity | Item | Where | LaunchDarkly environments |",
     "|---|---|---|---|---|",
     ...open.map(
       (i) =>

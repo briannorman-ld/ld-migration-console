@@ -183,7 +183,7 @@ export async function chooseProject(workspaceId: string, projectKey: string): Pr
  */
 export async function createLdEnvironment(workspaceId: string, input: { key: string; name: string; critical?: boolean }): Promise<void> {
   const s = sessions.get(workspaceId);
-  if (!s?.projectKey) throw new Error('Choose an LD project first.');
+  if (!s?.projectKey) throw new Error('Choose a LaunchDarkly project first.');
   const c = client(workspaceId);
   const color = ENV_COLORS[Math.abs([...input.key].reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) | 0, 0)) % ENV_COLORS.length]!;
   try {
@@ -334,7 +334,7 @@ export async function refreshLdState(workspaceId: string, opts: { segmentEnvs?: 
     if (!apply({ stale: undefined })) return;
     await persistLdState(workspaceId);
   } catch (e) {
-    set(workspaceId, { error: `Could not read the LD project: ${(e as Error).message}` });
+    set(workspaceId, { error: `Could not read the LaunchDarkly project: ${(e as Error).message}` });
   }
 }
 
@@ -399,7 +399,7 @@ export async function refreshLdPeople(workspaceId: string): Promise<void> {
  */
 export async function requireLdApprovals(workspaceId: string, envKey: string): Promise<void> {
   const s = sessions.get(workspaceId);
-  if (!s?.projectKey) throw new Error('Choose an LD project first.');
+  if (!s?.projectKey) throw new Error('Choose a LaunchDarkly project first.');
   const c = client(workspaceId);
   try {
     await c.patchEnvironmentJson(s.projectKey, envKey, [{ op: 'replace', path: '/approvalSettings/required', value: true }]);
@@ -414,7 +414,7 @@ export async function requireLdApprovals(workspaceId: string, envKey: string): P
 /** Make `kind` the project's default randomization unit (StatSig's default unit type), enabling it first if needed. */
 export async function setDefaultRandomizationUnit(workspaceId: string, kind: string): Promise<void> {
   const s = sessions.get(workspaceId);
-  if (!s?.projectKey) throw new Error('Choose an LD project first.');
+  if (!s?.projectKey) throw new Error('Choose a LaunchDarkly project first.');
   const c = client(workspaceId);
   const settings = await c.getExperimentationSettings(s.projectKey);
   const units = (settings.randomizationUnits ?? []).map((u) => ({ randomizationUnit: u.randomizationUnit, default: u.randomizationUnit === kind }));

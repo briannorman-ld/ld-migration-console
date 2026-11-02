@@ -56,7 +56,7 @@ describe('planMigration', () => {
     expect(plan.items.filter((i) => i.dependency).map((i) => i.entityId).sort()).toEqual(['beta_testers', 'vip_customers']);
   });
 
-  it('plans context kinds on their own (the guide creates them before segments), skipping kinds LD has', () => {
+  it('plans context kinds on their own (the guide creates them before segments), skipping kinds LaunchDarkly has', () => {
     const plan = planMigration(request([], { contextKinds: [{ key: 'plan', unitType: 'planKey' }, { key: 'user', unitType: 'userID' }, { key: 'company', unitType: 'companyID' }] }));
     expect(plan.steps.map((s) => s.id).sort()).toEqual(['context_kind:company', 'context_kind:plan']);
     expect(plan.steps.find((s) => s.id === 'context_kind:plan')).toMatchObject({ op: 'ensure_context_kind', key: 'plan', unitType: 'planKey', deps: [] });
@@ -142,13 +142,13 @@ describe('planMigration', () => {
     expect(plan.steps.map((s) => s.id)).toEqual(['shell:kill_switch_payments', 'env:test:kill_switch_payments']);
   });
 
-  it('refuses an LD environment with no StatSig environment mapped to it', () => {
+  it('refuses a LaunchDarkly environment with no StatSig environment mapped to it', () => {
     const plan = planMigration(request(['kill_switch_payments'], { ldEnvs: ['sandbox'] }));
     expect(plan.items[0]).toMatchObject({ status: 'error' });
     expect(plan.items[0]!.reason).toMatch(/no StatSig environment/);
   });
 
-  it('asks before touching an LD flag the app did not create (ownership guard)', () => {
+  it('asks before touching a LaunchDarkly flag the app did not create (ownership guard)', () => {
     const ld: LdProjectState = { ...EMPTY_LD, flags: new Map([['kill_switch_payments', { key: 'kill_switch_payments', tags: [], customProperties: {}, kind: 'boolean' }]]) };
     const base = acceptAll(request(['kill_switch_payments']));
     const plan = planMigration({ ...base, ld });
@@ -206,7 +206,7 @@ describe('autotunes (PLAN §11)', () => {
     expect(done.steps.some((s) => s.op === 'create_bandit' || s.op === 'upsert_metric')).toBe(false);
   });
 
-  it('reuses an existing LD metric on the same event silently, and asks about a foreign one', () => {
+  it('reuses an existing LaunchDarkly metric on the same event silently, and asks about a foreign one', () => {
     const base = acceptAll(request([], { autotunes: [auid('hero_image_autotune')] }));
     const same = planMigration({ ...base, ld: { ...EMPTY_LD, metrics: new Map([['hero_click', { key: 'hero_click', tags: [], eventKey: 'hero_click', kind: 'custom' }]]) } });
     expect(same.ready).toBe(true);
@@ -216,7 +216,7 @@ describe('autotunes (PLAN §11)', () => {
     expect(foreign.items.find((i) => i.kind === 'metric')!.status).toBe('blocked');
   });
 
-  it('asks before touching an LD experiment the app did not create, and skips the randomization unit when enabled', () => {
+  it('asks before touching a LaunchDarkly experiment the app did not create, and skips the randomization unit when enabled', () => {
     const base = acceptAll(request([], { autotunes: [auid('b2b_pricing_autotune')] }));
     const plan = planMigration({
       ...base,
@@ -253,10 +253,10 @@ describe('dynamic configs (PLAN §10.1; edge cases 1.2, 10.1, 10.8)', () => {
     expect(plan.items.find((i) => i.entityId === 'shipping_thresholds')).toMatchObject({ kind: 'config', status: 'ready' });
   });
 
-  it('1.2 / 10.8: a gate and a config with the same name cannot both become one LD key', () => {
+  it('1.2 / 10.8: a gate and a config with the same name cannot both become one LaunchDarkly key', () => {
     const plan = planMigration(acceptAll(request(['maintenance_mode'], { configs: [cuid('maintenance_mode')] })));
     expect(plan.items.find((i) => i.kind === 'gate' && i.entityId === 'maintenance_mode')).toMatchObject({ status: 'ready' });
-    expect(plan.items.find((i) => i.kind === 'config' && i.entityId === 'maintenance_mode')).toMatchObject({ status: 'error', reason: expect.stringMatching(/gate “maintenance_mode” also produces LD key/) });
+    expect(plan.items.find((i) => i.kind === 'config' && i.entityId === 'maintenance_mode')).toMatchObject({ status: 'error', reason: expect.stringMatching(/gate “maintenance_mode” also produces LaunchDarkly key/) });
     expect(plan.steps.map((s) => s.id)).toEqual(['shell:maintenance_mode', 'env:test:maintenance_mode']);
   });
 
@@ -296,7 +296,7 @@ describe('dynamic configs (PLAN §10.1; edge cases 1.2, 10.1, 10.8)', () => {
   });
 });
 
-describe('migrationStatus (from LD provenance)', () => {
+describe('migrationStatus (from LaunchDarkly provenance)', () => {
   const fp = { statsigFingerprint: 'abc', decisionSetHash: 'd1' };
   const flag = (sync?: string[]) => ({
     key: 'x',
@@ -334,7 +334,7 @@ describe('migrationStatus (from LD provenance)', () => {
 // ---------------------------------------------------------------------------------------------
 import { legacySnapshot } from './fixtures.ts';
 
-describe('planMigration with an LD source (PLAN §20)', () => {
+describe('planMigration with a LaunchDarkly source (PLAN §20)', () => {
   let legacy: CanonicalSnapshot;
   beforeAll(async () => {
     legacy = await legacySnapshot();
@@ -417,7 +417,7 @@ describe('planMigration with an LD source (PLAN §20)', () => {
   it('skips archived flags and reports a key collision with an existing target flag', () => {
     const plan = planMigration(acceptAll(legacyRequest({ flags: [fuid('legacy-archived-promo'), fuid('legacy-kill-switch')], ld: { ...ldWithKinds, flags: new Map([['legacy-kill-switch', { key: 'legacy-kill-switch', tags: [], customProperties: {}, kind: 'boolean' }]]) } })));
     expect(plan.items.find((i) => i.entityId === 'legacy-archived-promo')).toMatchObject({ status: 'skipped' });
-    expect(plan.items.find((i) => i.entityId === 'legacy-kill-switch')).toMatchObject({ status: 'blocked', reason: 'LD flag “legacy-kill-switch” already exists' });
+    expect(plan.items.find((i) => i.entityId === 'legacy-kill-switch')).toMatchObject({ status: 'blocked', reason: 'LaunchDarkly flag “legacy-kill-switch” already exists' });
     expect(plan.decisions.map((d) => d.type)).toEqual(['key_collision']);
   });
 
@@ -462,7 +462,7 @@ describe('prompts → AI Configs (PLAN §6)', () => {
     expect(foreign.decisions.map((d) => d.type)).toEqual(['key_collision']);
   });
 
-  it('an owner who is not an LD member blocks the prompt until maintainer_unknown is answered (accepting the recommendation unblocks it)', () => {
+  it('an owner who is not a LaunchDarkly member blocks the prompt until maintainer_unknown is answered (accepting the recommendation unblocks it)', () => {
     const req = request([], { prompts: [puid('product_description_writer')], directory });
     expect(planMigration(req).items[0]!.status).toBe('blocked');
     expect(planMigration(req).decisions.map((d) => d.type)).toEqual(['maintainer_unknown']);

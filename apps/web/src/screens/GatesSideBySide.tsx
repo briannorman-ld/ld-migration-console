@@ -65,7 +65,7 @@ export const STATUS: Record<
     tone: "amber",
     dot: "bg-warning-fill",
   },
-  foreign: { label: "existing LD key", tone: "red", dot: "bg-error-fill" },
+  foreign: { label: "existing LaunchDarkly key", tone: "red", dot: "bg-error-fill" },
   other_source: {
     label: "migrated from another source",
     tone: "violet",
@@ -387,7 +387,7 @@ export function FlagSideBySide({
           {mappedHere.length > 0 && (
             <>
               {" "}
-              → LD <b>{mappedHere.join(", ")}</b>
+              → LaunchDarkly <b>{mappedHere.join(", ")}</b>
             </>
           )}
         </span>
@@ -455,7 +455,7 @@ export function FlagSideBySide({
       {ld.status !== "connected" && (
         <div className="mb-3">
           <Callout tone="blue">
-            Connect LaunchDarkly to see what's already in LD and to migrate.
+            Connect LaunchDarkly to see what's already in LaunchDarkly and to migrate.
             Decisions can be made without it.
           </Callout>
         </div>
@@ -483,7 +483,7 @@ export function FlagSideBySide({
       {unmappedSources.length > 0 && (
         <div className="mb-3">
           <Callout>
-            StatSig <b>{env}</b> isn't mapped to an LD environment for{" "}
+            StatSig <b>{env}</b> isn't mapped to a LaunchDarkly environment for{" "}
             {unmappedSources.map((s) => s.label).join(", ")}, so it can't be
             migrated.{" "}
             <button className="font-medium underline" onClick={onOpenMapping}>
@@ -592,7 +592,7 @@ export function FlagSideBySide({
                         {gate.kind === "config" && gate.schema && (
                           <Badge
                             tone="slate"
-                            title="Rule values are schema-validated in StatSig; LD JSON variations are not"
+                            title="Rule values are schema-validated in StatSig; LaunchDarkly JSON variations are not"
                           >
                             schema
                           </Badge>
@@ -615,7 +615,7 @@ export function FlagSideBySide({
                       </div>
                       {gate.kind === "config" && (
                         <div
-                          title="Distinct values besides the default: each becomes an LD variation"
+                          title="Distinct values besides the default: each becomes a LaunchDarkly variation"
                         >
                           {r.shell.variations.length - 1} value
                           {r.shell.variations.length === 2 ? "" : "s"} + default
@@ -768,7 +768,7 @@ export function FlagSideBySide({
 
             {m.connected && m.ldEnvs.length > 0 ? (
               <div className="flex items-center gap-3 pt-1 text-sm">
-                <span className="text-fg-muted">Migrate to LD:</span>
+                <span className="text-fg-muted">Migrate to LaunchDarkly:</span>
                 {m.ldEnvs.map((e) => (
                   <label key={e.key} className="flex items-center gap-1.5">
                     <input
@@ -877,7 +877,7 @@ function LdCell({
         {flagExists ? (
           <span className="font-mono text-[13px]">{row.result.flagKey}</span>
         ) : (
-          <span className="text-xs text-fg-muted">not in LD</span>
+          <span className="text-xs text-fg-muted">not in LaunchDarkly</span>
         )}
         {on !== undefined && (
           <Badge tone={on ? "green" : "slate"}>{on ? "on" : "off"}</Badge>
@@ -964,7 +964,7 @@ function Detail({
                 rel="noreferrer"
                 className="ml-auto font-normal text-link hover:underline"
               >
-                Open in LD ↗
+                Open in LaunchDarkly ↗
               </a>
             )}
           </div>

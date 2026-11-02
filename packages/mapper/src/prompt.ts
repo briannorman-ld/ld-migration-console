@@ -27,17 +27,17 @@ export function mapPrompt(args: MapArgs<Prompt>): PromptMapResult {
   const fidelity: FidelityNote[] = [];
   const subject = { sourceId, kind: 'prompt' as const, uid: p.uid, id: p.id };
   const key = sanitizeKey(p.id);
-  if (key !== p.id) fidelity.push({ fidelity: 'full', message: `AI Config key “${key}” differs from the StatSig name “${p.id}” (LD keys allow letters, digits, . _ -).` });
+  if (key !== p.id) fidelity.push({ fidelity: 'full', message: `AI Config key “${key}” differs from the StatSig name “${p.id}” (LaunchDarkly keys allow letters, digits, . _ -).` });
   const tags = unique([TAG_MIGRATED, sourceTag(alias), ...p.tags.map(sanitizeTag)].filter(Boolean));
   const renamed = p.tags.filter((t) => sanitizeTag(t) !== t);
-  if (renamed.length) fidelity.push({ fidelity: 'full', message: `Tag${renamed.length === 1 ? '' : 's'} ${renamed.map((t) => `“${t}”`).join(', ')} renamed to fit LD's tag format.` });
+  if (renamed.length) fidelity.push({ fidelity: 'full', message: `Tag${renamed.length === 1 ? '' : 's'} ${renamed.map((t) => `“${t}”`).join(', ')} renamed to fit LaunchDarkly's tag format.` });
   const maintainer = chooseMaintainer({ profile, ...(args.directory ? { directory: args.directory } : {}), decisions, subject, fidelity }, p);
   fidelity.push({
     fidelity: 'manual',
-    message: `StatSig's Console API does not expose prompt versions (messages, model, parameters)${p.version !== undefined ? `; this prompt is at version ${p.version}` : ''}. The AI Config is created with its name, description, tags and maintainer: add the variations in LD and choose the default one.`,
+    message: `StatSig's Console API does not expose prompt versions (messages, model, parameters)${p.version !== undefined ? `; this prompt is at version ${p.version}` : ''}. The AI Config is created with its name, description, tags and maintainer: add the variations in LaunchDarkly and choose the default one.`,
     location: 'variations',
   });
-  if (p.holdoutIds.length) fidelity.push({ fidelity: 'partial', message: `In ${p.holdoutIds.length} StatSig holdout${p.holdoutIds.length === 1 ? '' : 's'} (${p.holdoutIds.join(', ')}); LD holdouts are recreated separately (PLAN §11).`, location: 'holdouts' });
+  if (p.holdoutIds.length) fidelity.push({ fidelity: 'partial', message: `In ${p.holdoutIds.length} StatSig holdout${p.holdoutIds.length === 1 ? '' : 's'} (${p.holdoutIds.join(', ')}); LaunchDarkly holdouts are recreated separately (PLAN §11).`, location: 'holdouts' });
 
   const desired: DesiredAiConfig = { key, name: p.name || p.id, description: p.description ?? '', tags, mode: 'completion', ...maintainer };
   return {

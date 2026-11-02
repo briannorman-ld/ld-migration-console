@@ -162,7 +162,7 @@ export function AutotunesSideBySide({
           {mappedHere.length > 0 && (
             <>
               {' '}
-              → LD <b>{mappedHere.join(', ')}</b>
+              → LaunchDarkly <b>{mappedHere.join(', ')}</b>
             </>
           )}
         </span>
@@ -181,7 +181,7 @@ export function AutotunesSideBySide({
       </div>
       {!readOnly && <ReadinessLine steps={steps} />}
       <Callout tone="blue">
-        An autotune becomes a JSON flag (one variation per arm), a custom metric for its success event and an LD <b>multi-armed bandit</b> created as a draft (PLAN §11). Nothing is moved mid-flight: a
+        An autotune becomes a JSON flag (one variation per arm), a custom metric for its success event and a LaunchDarkly <b>multi-armed bandit</b> created as a draft (PLAN §11). Nothing is moved mid-flight: a
         running autotune waits for its winner unless you choose to pre-stage it, and a concluded one becomes a flag serving the winner.
       </Callout>
       <PagerBar pager={pager} label="autotunes" className="my-2" />
@@ -257,7 +257,7 @@ export function AutotunesSideBySide({
                       ) : (
                         <div className="space-y-1">
                           <div className="flex flex-wrap items-center gap-1.5">
-                            {flag ? <span className="font-mono text-[13px]">{r.flagKey}</span> : <span className="text-xs text-fg-muted">not in LD</span>}
+                            {flag ? <span className="font-mono text-[13px]">{r.flagKey}</span> : <span className="text-xs text-fg-muted">not in LaunchDarkly</span>}
                             {r.bandit && !r.skipped && <Badge tone="violet">+ bandit draft</Badge>}
                             {here && here.status !== 'not_in_ld' && <Badge tone={STATUS[here.status].tone}>{STATUS[here.status].label}</Badge>}
                           </div>
@@ -337,7 +337,7 @@ export function AutotunesSideBySide({
             )}
             {m.connected && m.ldEnvs.length > 0 ? (
               <div className="flex items-center gap-3 pt-1 text-sm">
-                <span className="text-fg-muted">Migrate to LD:</span>
+                <span className="text-fg-muted">Migrate to LaunchDarkly:</span>
                 {m.ldEnvs.map((e) => (
                   <label key={e.key} className="flex items-center gap-1.5">
                     <input type="checkbox" checked={envChoice.includes(e.key)} onChange={() => setTargetEnvs(envChoice.includes(e.key) ? envChoice.filter((x) => x !== e.key) : [...envChoice, e.key])} />
@@ -395,7 +395,7 @@ function Detail({ row, m, flagUrl, readOnly }: { row: Row; m: MigrationContext; 
             </span>
             {flagUrl && (
               <a href={flagUrl} target="_blank" rel="noreferrer" className="ml-auto font-normal text-link hover:underline">
-                Open in LD ↗
+                Open in LaunchDarkly ↗
               </a>
             )}
           </div>

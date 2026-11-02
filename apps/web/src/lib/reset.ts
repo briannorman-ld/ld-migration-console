@@ -106,7 +106,7 @@ export function planSize(plan: ResetPlan): number {
 
 /** Read the workspace's LD project and list what a reset would do. Writes nothing. */
 export async function planLdReset(workspaceId: string, ld: LdSession, signal?: AbortSignal): Promise<ResetPlan> {
-  if (!ld.projectKey) throw new Error('Choose an LD project first.');
+  if (!ld.projectKey) throw new Error('Choose a LaunchDarkly project first.');
   return planReset(ldClient(workspaceId), ld.projectKey, signal);
 }
 
@@ -117,7 +117,7 @@ export async function planLdReset(workspaceId: string, ld: LdSession, signal?: A
  * state is re-read either way, so the UI shows what is actually left.
  */
 export async function resetLdProject(workspaceId: string, ld: LdSession, plan: ResetPlan, onProgress?: (p: ResetProgress) => void, signal?: AbortSignal): Promise<ResetReport> {
-  if (!ld.projectKey) throw new Error('Choose an LD project first.');
+  if (!ld.projectKey) throw new Error('Choose a LaunchDarkly project first.');
   const saved = (await store.getWorkspace(workspaceId))?.ld?.projectKey;
   if (plan.projectKey !== ld.projectKey || saved !== ld.projectKey) {
     throw new Error(`Refusing to reset: the preview was for “${plan.projectKey}”, the connection is on “${ld.projectKey}” and the workspace is saved with “${saved ?? 'none'}”. Close this dialog and start again.`);

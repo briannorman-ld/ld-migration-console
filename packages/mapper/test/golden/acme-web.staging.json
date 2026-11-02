@@ -6,8 +6,8 @@
       "name": "New checkout flow - one page",
       "fidelity": "partial",
       "notes": [
-        "partial: Holdout “checkout_holdout” (5%) is not carried over: users it holds out in StatSig get the feature in LD. [holdout “checkout_holdout”]",
-        "partial: 20% rollout re-buckets users (StatSig and LD hash differently). [rule “Public 20%”]",
+        "partial: Holdout “checkout_holdout” (5%) is not carried over: users it holds out in StatSig get the feature in LaunchDarkly. [holdout “checkout_holdout”]",
+        "partial: 20% rollout re-buckets users (StatSig and LaunchDarkly hash differently). [rule “Public 20%”]",
         "partial: 1 ID is overridden both to pass and to fail; the environment-specific (or first) override wins."
       ],
       "decisions": [
@@ -730,8 +730,8 @@
       "name": "cross_sell_matrix",
       "fidelity": "full",
       "notes": [
-        "full: not_array_contains_all expands into 4 LD rules (one per value). [rule “Incomplete wardrobe and home” › condition 1]",
-        "full: not_array_contains_all expands into 3 LD rules (one per value). [rule “Incomplete wardrobe and home” › condition 2]"
+        "full: not_array_contains_all expands into 4 LaunchDarkly rules (one per value). [rule “Incomplete wardrobe and home” › condition 1]",
+        "full: not_array_contains_all expands into 3 LaunchDarkly rules (one per value). [rule “Incomplete wardrobe and home” › condition 2]"
       ],
       "decisions": [
         "choice client_side_availability (flag settings) → both",
@@ -804,7 +804,7 @@
       "notes": [
         "partial: Your app must send “browserName” (StatSig derived it from the user agent). [rule “Old Safari” › condition 1]",
         "partial: Your app must send “browserVersion” (StatSig derived it from the user agent). [rule “Old Safari” › condition 2]",
-        "full: Version “15.0” → “15.0.0” for LD semver (StatSig pads missing parts with 0 and ignores leading zeros, so this is exact). [rule “Old Safari” › condition 2]"
+        "full: Version “15.0” → “15.0.0” for LaunchDarkly semver (StatSig pads missing parts with 0 and ignores leading zeros, so this is exact). [rule “Old Safari” › condition 2]"
       ],
       "decisions": [
         "choice client_side_availability (flag settings) → both",
@@ -911,7 +911,7 @@
       "name": "pwa_offline_mode",
       "fidelity": "full",
       "notes": [
-        "full: Version “1.2” → “1.2.0” for LD semver (StatSig pads missing parts with 0 and ignores leading zeros, so this is exact). [rule “Shell 1.2+” › condition 1]"
+        "full: Version “1.2” → “1.2.0” for LaunchDarkly semver (StatSig pads missing parts with 0 and ignores leading zeros, so this is exact). [rule “Shell 1.2+” › condition 1]"
       ],
       "decisions": [
         "choice client_side_availability (flag settings) → both"
@@ -994,7 +994,7 @@
       "name": "eu_cookie_banner",
       "fidelity": "partial",
       "notes": [
-        "full: Tag “★ Core” renamed to fit LD's tag format.",
+        "full: Tag “★ Core” renamed to fit LaunchDarkly's tag format.",
         "partial: Your app must send “country” (StatSig derived it from the IP address). [rule “EU” › condition 1]"
       ],
       "decisions": [
@@ -1331,7 +1331,7 @@
       "name": "anon_homepage_variant",
       "fidelity": "partial",
       "notes": [
-        "partial: 50% rollout re-buckets users (StatSig and LD hash differently). [rule “Half of devices”]"
+        "partial: 50% rollout re-buckets users (StatSig and LaunchDarkly hash differently). [rule “Half of devices”]"
       ],
       "decisions": [
         "choice client_side_availability (flag settings) → both",
@@ -1584,8 +1584,8 @@
       "name": "gift_card_upsell",
       "fidelity": "full",
       "notes": [
-        "full: “gift_card_balance” must be sent as a number: StatSig's numeric operators coerced numeric strings, LD's don't.",
-        "full: “loyalty_points” must be sent as a number: StatSig's numeric operators coerced numeric strings, LD's don't."
+        "full: “gift_card_balance” must be sent as a number: StatSig's numeric operators coerced numeric strings, LaunchDarkly's don't.",
+        "full: “loyalty_points” must be sent as a number: StatSig's numeric operators coerced numeric strings, LaunchDarkly's don't."
       ],
       "decisions": [
         "choice client_side_availability (flag settings) → both"
@@ -1702,7 +1702,7 @@
       "name": "legacy_partner_allowlist",
       "fidelity": "partial",
       "notes": [
-        "partial: Owner jordan.former@acmeretail.example is not an LD member: no maintainer (kept in migration.owner). [flag settings]"
+        "partial: Owner jordan.former@acmeretail.example is not a LaunchDarkly member: no maintainer (kept in migration.owner). [flag settings]"
       ],
       "decisions": [
         "choice client_side_availability (flag settings) → both",
@@ -1964,7 +1964,7 @@
       "name": "bundle_recommendations",
       "fidelity": "full",
       "notes": [
-        "full: not_array_contains_all expands into 3 LD rules (one per value). [rule “Not full-house” › condition 1]"
+        "full: not_array_contains_all expands into 3 LaunchDarkly rules (one per value). [rule “Not full-house” › condition 1]"
       ],
       "decisions": [
         "choice client_side_availability (flag settings) → both"
@@ -2148,7 +2148,7 @@
       "name": "old_cart_drawer",
       "fidelity": "partial",
       "notes": [
-        "partial: Owner jordan.former@acmeretail.example is not an LD member: no maintainer (kept in migration.owner). [flag settings]",
+        "partial: Owner jordan.former@acmeretail.example is not a LaunchDarkly member: no maintainer (kept in migration.owner). [flag settings]",
         "full: Disabled in StatSig: the flag is off in test and serves false."
       ],
       "decisions": [
@@ -2176,7 +2176,7 @@
       "skipped": "archived in StatSig",
       "fidelity": "skipped",
       "notes": [
-        "partial: Owner jordan.former@acmeretail.example is not an LD member: no maintainer (kept in migration.owner). [flag settings]",
+        "partial: Owner jordan.former@acmeretail.example is not a LaunchDarkly member: no maintainer (kept in migration.owner). [flag settings]",
         "skipped: Not migrated: archived in StatSig."
       ],
       "decisions": [
@@ -2242,7 +2242,7 @@
       "name": "Holiday Banner 2026",
       "fidelity": "full",
       "notes": [
-        "full: Flag key “Holiday_Banner_2026” differs from the StatSig name “Holiday Banner 2026” (LD keys allow letters, digits, . _ -)."
+        "full: Flag key “Holiday_Banner_2026” differs from the StatSig name “Holiday Banner 2026” (LaunchDarkly keys allow letters, digits, . _ -)."
       ],
       "decisions": [
         "choice client_side_availability (flag settings) → both"
@@ -2267,7 +2267,7 @@
       "name": "stale_reviews_widget",
       "fidelity": "partial",
       "notes": [
-        "partial: Owner jordan.former@acmeretail.example is not an LD member: no maintainer (kept in migration.owner). [flag settings]",
+        "partial: Owner jordan.former@acmeretail.example is not a LaunchDarkly member: no maintainer (kept in migration.owner). [flag settings]",
         "full: StatSig marks this gate stale (STALE_PROBABLY_DEAD_CHECK). Consider hard-coding it instead of migrating."
       ],
       "decisions": [
@@ -2414,7 +2414,7 @@
       "fidelity": "partial",
       "notes": [
         "partial: Your app must send “country” (StatSig derived it from the IP address). [rule “US” › condition 1]",
-        "full: The StatSig JSON schema is not carried over: LD JSON variations are not schema-validated."
+        "full: The StatSig JSON schema is not carried over: LaunchDarkly JSON variations are not schema-validated."
       ],
       "decisions": [
         "choice client_side_availability (flag settings) → both",
@@ -2508,7 +2508,7 @@
       "name": "homepage_hero",
       "fidelity": "partial",
       "notes": [
-        "partial: 100% rollout split Autumn 50% / Minimal 30% / Video 20% re-buckets users (StatSig and LD hash differently). [rule “Everyone (variants)”]"
+        "partial: 100% rollout split Autumn 50% / Minimal 30% / Video 20% re-buckets users (StatSig and LaunchDarkly hash differently). [rule “Everyone (variants)”]"
       ],
       "decisions": [
         "choice client_side_availability (flag settings) → both",
@@ -2762,7 +2762,7 @@
       "name": "api_rate_limits",
       "fidelity": "partial",
       "notes": [
-        "partial: 50% rollout re-buckets users (StatSig and LD hash differently). [rule “New limits (50%)”]"
+        "partial: 50% rollout re-buckets users (StatSig and LaunchDarkly hash differently). [rule “New limits (50%)”]"
       ],
       "decisions": [
         "choice client_side_availability (flag settings) → both",
@@ -2846,8 +2846,8 @@
       "name": "loyalty_checkout_perks",
       "fidelity": "partial",
       "notes": [
-        "partial: 25% rollout re-buckets users (StatSig and LD hash differently). [rule “Accounts older than 30 days”]",
-        "full: “account_age_days” must be sent as a number: StatSig's numeric operators coerced numeric strings, LD's don't."
+        "partial: 25% rollout re-buckets users (StatSig and LaunchDarkly hash differently). [rule “Accounts older than 30 days”]",
+        "full: “account_age_days” must be sent as a number: StatSig's numeric operators coerced numeric strings, LaunchDarkly's don't."
       ],
       "decisions": [
         "choice client_side_availability (flag settings) → both",
@@ -2940,7 +2940,7 @@
       "name": "legacy_pricing_rules",
       "fidelity": "partial",
       "notes": [
-        "partial: Owner jordan.former@acmeretail.example is not an LD member: no maintainer (kept in migration.owner). [flag settings]",
+        "partial: Owner jordan.former@acmeretail.example is not a LaunchDarkly member: no maintainer (kept in migration.owner). [flag settings]",
         "full: Disabled in StatSig: the flag is off in test and serves the default value."
       ],
       "decisions": [
@@ -3226,9 +3226,9 @@
       "flagKey": "hero_image_autotune",
       "fidelity": "full",
       "notes": [
-        "full: Not started in StatSig: the flag is created off with a draft bandit. Start it from LD when ready.",
-        "full: Success event “hero_click” becomes the LD metric “hero_click”. Your app must send it through LD track(\"hero_click\").",
-        "full: “Lifestyle” is the bandit's baseline arm (LD needs one; StatSig has none)."
+        "full: Not started in StatSig: the flag is created off with a draft bandit. Start it from LaunchDarkly when ready.",
+        "full: Success event “hero_click” becomes the LaunchDarkly metric “hero_click”. Your app must send it through LaunchDarkly track(\"hero_click\").",
+        "full: “Lifestyle” is the bandit's baseline arm (LaunchDarkly needs one; StatSig has none)."
       ],
       "decisions": [
         "choice client_side_availability (flag settings) → both"
@@ -3280,7 +3280,7 @@
       "flagKey": "pricing_page_autotune",
       "fidelity": "full",
       "notes": [
-        "full: Concluded in StatSig: winner “Annual first” is served to everyone, so no bandit is created in LD."
+        "full: Concluded in StatSig: winner “Annual first” is served to everyone, so no bandit is created in LaunchDarkly."
       ],
       "decisions": [
         "choice client_side_availability (flag settings) → both"
@@ -3311,8 +3311,8 @@
       "flagKey": "cart_upsell_autotune",
       "fidelity": "manual",
       "notes": [
-        "full: Not started in StatSig: the flag is created off with a draft bandit. Start it from LD when ready.",
-        "manual: No success event: the flag is created without a bandit. Add a metric and a multi-armed bandit on it in LD."
+        "full: Not started in StatSig: the flag is created off with a draft bandit. Start it from LaunchDarkly when ready.",
+        "manual: No success event: the flag is created without a bandit. Add a metric and a multi-armed bandit on it in LaunchDarkly."
       ],
       "decisions": [
         "blocking missing_metric (cart_upsell_autotune) → no default",
@@ -3358,9 +3358,9 @@
       "notes": [
         "partial: Merged “Short” + “Short again”: identical values become one arm.",
         "full: Variant sizes add up to 99%, not 100%; normalized to 66.67/33.33%.",
-        "full: Not started in StatSig: the flag is created off with a draft bandit. Start it from LD when ready.",
-        "full: Success event “checkout_start” becomes the LD metric “checkout_start”. Your app must send it through LD track(\"checkout_start\").",
-        "full: “Short / Short again” is the bandit's baseline arm (LD needs one; StatSig has none)."
+        "full: Not started in StatSig: the flag is created off with a draft bandit. Start it from LaunchDarkly when ready.",
+        "full: Success event “checkout_start” becomes the LaunchDarkly metric “checkout_start”. Your app must send it through LaunchDarkly track(\"checkout_start\").",
+        "full: “Short / Short again” is the bandit's baseline arm (LaunchDarkly needs one; StatSig has none)."
       ],
       "decisions": [
         "choice duplicate_variant_value (free_shipping_copy_autotune) → merge",
@@ -3413,10 +3413,10 @@
       "flagKey": "b2b_pricing_autotune",
       "fidelity": "full",
       "notes": [
-        "full: Not started in StatSig: the flag is created off with a draft bandit. Start it from LD when ready.",
-        "full: Success event “quote_requested” becomes the LD metric “quote_requested”. Your app must send it through LD track(\"quote_requested\").",
-        "full: Randomizes by “company”: the migration enables it as a randomization unit in the LD project's experimentation settings.",
-        "full: “Volume tiers” is the bandit's baseline arm (LD needs one; StatSig has none)."
+        "full: Not started in StatSig: the flag is created off with a draft bandit. Start it from LaunchDarkly when ready.",
+        "full: Success event “quote_requested” becomes the LaunchDarkly metric “quote_requested”. Your app must send it through LaunchDarkly track(\"quote_requested\").",
+        "full: Randomizes by “company”: the migration enables it as a randomization unit in the LaunchDarkly project's experimentation settings.",
+        "full: “Volume tiers” is the bandit's baseline arm (LaunchDarkly needs one; StatSig has none)."
       ],
       "decisions": [
         "choice unit_type_kind (companyID) → create:company",
@@ -3472,8 +3472,8 @@
       "key": "support_reply_assistant",
       "fidelity": "manual",
       "notes": [
-        "full: Tag “★ Core” renamed to fit LD's tag format.",
-        "manual: StatSig's Console API does not expose prompt versions (messages, model, parameters); this prompt is at version 4. The AI Config is created with its name, description, tags and maintainer: add the variations in LD and choose the default one. [variations]"
+        "full: Tag “★ Core” renamed to fit LaunchDarkly's tag format.",
+        "manual: StatSig's Console API does not expose prompt versions (messages, model, parameters); this prompt is at version 4. The AI Config is created with its name, description, tags and maintainer: add the variations in LaunchDarkly and choose the default one. [variations]"
       ],
       "decisions": [],
       "desired": {
@@ -3495,9 +3495,9 @@
       "key": "product_description_writer",
       "fidelity": "manual",
       "notes": [
-        "partial: Owner jordan.former@acmeretail.example is not an LD member: no maintainer (kept in migration.owner). [flag settings]",
-        "manual: StatSig's Console API does not expose prompt versions (messages, model, parameters); this prompt is at version 2. The AI Config is created with its name, description, tags and maintainer: add the variations in LD and choose the default one. [variations]",
-        "partial: In 1 StatSig holdout (checkout_holdout); LD holdouts are recreated separately (PLAN §11). [holdouts]"
+        "partial: Owner jordan.former@acmeretail.example is not a LaunchDarkly member: no maintainer (kept in migration.owner). [flag settings]",
+        "manual: StatSig's Console API does not expose prompt versions (messages, model, parameters); this prompt is at version 2. The AI Config is created with its name, description, tags and maintainer: add the variations in LaunchDarkly and choose the default one. [variations]",
+        "partial: In 1 StatSig holdout (checkout_holdout); LaunchDarkly holdouts are recreated separately (PLAN §11). [holdouts]"
       ],
       "decisions": [
         "choice maintainer_unknown (flag settings) → unassigned"

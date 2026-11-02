@@ -23,29 +23,29 @@ export function statusMarkdown(workspaceName: string, rows: readonly MonitorRow[
   const lines = [
     `# Migration status: ${workspaceName}`,
     '',
-    `Exported ${opts.now}.${opts.lastCheckedAt ? ` LaunchDarkly last checked ${opts.lastCheckedAt}.` : ''}${opts.ldProject ? ` LD project \`${opts.ldProject}\`.` : ''} ${rows.length} item-environment pairs; ${drifted.length} drifted; ${retire.length} to retire.`,
+    `Exported ${opts.now}.${opts.lastCheckedAt ? ` LaunchDarkly last checked ${opts.lastCheckedAt}.` : ''}${opts.ldProject ? ` LaunchDarkly project \`${opts.ldProject}\`.` : ''} ${rows.length} item-environment pairs; ${drifted.length} drifted; ${retire.length} to retire.`,
     '',
     '## Cutover funnel',
     '',
-    `| LD environment | ${STAGES.map((s) => describeLifecycle(s)).join(' | ')} | Total |`,
+    `| LaunchDarkly environment | ${STAGES.map((s) => describeLifecycle(s)).join(' | ')} | Total |`,
     `|---|${STAGES.map(() => '---:').join('|')}|---:|`,
     ...funnel(rows).map((f) => `| ${f.ldEnv} | ${STAGES.map((s) => f.counts[s]).join(' | ')} | ${f.total} |`),
     '',
     '## Drift',
     '',
     ...(drifted.length
-      ? ['| Item | LD environment | Status | Synced | Detail |', '|---|---|---|---|---|', ...drifted.map((r) => `| ${cell(r.kind)} ${cell(r.id)} (${cell(r.sourceAlias)}) | ${cell(r.ldEnv)} | ${describeStatus(r.status)} | ${cell(r.syncedAt ?? '')} | ${cell(r.ldChangeEvidence ?? '')} |`)]
+      ? ['| Item | LaunchDarkly environment | Status | Synced | Detail |', '|---|---|---|---|---|', ...drifted.map((r) => `| ${cell(r.kind)} ${cell(r.id)} (${cell(r.sourceAlias)}) | ${cell(r.ldEnv)} | ${describeStatus(r.status)} | ${cell(r.syncedAt ?? '')} | ${cell(r.ldChangeEvidence ?? '')} |`)]
       : ['Nothing has drifted since the last sync.']),
     '',
     '## Retire in LaunchDarkly',
     '',
     ...(retire.length
-      ? ['| Item | LD flag | LD environment | Why |', '|---|---|---|---|', ...retire.map((r) => `| ${cell(r.kind)} ${cell(r.id)} (${cell(r.sourceAlias)}) | ${cell(r.flagKey)} | ${cell(r.ldEnv)} | ${describeStatus(r.status)} |`)]
+      ? ['| Item | LaunchDarkly flag | LaunchDarkly environment | Why |', '|---|---|---|---|', ...retire.map((r) => `| ${cell(r.kind)} ${cell(r.id)} (${cell(r.sourceAlias)}) | ${cell(r.flagKey)} | ${cell(r.ldEnv)} | ${describeStatus(r.status)} |`)]
       : ['Nothing to retire.']),
     '',
     '## Inventory',
     '',
-    '| Kind | StatSig ID | Source | LD flag | LD env | Fidelity | Open decisions | Status | LD traffic | StatSig checks/h | Lifecycle |',
+    '| Kind | StatSig ID | Source | LaunchDarkly flag | LaunchDarkly env | Fidelity | Open decisions | Status | LaunchDarkly traffic | StatSig checks/h | Lifecycle |',
     '|---|---|---|---|---|---|---:|---|---|---:|---|',
     ...rows.map((r) => `| ${r.kind} | ${cell(r.id)} | ${cell(r.sourceAlias)} | ${cell(r.flagKey)} | ${cell(r.ldEnv)} | ${r.fidelity} | ${r.openDecisions} | ${describeStatus(r.status)} | ${r.traffic}${r.lastRequested ? ` (${r.lastRequested})` : ''} | ${r.checksPerHour ?? ''} | ${describeLifecycle(r.lifecycle)} |`),
     '',

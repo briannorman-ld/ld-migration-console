@@ -108,22 +108,22 @@ function summaryFor(k: StepKey, g: GuideModel, input: GuideInput): string {
     case 'connect':
       return `${g.synced} source${g.synced === 1 ? '' : 's'} synced · LaunchDarkly ${g.connected ? `project “${input.m?.ld.projectKey ?? ''}”` : g.connecting ? 'connecting…' : 'not connected'}`;
     case 'environment':
-      return g.env ? (g.ldEnvs.length ? `${g.env} → LD ${g.ldEnvs.join(', ')}` : `${g.env} is not mapped to an LD environment yet`) : 'No environment chosen';
+      return g.env ? (g.ldEnvs.length ? `${g.env} → LaunchDarkly ${g.ldEnvs.join(', ')}` : `${g.env} is not mapped to a LaunchDarkly environment yet`) : 'No environment chosen';
     case 'teams': {
       const missing = g.people.teams.filter((t) => t.status === 'missing').length;
       if (!g.people.teams.length) return 'No teams in the sources';
       const total = `${g.people.teams.length} team${g.people.teams.length === 1 ? '' : 's'}`;
-      if (!missing) return `${total}, all in LD`;
+      if (!missing) return `${total}, all in LaunchDarkly`;
       const provider = provisionedBy('teams', g.people.access);
-      return provider ? `${total} · ${missing} group${missing === 1 ? '' : 's'} to push from ${provider}` : `${total} (${missing} not in LD)`;
+      return provider ? `${total} · ${missing} group${missing === 1 ? '' : 's'} to push from ${provider}` : `${total} (${missing} not in LaunchDarkly)`;
     }
     case 'people': {
       const missing = g.people.owners.filter((o) => o.status === 'missing').length;
       if (!g.people.owners.length) return 'No owners in the sources';
       const total = `${g.people.owners.length} owner${g.people.owners.length === 1 ? '' : 's'}`;
-      if (!missing) return `${total}, all in LD`;
+      if (!missing) return `${total}, all in LaunchDarkly`;
       const provider = provisionedBy('people', g.people.access);
-      return provider ? `${total} · ${missing} waiting for ${provider}` : `${total} (${missing} not in LD)`;
+      return provider ? `${total} · ${missing} waiting for ${provider}` : `${total} (${missing} not in LaunchDarkly)`;
     }
     case 'contexts':
       return g.contexts.unitTypes.length === 0 ? 'No unit types in this environment' : g.contexts.open.length ? `${g.contexts.open.length} unit type${g.contexts.open.length === 1 ? '' : 's'} need${g.contexts.open.length === 1 ? 's' : ''} a context kind` : `${g.contexts.unitTypes.length} unit type${g.contexts.unitTypes.length === 1 ? '' : 's'} mapped`;
@@ -292,10 +292,10 @@ function Environment({ workspaceId, g, m, onEnvChange, nav }: { workspaceId: str
         <Callout tone="blue">
           {g.connecting ? (
             <span className="inline-flex items-center gap-2">
-              <Spinner /> Connecting to LaunchDarkly… the LD environments appear when the connection is up.
+              <Spinner /> Connecting to LaunchDarkly… the LaunchDarkly environments appear when the connection is up.
             </span>
           ) : (
-            'Connect LaunchDarkly (step 1) to map it to an LD environment.'
+            'Connect LaunchDarkly (step 1) to map it to a LaunchDarkly environment.'
           )}
         </Callout>
       )}
@@ -310,7 +310,7 @@ function Environment({ workspaceId, g, m, onEnvChange, nav }: { workspaceId: str
                 <td className="py-1.5 text-fg-subtle">→</td>
                 <td className="py-1.5">
                   <Select
-                    aria-label={`LD environment for ${source.label} ${g.env}`}
+                    aria-label={`LaunchDarkly environment for ${source.label} ${g.env}`}
                     value={ldEnv ?? ''}
                     onChange={(ev) => save((p) => void ((p.sources[source.id] ??= { envMapping: {}, unitTypeKinds: {} }).envMapping[g.env] = ev.target.value || null))}
                   >
@@ -325,7 +325,7 @@ function Environment({ workspaceId, g, m, onEnvChange, nav }: { workspaceId: str
                 <td className="py-1.5 pl-2 text-xs">
                   {!ldEnv && !m.ldEnvs.some((l) => l.key === sanitizeKey(g.env).toLowerCase()) && (
                     <Button variant="ghost" className="py-1 text-xs" disabled={!!creating} onClick={() => void create(source.id, isProduction)}>
-                      {creating === source.id ? <Spinner /> : null} Create “{sanitizeKey(g.env).toLowerCase()}” in LD
+                      {creating === source.id ? <Spinner /> : null} Create “{sanitizeKey(g.env).toLowerCase()}” in LaunchDarkly
                     </Button>
                   )}
                 </td>
@@ -392,7 +392,7 @@ function Teams({ workspaceId, g, m }: { workspaceId: string; g: GuideModel; m: M
       <p className="text-fg-muted">
         {p.access === 'scim_team_sync'
           ? 'Okta team sync is on, so LaunchDarkly teams are created and filled only by Okta Group Push. The console lists the groups to push and matches them by name; nothing is created from here.'
-          : 'StatSig teams become LaunchDarkly teams with the members that already exist in LD. Teams come first so invitations can place people straight into them, and a flag whose owner is not an LD member can take its team as maintainer. Creating a team sends no email.'}
+          : 'StatSig teams become LaunchDarkly teams with the members that already exist in LaunchDarkly. Teams come first so invitations can place people straight into them, and a flag whose owner is not a LaunchDarkly member can take its team as maintainer. Creating a team sends no email.'}
       </p>
       {!g.connected && <Callout tone="blue">Connect LaunchDarkly (step 1) to see which teams it already has.</Callout>}
       {g.connected && p.access === 'scim_team_sync' && missing.length > 0 && (
@@ -404,7 +404,7 @@ function Teams({ workspaceId, g, m }: { workspaceId: string; g: GuideModel; m: M
             {busy === 'team:recheck' ? <Spinner /> : null} Re-check
           </Button>
           <span className="text-fg-muted">
-            In Okta, push a group for each: <code className="font-mono">{missing.map((t) => t.name).join('</code>, <code className="font-mono">')}</code>. Team sync links an existing LD team of the same name. Skip the ones you do not want in LD.
+            In Okta, push a group for each: <code className="font-mono">{missing.map((t) => t.name).join('</code>, <code className="font-mono">')}</code>. Team sync links an existing LaunchDarkly team of the same name. Skip the ones you do not want in LaunchDarkly.
           </span>
         </div>
       )}
@@ -416,7 +416,7 @@ function Teams({ workspaceId, g, m }: { workspaceId: string; g: GuideModel; m: M
           <Button className="py-1 text-xs" disabled={!!busy} onClick={() => void run('team:all', createAll)}>
             {busy === 'team:all' ? <Spinner /> : null} Create all {missing.length} team{missing.length === 1 ? '' : 's'}
           </Button>
-          <span className="text-fg-muted">Each team gets the members that already exist in LD; nobody is emailed.</span>
+          <span className="text-fg-muted">Each team gets the members that already exist in LaunchDarkly; nobody is emailed.</span>
         </div>
       )}
       {g.connected && p.teams.length > 0 && waiting && (
@@ -443,7 +443,7 @@ function Teams({ workspaceId, g, m }: { workspaceId: string; g: GuideModel; m: M
           ))}
         </ul>
       )}
-      {g.connected && !p.canCreateTeams && p.access !== 'scim_team_sync' && missing.length > 0 && <p className="text-xs text-fg-muted">Teams are an LD Enterprise feature{p.teamsReadable ? '' : ' and this token cannot read them'}: create them in LaunchDarkly by hand, or skip them here.</p>}
+      {g.connected && !p.canCreateTeams && p.access !== 'scim_team_sync' && missing.length > 0 && <p className="text-xs text-fg-muted">Teams are a LaunchDarkly Enterprise feature{p.teamsReadable ? '' : ' and this token cannot read them'}: create them in LaunchDarkly by hand, or skip them here.</p>}
       {g.connected && p.teams.length === 0 && <p className="text-xs text-fg-muted">The sources carry no teams: nothing to create.</p>}
       {error && <Callout tone="red">{error}</Callout>}
     </>
@@ -480,7 +480,7 @@ function People({ workspaceId, g, m, nav }: { workspaceId: string; g: GuideModel
       <p className="text-fg-muted">
         {provisioned
           ? 'A LaunchDarkly maintainer must be a member of the account. Members come from your identity provider over SCIM, so nobody is invited from here: owners are matched by email as they are provisioned, and until then their items can take the team as maintainer or go without one.'
-          : 'A LaunchDarkly maintainer must be a member of the account, so each StatSig owner is matched by email before any flag is written. Owners without an LD member can be invited (LD emails them, they join the teams created in the previous step, and they become maintainers on the next sync), handed to their team, or left unassigned.'}
+          : 'A LaunchDarkly maintainer must be a member of the account, so each StatSig owner is matched by email before any flag is written. Owners without a LaunchDarkly member can be invited (LaunchDarkly emails them, they join the teams created in the previous step, and they become maintainers on the next sync), handed to their team, or left unassigned.'}
       </p>
       {!g.connected && <Callout tone="blue">Connect LaunchDarkly (step 1) to match owners against its members.</Callout>}
       {g.connected && !p.membersReadable && (
@@ -525,7 +525,7 @@ function People({ workspaceId, g, m, nav }: { workspaceId: string; g: GuideModel
           <Button variant="secondary" className="py-1 text-xs" disabled={!!busy} onClick={() => saveProfile((prof) => void (prof.maintainers = { ...(prof.maintainers ?? {}), ...Object.fromEntries(missing.map((o) => [o.email, 'unassigned' as const])) }))}>
             Leave all {missing.length} unassigned
           </Button>
-          <span className="text-fg-muted">Inviting sends each person an email from LaunchDarkly{p.canInvite ? '' : '; this token may not invite (Admin or createMember needed), so ask an LD admin'}.</span>
+          <span className="text-fg-muted">Inviting sends each person an email from LaunchDarkly{p.canInvite ? '' : '; this token may not invite (Admin or createMember needed), so ask a LaunchDarkly admin'}.</span>
         </div>
       )}
       {g.connected && p.owners.length > 0 && provisioned && (
@@ -565,7 +565,7 @@ function People({ workspaceId, g, m, nav }: { workspaceId: string; g: GuideModel
       {g.connected && p.owners.length === 0 && <p className="text-xs text-fg-muted">The sources carry no owners: nothing to match.</p>}
       {error && <Callout tone="red">{error}</Callout>}
       <p className="text-xs text-fg-muted">
-        Per-item answers to “owner is not an LD member” live on the{' '}
+        Per-item answers to “owner is not a LaunchDarkly member” live on the{' '}
         <button type="button" className="text-link hover:underline" onClick={nav.decisions}>
           Decisions
         </button>{' '}
@@ -646,7 +646,7 @@ function OwnerLine({ o, teams, members, busy, canInvite, onInvite, onChoose }: {
       <td className="py-1.5">
         {o.status === 'member' && (
           <span className="flex items-center gap-2 text-xs">
-            <Mark ok /> LD member{o.pendingInvite ? <Badge tone="amber">invite pending</Badge> : null}
+            <Mark ok /> LaunchDarkly member{o.pendingInvite ? <Badge tone="amber">invite pending</Badge> : null}
           </span>
         )}
         {o.status === 'chosen_member' && (
@@ -675,7 +675,7 @@ function OwnerLine({ o, teams, members, busy, canInvite, onInvite, onChoose }: {
         )}
         {o.status === 'missing' && (
           <span className="flex flex-wrap items-center gap-1.5 text-xs">
-            <Badge tone="amber">not in LD</Badge>
+            <Badge tone="amber">not in LaunchDarkly</Badge>
             {canInvite && (
               <Button variant="secondary" className="py-0.5 text-xs" disabled={busy} onClick={onInvite}>
                 {busy ? <Spinner /> : null} Invite
@@ -703,17 +703,17 @@ function TeamLine({ t, canCreate, busy, onCreate, onSkip, onUnskip }: { t: TeamR
       <span className="font-medium">{t.name}</span>
       <span className="text-fg-muted">
         {t.items} item{t.items === 1 ? '' : 's'}
-        {t.memberEmails.length ? ` · ${t.memberEmails.length} member${t.memberEmails.length === 1 ? '' : 's'} in StatSig, ${t.ldMemberIds.length} in LD` : ''}
+        {t.memberEmails.length ? ` · ${t.memberEmails.length} member${t.memberEmails.length === 1 ? '' : 's'} in StatSig, ${t.ldMemberIds.length} in LaunchDarkly` : ''}
       </span>
       <span className="ml-auto flex items-center gap-2">
         {t.status === 'exists' && (
           <>
-            <Mark ok /> LD team <code className="font-mono">{t.ldKey}</code>
+            <Mark ok /> LaunchDarkly team <code className="font-mono">{t.ldKey}</code>
           </>
         )}
         {t.status === 'skipped' && (
           <>
-            <span className="text-fg-muted">No LD team</span>
+            <span className="text-fg-muted">No LaunchDarkly team</span>
             <button type="button" className="text-link hover:underline" onClick={onUnskip}>
               change
             </button>
@@ -721,10 +721,10 @@ function TeamLine({ t, canCreate, busy, onCreate, onSkip, onUnskip }: { t: TeamR
         )}
         {t.status === 'missing' && (
           <>
-            <Badge tone="amber">not in LD</Badge>
+            <Badge tone="amber">not in LaunchDarkly</Badge>
             {canCreate && (
               <Button variant="secondary" className="py-0.5 text-xs" disabled={busy} onClick={onCreate}>
-                {busy ? <Spinner /> : null} Create “{teamKeyFor(t.name)}” in LD
+                {busy ? <Spinner /> : null} Create “{teamKeyFor(t.name)}” in LaunchDarkly
               </Button>
             )}
             <Button variant="ghost" className="py-0.5 text-xs" onClick={() => onSkip(true)}>
@@ -754,12 +754,12 @@ function Contexts({ workspaceId, g, m, nav, onMigrate }: { workspaceId: string; 
           <Mark ok={du.isDefault} /> StatSig's default unit type is <code className="font-mono">{du.unitType}</code>
           {du.isDefault ? (
             <span className="text-fg-muted">
-              and <code className="font-mono">{du.kind}</code> is the default randomization unit in LD.
+              and <code className="font-mono">{du.kind}</code> is the default randomization unit in LaunchDarkly.
             </span>
           ) : (
             <>
               <span className="text-fg-muted">
-                → make <code className="font-mono">{du.kind}</code> the default randomization unit for LD experiments{du.readable ? '' : ' (experimentation settings not readable: needs the Experimentation add-on)'}.
+                → make <code className="font-mono">{du.kind}</code> the default randomization unit for LaunchDarkly experiments{du.readable ? '' : ' (experimentation settings not readable: needs the Experimentation add-on)'}.
               </span>
               {du.readable && (
                 <Button
@@ -817,7 +817,7 @@ function Contexts({ workspaceId, g, m, nav, onMigrate }: { workspaceId: string; 
           {g.contexts.canCreate ? (
             <div className="flex items-center gap-3">
               <Button onClick={() => onMigrate({ gates: [], autotunes: [], contextKinds: kinds }, g.ldEnvs)}>
-                Create {kinds.length} context kind{kinds.length === 1 ? '' : 's'} in LD…
+                Create {kinds.length} context kind{kinds.length === 1 ? '' : 's'} in LaunchDarkly…
               </Button>
               <span className="text-xs text-fg-muted">A small run of its own, so the kinds exist before any segment or flag refers to them. Needs the createContextKind role.</span>
             </div>
@@ -865,7 +865,7 @@ function Items({ g, tallies, noun, nav, onMigrate, toSelection }: { g: GuideMode
           ? 'Segments go first: flags reference them, so a flag migrated later finds its segments already in place. Big ID lists import as big segments where the plan allows.'
           : 'Gates become boolean flags and dynamic configs become JSON flags, with rules, rollouts and overrides translated. A gate used as a prerequisite migrates before the flags that depend on it. StatSig prompts become AI Configs: the shell only, because the Console API does not expose prompt versions.'}
       </p>
-      {noun === 'flag' && !g.aiConfigsAvailable && g.prompts.total > 0 && <Callout tone="amber">{g.prompts.total} StatSig prompt{g.prompts.total === 1 ? '' : 's'} cannot be written: AI Configs are not available to this LD project or token. Recreate them in LD by hand.</Callout>}
+      {noun === 'flag' && !g.aiConfigsAvailable && g.prompts.total > 0 && <Callout tone="amber">{g.prompts.total} StatSig prompt{g.prompts.total === 1 ? '' : 's'} cannot be written: AI Configs are not available to this LaunchDarkly project or token. Recreate them in LaunchDarkly by hand.</Callout>}
       {!g.ldEnvs.length && <Callout tone="blue">Map the environment first (step 2).</Callout>}
       {g.ldEnvs.length > 0 && (
         <>
@@ -920,7 +920,7 @@ function Experiments({ g, nav, onMigrate }: { g: GuideModel; nav: GuideNav; onMi
           {g.endInSource.map((x) => (
             <li key={x.kind} className="flex items-center gap-2">
               <span className="text-fg-muted">
-                {x.count} {KIND_LABEL[x.kind].toLowerCase()}: end in StatSig, start new in LD.
+                {x.count} {KIND_LABEL[x.kind].toLowerCase()}: end in StatSig, start new in LaunchDarkly.
               </span>
               <button type="button" className="text-link hover:underline" onClick={nav.coverage}>
                 What migrates
@@ -954,7 +954,7 @@ function CutOver({ workspaceId, g, input, workspace, nav, doneCount }: { workspa
     <>
       <p className="text-fg-muted">Once {g.env || 'an environment'} is migrated, point that environment's SDKs at LaunchDarkly, keep StatSig running until its checks go quiet, then repeat from step 2 for the next environment.</p>
       <ol className="list-decimal space-y-1 pl-5">
-        <li>Swap the SDK in the apps that run in this environment and watch Monitoring: LD traffic rising, StatSig checks falling to zero.</li>
+        <li>Swap the SDK in the apps that run in this environment and watch Monitoring: LaunchDarkly traffic rising, StatSig checks falling to zero.</li>
         <li>Re-sync when StatSig changes; Monitoring flags drift from either side, and the plan shows exactly what a re-sync would change.</li>
         <li>When StatSig checks have been at zero for a while, archive the gates there, and stop syncing this environment.</li>
         <li>Then the next environment, production last.</li>
@@ -962,11 +962,11 @@ function CutOver({ workspaceId, g, input, workspace, nav, doneCount }: { workspa
       {approvals.length > 0 && (
         <div className="space-y-1 rounded-md border border-line p-3">
           <div className="text-xs font-semibold tracking-wide text-fg-muted uppercase">Reviews → approvals</div>
-          <p className="text-xs text-fg-muted">StatSig requires reviews for changes in {g.env}. Turn on required approvals in the LD environment after the migration writes are done, or every sync files an approval request.</p>
+          <p className="text-xs text-fg-muted">StatSig requires reviews for changes in {g.env}. Turn on required approvals in the LaunchDarkly environment after the migration writes are done, or every sync files an approval request.</p>
           <ul className="space-y-1 text-xs">
             {approvals.map((a) => (
               <li key={a.ldEnv} className="flex flex-wrap items-center gap-2">
-                <Mark ok={a.ldRequires === true} /> LD <code className="font-mono">{a.ldEnv}</code>
+                <Mark ok={a.ldRequires === true} /> LaunchDarkly <code className="font-mono">{a.ldEnv}</code>
                 {a.ldRequires === true ? (
                   <span className="text-fg-muted">requires approvals.</span>
                 ) : (
@@ -999,7 +999,7 @@ function CutOver({ workspaceId, g, input, workspace, nav, doneCount }: { workspa
       {g.cutover.alerts.length > 0 && (
         <div className="space-y-1 rounded-md border border-line p-3">
           <div className="text-xs font-semibold tracking-wide text-fg-muted uppercase">Topline alerts to recreate</div>
-          <p className="text-xs text-fg-muted">StatSig topline alerts have no LaunchDarkly equivalent. Recreate the ones that matter as LD Observability alerts or as experiment guardrails once the metrics exist in LD.</p>
+          <p className="text-xs text-fg-muted">StatSig topline alerts have no LaunchDarkly equivalent. Recreate the ones that matter as LaunchDarkly Observability alerts or as experiment guardrails once the metrics exist in LaunchDarkly.</p>
           <ul className="space-y-0.5 text-xs">
             {g.cutover.alerts.map(({ alias, alert }) => (
               <li key={`${alias}/${alert.id}`} className="flex flex-wrap items-center gap-2">

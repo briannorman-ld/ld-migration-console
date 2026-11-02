@@ -141,7 +141,7 @@ export function LdPanel({ workspaceId, workspace }: { workspaceId: string; works
                 </p>
               </div>
               <Button variant="danger" onClick={() => setResetting(true)}>
-                Reset LD project…
+                Reset LaunchDarkly project…
               </Button>
             </div>
           )}

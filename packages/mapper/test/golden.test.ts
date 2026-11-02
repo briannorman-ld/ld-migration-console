@@ -97,7 +97,7 @@ describe('mapper golden files', () => {
     ['web', 'production', 'production'],
     // acme-mobile: version operators, javascript / experiment_group conditions, deviceID lists.
     ['mobile', 'production', 'production'],
-  ] as const)('acme-%s %s → LD %s', async (alias, statsig, ld) => {
+  ] as const)('acme-%s %s → LaunchDarkly %s', async (alias, statsig, ld) => {
     const snap = await acmeSnapshot(alias);
     await expect(JSON.stringify(golden(snap, statsig, ld), null, 2) + '\n').toMatchFileSnapshot(`golden/acme-${alias}.${statsig}.json`);
   });
@@ -109,7 +109,7 @@ describe('mapper golden files', () => {
   it.each([
     ['test', 'test'],
     ['production', 'production'],
-  ] as const)('acme-legacy (LD source) %s → LD %s', async (source, ld) => {
+  ] as const)('acme-legacy (LaunchDarkly source) %s → LaunchDarkly %s', async (source, ld) => {
     const snap = await legacySnapshot();
     const profile = profileFor(snap, { test: 'test', production: 'production' });
     const args = { canonical: { snapshot: snap }, profile, resolutions: new Map(), capabilities: { ...CAPS, existingContextKinds: ['user', 'organization'] }, env: { statsig: source, ld }, now: NOW, directory: DIRECTORY };

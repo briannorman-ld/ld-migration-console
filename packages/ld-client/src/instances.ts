@@ -20,7 +20,7 @@ export const LD_INSTANCES: Record<LdInstanceId, LdInstance> = {
       title: 'EU instance',
       body: [
         'The static app is served from a US CDN.',
-        'Your configuration data is processed only in your browser and sent only to StatSig and your LD instance.',
+        'Your configuration data is processed only in your browser and sent only to StatSig and your LaunchDarkly instance.',
       ],
     },
   },

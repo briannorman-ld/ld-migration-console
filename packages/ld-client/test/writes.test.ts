@@ -59,7 +59,7 @@ describe('LdClient writes and AbortSignal', () => {
     expect(calls).toEqual([]);
   });
 
-  it('an abort mid-request is not reported as an LD write error (the executor treats it as a cancel)', async () => {
+  it('an abort mid-request is not reported as a LaunchDarkly write error (the executor treats it as a cancel)', async () => {
     const ctrl = new AbortController();
     const { c } = client((_url, init) => pendingUntilAborted(init.signal!));
     const req = c.createFlag('p', { key: 'f' }, ctrl.signal);

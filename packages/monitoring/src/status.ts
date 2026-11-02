@@ -219,7 +219,7 @@ export function describeStatus(status: MonitorStatus): string {
     case 'decisions_changed':
       return 'decisions changed';
     case 'ld_changed':
-      return 'LD changed';
+      return 'LaunchDarkly changed';
     case 'conflict':
       return 'conflict: both changed';
     case 'archived_in_statsig':
@@ -227,12 +227,12 @@ export function describeStatus(status: MonitorStatus): string {
     case 'missing_in_statsig':
       return 'gone from StatSig';
     case 'ld_authoritative':
-      return 'LD authoritative';
+      return 'LaunchDarkly authoritative';
     case 'not_in_ld':
     case 'not_migrated':
       return 'not migrated';
     case 'foreign':
-      return 'existing LD key';
+      return 'existing LaunchDarkly key';
     case 'other_source':
       return 'migrated from another source';
   }
@@ -243,13 +243,13 @@ export function describeLifecycle(l: Lifecycle): string {
     case 'not_migrated':
       return 'not migrated';
     case 'migrated':
-      return 'migrated, no LD traffic yet';
+      return 'migrated, no LaunchDarkly traffic yet';
     case 'dual_running':
       return 'dual-running';
     case 'cut_over':
       return 'cut over: safe to archive in StatSig';
     case 'ld_authoritative':
-      return 'LD authoritative';
+      return 'LaunchDarkly authoritative';
   }
 }
 
@@ -257,11 +257,11 @@ export function describeAlert(row: MonitorRow): string {
   const where = `${row.id} in ${row.ldEnv}`;
   switch (alertKindOf(row)) {
     case 'cut_over':
-      return `${where} has had LD traffic and no StatSig checks for 7 days: safe to archive in StatSig.`;
+      return `${where} has had LaunchDarkly traffic and no StatSig checks for 7 days: safe to archive in StatSig.`;
     case 'archived':
-      return `${where} was archived in StatSig after migration: retire the LD flag rather than syncing it.`;
+      return `${where} was archived in StatSig after migration: retire the LaunchDarkly flag rather than syncing it.`;
     case 'missing':
-      return `${where} carries migration provenance in LD but no current StatSig snapshot has it.`;
+      return `${where} carries migration provenance in LaunchDarkly but no current StatSig snapshot has it.`;
     case 'drift':
       return `${where}: ${describeStatus(row.status)}${row.ldChangeEvidence ? ` (${row.ldChangeEvidence})` : ''}.`;
   }

@@ -14,7 +14,7 @@ export const STATUS_LABEL: Record<CoverageStatus, string> = {
   decisions: 'Migrates with decisions',
   guided: 'Guided / manual',
   planned: 'Planned',
-  none: 'No LD equivalent',
+  none: 'No LaunchDarkly equivalent',
 };
 
 export const STATUS_MARK: Record<CoverageStatus, string> = {
@@ -28,8 +28,8 @@ export const STATUS_MARK: Record<CoverageStatus, string> = {
 export const STATUS_DESCRIPTION: Record<CoverageStatus, string> = {
   migrates: 'Translated exactly and written automatically; at most an informational note.',
   decisions: 'Written automatically once you answer a Decision or acknowledge a documented difference. Nothing is dropped silently.',
-  guided: 'The console does not write it; it produces a checklist, a generated document or step-by-step guidance and a person finishes it in LD or in code.',
-  planned: 'LD has an equivalent and the mapping is specified, but the console does not write it yet. The item is inventoried and its blockers are listed.',
+  guided: 'The console does not write it; it produces a checklist, a generated document or step-by-step guidance and a person finishes it in LaunchDarkly or in code.',
+  planned: 'LaunchDarkly has an equivalent and the mapping is specified, but the console does not write it yet. The item is inventoried and its blockers are listed.',
   none: 'LaunchDarkly has no equivalent, or it is a different product that is set up on its own.',
 };
 
@@ -38,7 +38,7 @@ const cell = (s: string) => s.replace(/\|/g, '\\|').replace(/\n/g, ' ');
 function docLinks(e: CoverageEntry): string {
   const links: string[] = [];
   if (e.docs?.statsig) links.push(`[StatSig](${e.docs.statsig})`);
-  if (e.docs?.ld) links.push(`[LD](${e.docs.ld})`);
+  if (e.docs?.ld) links.push(`[LaunchDarkly](${e.docs.ld})`);
   return links.join(' · ');
 }
 

@@ -321,7 +321,7 @@ describe("exclusions (items set aside)", () => {
   });
 });
 
-describe("last LD listing (shown while the next read runs)", () => {
+describe("last LaunchDarkly listing (shown while the next read runs)", () => {
   it("keeps one listing per workspace, replaces it, and deletes it with the workspace", async () => {
     const s = store();
     const ws = await s.createWorkspace({ name: "Listing" });

@@ -281,7 +281,7 @@ export class Executor {
       if (rec.status !== 'done' && rec.status !== 'pending_approval' && !(rec.status === 'failed' && rec.created)) continue;
       if (signal?.aborted) {
         ok = false;
-        run.stopReason = `Undo cancelled before “${rec.label}”. Steps not yet undone keep their LD changes; use Undo… again to finish.`;
+        run.stopReason = `Undo cancelled before “${rec.label}”. Steps not yet undone keep their LaunchDarkly changes; use Undo… again to finish.`;
         break;
       }
       try {
@@ -426,7 +426,7 @@ export class Executor {
     const description = withFooter(d.description, footer(s.provenance, this.now()));
     const maintainer = d.maintainerId ? { maintainerId: d.maintainerId } : d.maintainerTeamKey ? { maintainerTeamKey: d.maintainerTeamKey } : {};
     if (!current) {
-      if (run.dryRun) return `Would create AI Config “${s.key}” (${d.tags.join(', ')}); its variations are added in LD by hand.`;
+      if (run.dryRun) return `Would create AI Config “${s.key}” (${d.tags.join(', ')}); its variations are added in LaunchDarkly by hand.`;
       try {
         current = await this.c.createAiConfig(this.p, { key: d.key, name: d.name, description, tags: d.tags, mode: d.mode, ...maintainer }, this.signal);
       } catch (e) {
@@ -560,8 +560,8 @@ export class Executor {
     if (current && !!current.unbounded !== !!d.unbounded)
       throw new Error(
         d.unbounded
-          ? `Segment “${s.key}” exists in ${s.ldEnv} as a standard segment; LD can't turn it into a big segment in place. Delete or rename it in LD, then sync again.`
-          : `Segment “${s.key}” exists in ${s.ldEnv} as a big segment; this list now fits a standard segment. Delete or rename it in LD, then sync again.`,
+          ? `Segment “${s.key}” exists in ${s.ldEnv} as a standard segment; LaunchDarkly can't turn it into a big segment in place. Delete or rename it in LaunchDarkly, then sync again.`
+          : `Segment “${s.key}” exists in ${s.ldEnv} as a big segment; this list now fits a standard segment. Delete or rename it in LaunchDarkly, then sync again.`,
       );
     const description = withFooter(d.description, footer(s.provenance, this.now()));
     if (!current) {
@@ -610,7 +610,7 @@ export class Executor {
       if (run.dryRun) return `Would file an approval request for segment “${s.key}” in ${s.ldEnv} (the environment requires approvals): ${segmentSummary(d)}.`;
       return this.segmentApproval(run, rec, s, current);
     }
-    const requests = batched ? ` in ${1 + targets.length} requests (LD takes at most ${TARGET_BATCH.toLocaleString('en-US')} targets per request)` : '';
+    const requests = batched ? ` in ${1 + targets.length} requests (LaunchDarkly takes at most ${TARGET_BATCH.toLocaleString('en-US')} targets per request)` : '';
     if (run.dryRun) return `Would update segment “${s.key}” in ${s.ldEnv}: ${segmentSummary(d)}${requests}.`;
     if (batched) {
       for (const instruction of targets) {
@@ -658,7 +658,7 @@ export class Executor {
       if (confirmed === sample.length) break;
     }
     rec.import = { ids: ids.length, sampled: sample.length, confirmed };
-    const verdict = confirmed === sample.length ? `${sample.length} sampled keys confirmed as members` : `${confirmed}/${sample.length} sampled keys visible so far; LD processes imports asynchronously`;
+    const verdict = confirmed === sample.length ? `${sample.length} sampled keys confirmed as members` : `${confirmed}/${sample.length} sampled keys visible so far; LaunchDarkly processes imports asynchronously`;
     return `${rec.created ? 'Created' : 'Updated'} big segment “${s.key}” in ${s.ldEnv}: imported ${ids.length.toLocaleString('en-US')} ${d.unbounded!.contextKind} IDs (replace mode); ${verdict}.`;
   }
 
@@ -851,7 +851,7 @@ export class Executor {
         if (pre.unbounded) {
           // Big-segment membership can't be read back in bulk, so only the metadata is restored.
           await this.c.patchSegmentJson(this.p, s.ldEnv, s.key, [{ op: 'add', path: '/description', value: pre.description ?? '' }, { op: 'add', path: '/tags', value: pre.tags ?? [] }], { comment });
-          rec.error = 'Undo restored the description and tags; the members imported into the big segment stay (LD has no bulk read to restore the previous list).';
+          rec.error = 'Undo restored the description and tags; the members imported into the big segment stay (LaunchDarkly has no bulk read to restore the previous list).';
           return;
         }
         await this.c.patchSegmentJson(
@@ -1088,7 +1088,7 @@ function chunks<T>(xs: T[], size: number): T[][] {
  */
 export function segmentInstructions(current: LdSegment, d: DesiredSegment): SemanticPatch['instructions'] {
   const weighted = d.rules.find((r) => r.weight !== undefined);
-  if (weighted) throw new Error(`Segment rule “${weighted.description}” has a percentage; LD approval requests can't add a weighted segment rule in one step. Have an approver create the rule, or turn off segment approvals for this environment.`);
+  if (weighted) throw new Error(`Segment rule “${weighted.description}” has a percentage; LaunchDarkly approval requests can't add a weighted segment rule in one step. Have an approver create the rule, or turn off segment approvals for this environment.`);
   const out: SemanticPatch['instructions'] = [];
   for (const r of current.rules ?? []) if (r._id) out.push({ kind: 'removeRule', ruleId: r._id });
   for (const r of d.rules) out.push({ kind: 'addRule', description: r.description, clauses: r.clauses });

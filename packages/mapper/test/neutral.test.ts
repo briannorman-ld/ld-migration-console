@@ -25,7 +25,7 @@ const types = (r: { unresolved: { type: string }[] }) => r.unresolved.map((d) =>
 const resolve = (r: { unresolved: { id: string; type: string; fingerprint: string }[] }, picks: Record<string, string>): Map<string, Resolution> =>
   new Map(r.unresolved.filter((d) => picks[d.type]).map((d) => [d.id, { id: d.id, type: d.type as Resolution['type'], optionKey: picks[d.type]!, scope: 'resource' as const, fingerprint: d.fingerprint, decidedAt: NOW }]));
 
-describe('LD project → LD project (PLAN §20.3)', () => {
+describe('LaunchDarkly project → LaunchDarkly project (PLAN §20.3)', () => {
   it('copies an exact flag verbatim with LaunchDarkly provenance and notes what cannot follow', () => {
     const r = mapNeutralFlag(flagArgs('legacy-kill-switch'));
     expect(r.skipped).toBeUndefined();
@@ -144,7 +144,7 @@ describe('LD project → LD project (PLAN §20.3)', () => {
   });
 });
 
-describe('LD segments (PLAN §20.3)', () => {
+describe('LaunchDarkly segments (PLAN §20.3)', () => {
   it('copies rules, included and excluded keys; a weighted rule is acknowledged', () => {
     const r = mapNeutralSegment(segArgs('legacy-internal-users', { env: { statsig: 'test', ld: 'test' } }));
     expect(types(r)).toEqual(['partial_rollout_rebucket']);

@@ -262,7 +262,7 @@ describe('big segments (PLAN §8.3 big_segment; edge case 9.3)', () => {
     expect(s.desired?.included).toEqual([]);
   });
 
-  it('is blocking without an import option when the LD plan has no big segments', () => {
+  it('is blocking without an import option when the LaunchDarkly plan has no big segments', () => {
     const capabilities = { ...CAPS, bigSegments: 'unavailable' as const };
     const d = mapGate(args('block_fraudulent_checkout', { canonical: loaded(), capabilities })).unresolved.find((x) => x.type === 'big_segment')!;
     expect(d.severity).toBe('blocking');
@@ -395,7 +395,7 @@ describe('overrides and rollouts', () => {
     expect(r.unresolved.find((d) => d.type === 'partial_rollout_rebucket')?.severity).toBe('acknowledge');
   });
 
-  it('a disabled gate is off in LD and serves false', () => {
+  it('a disabled gate is off in LaunchDarkly and serves false', () => {
     const r = mapGate(args('old_cart_drawer'));
     expect(r.env.on).toBe(false);
     expect(r.env.offVariation).toBe(1);
@@ -538,9 +538,9 @@ describe('known edge cases (docs/KNOWN-EDGE-CASES.md)', () => {
       expect(d.recommended).toBe('prerequisite');
     });
 
-    it('a rule that would expand into more than 10 LD rules is blocking', () => {
+    it('a rule that would expand into more than 10 LaunchDarkly rules is blocking', () => {
       const r = mapGate(args('cross_sell_matrix'));
-      expect(r.unresolved.find((x) => x.type === 'rule_expansion')).toMatchObject({ severity: 'blocking', title: expect.stringMatching(/12 LD rules/) });
+      expect(r.unresolved.find((x) => x.type === 'rule_expansion')).toMatchObject({ severity: 'blocking', title: expect.stringMatching(/12 LaunchDarkly rules/) });
       expect(r.env.rules).toEqual([]);
     });
   });
@@ -825,7 +825,7 @@ describe('known edge cases (docs/KNOWN-EDGE-CASES.md)', () => {
       expect(mapGate(args('pos_firmware_sync', { resolutions: decide(r, 'version_format', 'skip') })).skipped).toBeDefined();
     });
 
-    it('6.7: a prerelease suffix raises version_format too; StatSig strips it, LD sorts it below the release', () => {
+    it('6.7: a prerelease suffix raises version_format too; StatSig strips it, LaunchDarkly sorts it below the release', () => {
       const r = mapGate(args('gift_card_upsell', { entity: withConditions([{ type: 'app_version', operator: 'version_gte', targetValue: '5.3.0-beta' }]) }));
       const d = r.unresolved.find((x) => x.type === 'version_format')!;
       expect(d.explanation).toMatch(/has the suffix “-beta”/);
@@ -839,16 +839,16 @@ describe('known edge cases (docs/KNOWN-EDGE-CASES.md)', () => {
   });
 
   describe('names, keys and overrides', () => {
-    it('a StatSig name with spaces becomes a sanitized LD key, with a note', () => {
+    it('a StatSig name with spaces becomes a sanitized LaunchDarkly key, with a note', () => {
       const r = mapGate(args('Holiday Banner 2026'));
       expect(r.flagKey).toBe('Holiday_Banner_2026');
       expect(r.fidelity.notes.map((n) => n.message)).toContainEqual(expect.stringMatching(/differs from the StatSig name/));
     });
 
-    it('a tag LD cannot spell is renamed, with a note', () => {
+    it('a tag LaunchDarkly cannot spell is renamed, with a note', () => {
       const r = mapGate(args('eu_cookie_banner'));
       expect(r.shell.tags).toContain('core');
-      expect(r.fidelity.notes.map((n) => n.message)).toContainEqual(expect.stringMatching(/renamed to fit LD's tag format/));
+      expect(r.fidelity.notes.map((n) => n.message)).toContainEqual(expect.stringMatching(/renamed to fit LaunchDarkly's tag format/));
     });
 
     it('custom-ID overrides on a userID gate ask for a context kind named after the unknown unit type', () => {
@@ -890,7 +890,7 @@ describe('known edge cases (docs/KNOWN-EDGE-CASES.md)', () => {
       expect(mapGate(args('early_adopter_badge')).fidelity.overall).toBe('full');
     });
 
-    it('an empty ID list is an empty LD segment', () => {
+    it('an empty ID list is an empty LaunchDarkly segment', () => {
       expect(seg('beta_waitlist').desired?.included).toEqual([]);
     });
   });
@@ -1128,7 +1128,7 @@ describe('dynamic configs → JSON flags (PLAN §10.1; edge cases 10.1–10.9)',
     expect(r.fidelity.notes.some((n) => /overridden to two values/.test(n.message))).toBe(true);
   });
 
-  it('holdouts attached to a config are a partial-fidelity note (LD holdouts are not created yet)', () => {
+  it('holdouts attached to a config are a partial-fidelity note (LaunchDarkly holdouts are not created yet)', () => {
     const base = web.configs.find((c) => c.id === 'shipping_thresholds')!;
     const r = mapConfig(cargs('shipping_thresholds', { entity: { ...base, holdoutIds: ['checkout_holdout'] } }));
     expect(r.fidelity.overall).toBe('partial');
@@ -1152,14 +1152,14 @@ describe('owner → maintainer (PLAN §8.3 maintainer_unknown; edge cases 1.5, 1
     return team ? { ...a, entity: { ...a.entity, team } } : a;
   };
 
-  it('matches the owner by email against the LD member directory and sets maintainerId', () => {
+  it('matches the owner by email against the LaunchDarkly member directory and sets maintainerId', () => {
     const r = mapGate(args('kill_switch_payments'));
     expect(r.shell.maintainerId).toBe('mem-sam');
     expect(r.shell.maintainerTeamKey).toBeUndefined();
     expect(types(r)).not.toContain('maintainer_unknown');
   });
 
-  it('the maintainer is part of the decision-set hash, so an owner who joins LD after the flag migrated makes it show as changed', () => {
+  it('the maintainer is part of the decision-set hash, so an owner who joins LaunchDarkly after the flag migrated makes it show as changed', () => {
     const withSam = mapGate(args('kill_switch_payments'));
     const before = mapGate(args('kill_switch_payments', { directory: { members: [], teams: [], membersReadable: true, teamsReadable: true } }));
     expect(before.shell.maintainerId).toBeUndefined();
@@ -1169,7 +1169,7 @@ describe('owner → maintainer (PLAN §8.3 maintainer_unknown; edge cases 1.5, 1
     expect(mapGate(args('kill_switch_payments')).decisionSetHash).toBe(withSam.decisionSetHash);
   });
 
-  it('raises maintainer_unknown for an owner who is not a member, recommending the team when LD has it', () => {
+  it('raises maintainer_unknown for an owner who is not a member, recommending the team when LaunchDarkly has it', () => {
     const r = mapGate(former({}, 'Checkout'));
     const d = r.unresolved.find((x) => x.type === 'maintainer_unknown')!;
     expect(d.severity).toBe('choice');
@@ -1211,7 +1211,7 @@ describe('owner → maintainer (PLAN §8.3 maintainer_unknown; edge cases 1.5, 1
     const answered = mapGate(former({ resolutions }));
     expect(answered.shell.maintainerId).toBe('mem-alice');
     expect(types(answered)).not.toContain('maintainer_unknown');
-    expect(optionLabel(d, 'member:mem-alice')).toBe('Assign LD member mem-alice');
+    expect(optionLabel(d, 'member:mem-alice')).toBe('Assign LaunchDarkly member mem-alice');
   });
 
   it('a team mapped in the profile wins over the directory, and a member always wins over the team', () => {

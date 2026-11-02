@@ -111,7 +111,7 @@ export function resolveSourceKind(ctx: Ctx, kindKey: string): string {
       {
         key: `create:${proposed}`,
         label: `Create context kind “${proposed}”`,
-        explanation: canCreate ? `The target project has no “${proposed}” context kind yet; the migration creates it with the same key, so SDK contexts keep working unchanged.` : `This token can't create context kinds. Ask an LD admin to create “${proposed}” in the target project first; SDK evaluations also auto-create kinds.`,
+        explanation: canCreate ? `The target project has no “${proposed}” context kind yet; the migration creates it with the same key, so SDK contexts keep working unchanged.` : `This token can't create context kinds. Ask a LaunchDarkly admin to create “${proposed}” in the target project first; SDK evaluations also auto-create kinds.`,
         resultingFidelity: 'full',
       },
       ...existing.map((k) => ({ key: `existing:${k}`, label: `Use the existing kind “${k}”`, explanation: `Contexts of kind “${proposed}” in ${sourceLabel(ctx)} become “${k}” contexts in the target. Your app must send that kind.`, resultingFidelity: 'partial' as const })),
@@ -399,7 +399,7 @@ function flagShell(ctx: Ctx, flag: NeutralFlag, alias: string, tagMigrated: stri
   const stripped = flag.tags.length - ownTags.length;
   if (stripped) ctx.fidelity.push({ fidelity: 'full', message: `${stripped} provenance tag${stripped === 1 ? '' : 's'} from an earlier migration into ${sourceLabel(ctx)} not copied.` });
   const renamed = ownTags.filter((t) => sanitizeTag(t) !== t);
-  if (renamed.length) ctx.fidelity.push({ fidelity: 'full', message: `Tag${renamed.length === 1 ? '' : 's'} ${renamed.map((t) => `“${t}”`).join(', ')} renamed to fit LD's tag format.` });
+  if (renamed.length) ctx.fidelity.push({ fidelity: 'full', message: `Tag${renamed.length === 1 ? '' : 's'} ${renamed.map((t) => `“${t}”`).join(', ')} renamed to fit LaunchDarkly's tag format.` });
   const tags = unique([tagMigrated, sourceTag(alias), ...ownTags.map(sanitizeTag)].filter(Boolean));
 
   const props: Record<string, CustomProperty> = provenanceProperties({ id: flag.key, ...(flag.version !== undefined ? { version: flag.version } : {}) }, alias, 'flag', ctx.kind);
@@ -541,7 +541,7 @@ export function mapNeutralSegment(args: MapArgs<NeutralSegment>): NeutralSegment
     base.rules = out;
     for (const inc of source.included) {
       const kind = resolveSourceKind(ctx, inc.contextKind);
-      if (inc.values.length > LIST_SEGMENT_MAX) throw new SkipItem(`${inc.values.length.toLocaleString('en-US')} included ${kind} keys exceed LD's ${LIST_SEGMENT_MAX.toLocaleString('en-US')}-key limit`);
+      if (inc.values.length > LIST_SEGMENT_MAX) throw new SkipItem(`${inc.values.length.toLocaleString('en-US')} included ${kind} keys exceed LaunchDarkly's ${LIST_SEGMENT_MAX.toLocaleString('en-US')}-key limit`);
       if (kind === 'user') base.included = [...inc.values];
       else base.includedContexts.push({ contextKind: kind, values: [...inc.values] });
     }

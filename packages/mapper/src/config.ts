@@ -164,11 +164,11 @@ export function mapConfig(args: MapArgs<Config>): ConfigMapResult {
     const scheduled = scheduledChanges(ctx, inline, translate);
     if (!config.enabled) fidelity.push({ fidelity: 'full', message: `Disabled in StatSig: the flag is off in ${env.ld} and serves the default value.` });
     if (config.lifecycle?.type === 'STALE') fidelity.push({ fidelity: 'full', message: `StatSig marks this config stale (${config.lifecycle.typeReason ?? 'STALE'}). Consider hard-coding its value instead of migrating.` });
-    if (config.schema) fidelity.push({ fidelity: 'full', message: 'The StatSig JSON schema is not carried over: LD JSON variations are not schema-validated.' });
+    if (config.schema) fidelity.push({ fidelity: 'full', message: 'The StatSig JSON schema is not carried over: LaunchDarkly JSON variations are not schema-validated.' });
     for (const h of config.holdoutIds) {
       const holdout = snapshot.holdouts.find((x) => x.id === h);
       const share = holdout ? `${holdout.passPercentage}% of users are` : 'Some users are';
-      fidelity.push({ fidelity: 'partial', message: `${share} held out by “${h}” in StatSig and get the default value; LD holdouts aren't created yet, so they get the rules' values in LD.` });
+      fidelity.push({ fidelity: 'partial', message: `${share} held out by “${h}” in StatSig and get the default value; LaunchDarkly holdouts aren't created yet, so they get the rules' values in LaunchDarkly.` });
     }
     return finish(scheduled.length ? { ...desired, scheduledChanges: scheduled } : desired);
   } catch (e) {
@@ -240,7 +240,7 @@ function acknowledgeRebucket(ctx: ConditionContext, r: Rule, pass: number, extra
       subject: { ...ctx.subject, ruleId: r.id, ruleName: r.name, location: `rule “${r.name}”` },
       path: `rule:${r.id}:rollout`,
       title: extra.variants ? `${pass}% rollout${split}: users will be re-bucketed` : `${pass}% rollout: users will be re-bucketed`,
-      explanation: `StatSig buckets with sha256(salt.ruleSalt.unitID); LD buckets with hash(flagKey.salt.key). The same shares of users get each value, but not the same users: some who see a value today will see another.`,
+      explanation: `StatSig buckets with sha256(salt.ruleSalt.unitID); LaunchDarkly buckets with hash(flagKey.salt.key). The same shares of users get each value, but not the same users: some who see a value today will see another.`,
       sourceFragment: { rule: r.name, passPercentage: pass, idType: r.idType, ...(extra.variants ? { variants: extra.variants } : {}) },
       fingerprintOf: { passPercentage: pass, ...(extra.variants ? { variants: extra.variants } : {}) },
       options: [
@@ -252,7 +252,7 @@ function acknowledgeRebucket(ctx: ConditionContext, r: Rule, pass: number, extra
     'acknowledge',
   );
   if (choice === 'skip') throw new SkipItem(`waiting for the ${pass}% rollout in rule “${r.name}” to finish`);
-  ctx.fidelity.push({ fidelity: 'partial', message: `${pass}% rollout${split} re-buckets users (StatSig and LD hash differently).`, location: `rule “${r.name}”` });
+  ctx.fidelity.push({ fidelity: 'partial', message: `${pass}% rollout${split} re-buckets users (StatSig and LaunchDarkly hash differently).`, location: `rule “${r.name}”` });
 }
 
 /** Percent weights → thousandths summing to exactly 100 000 (rounding goes to the largest share). */
@@ -299,16 +299,16 @@ function overrideTargets(ctx: ConditionContext, overrides: Config['overrides'], 
     }
     groups.set(gk, g);
   }
-  if (valueless) ctx.fidelity.push({ fidelity: 'partial', message: `${valueless} ID${valueless === 1 ? ' is' : 's are'} overridden to pass without a value; LD targets ${valueless === 1 ? 'it' : 'them'} to the default value.` });
+  if (valueless) ctx.fidelity.push({ fidelity: 'partial', message: `${valueless} ID${valueless === 1 ? ' is' : 's are'} overridden to pass without a value; LaunchDarkly targets ${valueless === 1 ? 'it' : 'them'} to the default value.` });
   if (conflicts) ctx.fidelity.push({ fidelity: 'partial', message: `${conflicts} ID${conflicts === 1 ? ' is' : 's are'} overridden to two values; the environment-specific (or first) override wins.` });
   return splitOverrides(ctx, [...groups.values()]);
 }
 
 function flagShell(ctx: ConditionContext, config: Config, alias: string, key: string, vars: Variations): DesiredFlagShell {
-  if (key !== config.id) ctx.fidelity.push({ fidelity: 'full', message: `Flag key “${key}” differs from the StatSig name “${config.id}” (LD keys allow letters, digits, . _ -).` });
+  if (key !== config.id) ctx.fidelity.push({ fidelity: 'full', message: `Flag key “${key}” differs from the StatSig name “${config.id}” (LaunchDarkly keys allow letters, digits, . _ -).` });
   const tags = unique([TAG_MIGRATED, sourceTag(alias), ...config.tags.map(sanitizeTag)].filter(Boolean));
   const renamed = config.tags.filter((t) => sanitizeTag(t) !== t);
-  if (renamed.length) ctx.fidelity.push({ fidelity: 'full', message: `Tag${renamed.length === 1 ? '' : 's'} ${renamed.map((t) => `“${t}”`).join(', ')} renamed to fit LD's tag format.` });
+  if (renamed.length) ctx.fidelity.push({ fidelity: 'full', message: `Tag${renamed.length === 1 ? '' : 's'} ${renamed.map((t) => `“${t}”`).join(', ')} renamed to fit LaunchDarkly's tag format.` });
   return {
     key,
     name: config.name || config.id,

@@ -258,15 +258,15 @@ export function planMigration(req: PlanRequest): Plan {
       severity: 'blocking',
       subject: { ...subject, location: where },
       path: `${what}:${ldKey}${what === 'segment' || what === 'bandit' ? `:${where}` : ''}`,
-      title: `LD ${what === 'bandit' ? 'experiment' : what} “${ldKey}” already exists`,
+      title: `LaunchDarkly ${what === 'bandit' ? 'experiment' : what} “${ldKey}” already exists`,
       explanation:
         what === 'bandit'
           ? `An experiment with this key exists in ${where} and wasn't created by this app. Adopting it replaces its draft iteration with the bandit's; an iteration that already ran is left alone.`
-          : `A ${what} with this key exists in LD and wasn't created by this app. Adopting it overwrites its ${overwrites} on every sync; the current state is saved first so the run can be undone.`,
+          : `A ${what} with this key exists in LaunchDarkly and wasn't created by this app. Adopting it overwrites its ${overwrites} on every sync; the current state is saved first so the run can be undone.`,
       sourceFragment: { key: ldKey, kind: what === 'AI Config' ? 'ai_config' : what },
       options: [
-        { key: 'adopt', label: 'Adopt it (link and overwrite on sync)', explanation: 'The existing LD resource becomes the migration target. A pre-image is kept for undo.', resultingFidelity: 'full' },
-        { key: 'skip', label: 'Skip this item', explanation: 'Leave the LD resource alone and keep the item in StatSig.', resultingFidelity: 'skipped' },
+        { key: 'adopt', label: 'Adopt it (link and overwrite on sync)', explanation: 'The existing LaunchDarkly resource becomes the migration target. A pre-image is kept for undo.', resultingFidelity: 'full' },
+        { key: 'skip', label: 'Skip this item', explanation: 'Leave the LaunchDarkly resource alone and keep the item in StatSig.', resultingFidelity: 'skipped' },
       ],
     });
     const l = lookupResolution(dp, req.resolutions, req.profile);
@@ -279,7 +279,7 @@ export function planMigration(req: PlanRequest): Plan {
     const mapping = req.profile.sources[sourceId]?.envMapping ?? {};
     const matches = Object.entries(mapping).filter(([, v]) => v === ldEnv).map(([k]) => k);
     if (matches.length > 1) {
-      errors.push(`StatSig environments ${matches.join(' and ')} of one source both map to LD “${ldEnv}”. Map at most one per source.`);
+      errors.push(`StatSig environments ${matches.join(' and ')} of one source both map to LaunchDarkly “${ldEnv}”. Map at most one per source.`);
       return null;
     }
     return matches[0] ?? null;
@@ -317,8 +317,8 @@ export function planMigration(req: PlanRequest): Plan {
     let adopt = false;
     if (ldSeg && !ownsSegment(ldSeg, snapshot.source.alias)) {
       const c = collision(item, { sourceId: seg.source.sourceId, kind: 'segment', uid: seg.uid, id: seg.id }, r.segmentKey, 'segment', ldEnv);
-      if (c === 'skip') return finishItem(item, 'skipped', `LD segment “${r.segmentKey}” exists and was not adopted`);
-      if (c === 'open') return finishItem(item, 'blocked', `LD segment “${r.segmentKey}” already exists`);
+      if (c === 'skip') return finishItem(item, 'skipped', `LaunchDarkly segment “${r.segmentKey}” exists and was not adopted`);
+      if (c === 'open') return finishItem(item, 'blocked', `LaunchDarkly segment “${r.segmentKey}” already exists`);
       adopt = true;
     }
     if (r.unresolved.length) return finishItem(item, 'blocked', `${r.unresolved.length} open decision${r.unresolved.length === 1 ? '' : 's'}`);
@@ -367,7 +367,7 @@ export function planMigration(req: PlanRequest): Plan {
     const statsigEnv = envFor(gate.source.sourceId, ldEnv);
     const item: PlanItem = { uid: gate.uid, kind: 'gate', entityId: gate.id, sourceId: gate.source.sourceId, ldKey: gate.id, ldEnv, status: 'ready', dependency: requiredBy !== null, requiredBy: requiredBy ? [requiredBy] : [], decisions: [], exists: false };
     items.set(itemKey, item);
-    if (!statsigEnv) return finishItem(item, 'error', `no StatSig environment of ${snapshot.source.alias} is mapped to LD “${ldEnv}”`);
+    if (!statsigEnv) return finishItem(item, 'error', `no StatSig environment of ${snapshot.source.alias} is mapped to LaunchDarkly “${ldEnv}”`);
     item.statsigEnv = statsigEnv;
 
     const r: GateMapResult = mapGate({ canonical: { snapshot, idLists: req.idLists, ...(req.coverage ? { coverage: req.coverage } : {}) }, entity: gate, profile: req.profile, resolutions: req.resolutions, capabilities: req.capabilities, env: { statsig: statsigEnv, ld: ldEnv }, now: req.now, ...dir });
@@ -382,17 +382,17 @@ export function planMigration(req: PlanRequest): Plan {
     item.owned = !!ldFlag && !!flagOwner(ldFlag);
     let adopt = false;
     const other = shellOwner.get(r.flagKey);
-    if (other && other !== gate.uid) return finishItem(item, 'error', `${describeOwner(other)} also produces LD key “${r.flagKey}” (${other.includes('/config/') ? 'StatSig keeps gates and configs in separate namespaces, LD has one key space' : 'consolidation arrives in M8; migrate one source at a time'})`);
+    if (other && other !== gate.uid) return finishItem(item, 'error', `${describeOwner(other)} also produces LaunchDarkly key “${r.flagKey}” (${other.includes('/config/') ? 'StatSig keeps gates and configs in separate namespaces, LaunchDarkly has one key space' : 'consolidation arrives in M8; migrate one source at a time'})`);
     shellOwner.set(r.flagKey, gate.uid);
     if (ldFlag) {
       const owner = flagOwner(ldFlag);
-      if (owner && (owner.id !== gate.id || owner.source !== snapshot.source.alias)) return finishItem(item, 'error', `LD flag “${r.flagKey}” was migrated from ${owner.source}/${owner.id}; consolidation arrives in M8`);
-      if (owner && owner.type && owner.type !== 'gate') return finishItem(item, 'error', `LD flag “${r.flagKey}” was migrated from the StatSig ${owner.type} of the same name (gates and configs share one LD key space)`);
-      if (ldFlag.kind && ldFlag.kind !== 'boolean') return finishItem(item, 'error', `LD flag “${r.flagKey}” exists and is not a boolean flag`);
+      if (owner && (owner.id !== gate.id || owner.source !== snapshot.source.alias)) return finishItem(item, 'error', `LaunchDarkly flag “${r.flagKey}” was migrated from ${owner.source}/${owner.id}; consolidation arrives in M8`);
+      if (owner && owner.type && owner.type !== 'gate') return finishItem(item, 'error', `LaunchDarkly flag “${r.flagKey}” was migrated from the StatSig ${owner.type} of the same name (gates and configs share one LaunchDarkly key space)`);
+      if (ldFlag.kind && ldFlag.kind !== 'boolean') return finishItem(item, 'error', `LaunchDarkly flag “${r.flagKey}” exists and is not a boolean flag`);
       if (!owner) {
         const c = collision(item, { sourceId: gate.source.sourceId, kind: 'gate', uid: gate.uid, id: gate.id }, r.flagKey, 'flag', 'flag key');
-        if (c === 'skip') return finishItem(item, 'skipped', `LD flag “${r.flagKey}” exists and was not adopted`);
-        if (c === 'open') return finishItem(item, 'blocked', `LD flag “${r.flagKey}” already exists`);
+        if (c === 'skip') return finishItem(item, 'skipped', `LaunchDarkly flag “${r.flagKey}” exists and was not adopted`);
+        if (c === 'open') return finishItem(item, 'blocked', `LaunchDarkly flag “${r.flagKey}” already exists`);
         adopt = true;
       }
     }
@@ -455,12 +455,12 @@ export function planMigration(req: PlanRequest): Plan {
       subject: { ...subject, location: 'variations' },
       path: `variations:${desired.key}:${added.map((v) => stableStringify(v.value)).join('|')}`,
       title: `New value${added.length === 1 ? '' : 's'} ${added.map((v) => `“${v.name}”`).join(', ')} for a flag already migrated to ${migratedElsewhere.join(', ')}`,
-      explanation: `LD variations are project-level. Appending ${added.length === 1 ? 'this variation' : 'these variations'} to “${desired.key}” is visible in ${migratedElsewhere.join(', ')}, where nothing serves ${added.length === 1 ? 'it' : 'them'} until that environment is synced again. Existing variations are never removed or reordered.`,
+      explanation: `LaunchDarkly variations are project-level. Appending ${added.length === 1 ? 'this variation' : 'these variations'} to “${desired.key}” is visible in ${migratedElsewhere.join(', ')}, where nothing serves ${added.length === 1 ? 'it' : 'them'} until that environment is synced again. Existing variations are never removed or reordered.`,
       sourceFragment: { key: desired.key, added: added.map((v) => v.value), migratedEnvironments: migratedElsewhere },
       fingerprintOf: { added: added.map((v) => v.value), migratedElsewhere },
       options: [
         { key: 'acknowledge', label: 'Append the new variations', explanation: 'The flag gains the new values; other environments keep serving what they serve today.', resultingFidelity: 'full' },
-        { key: 'skip', label: 'Skip this item', explanation: 'Leave the LD flag unchanged for now.', resultingFidelity: 'skipped' },
+        { key: 'skip', label: 'Skip this item', explanation: 'Leave the LaunchDarkly flag unchanged for now.', resultingFidelity: 'skipped' },
       ],
       recommended: 'acknowledge',
     });
@@ -477,7 +477,7 @@ export function planMigration(req: PlanRequest): Plan {
     const statsigEnv = envFor(config.source.sourceId, ldEnv);
     const item: PlanItem = { uid: config.uid, kind: 'config', entityId: config.id, sourceId: config.source.sourceId, ldKey: config.id, ldEnv, status: 'ready', dependency: false, requiredBy: [], decisions: [], exists: false };
     items.set(itemKey, item);
-    if (!statsigEnv) return void finishItem(item, 'error', `no StatSig environment of ${snapshot.source.alias} is mapped to LD “${ldEnv}”`);
+    if (!statsigEnv) return void finishItem(item, 'error', `no StatSig environment of ${snapshot.source.alias} is mapped to LaunchDarkly “${ldEnv}”`);
     item.statsigEnv = statsigEnv;
 
     const r: ConfigMapResult = mapConfig({ canonical: { snapshot, idLists: req.idLists, ...(req.coverage ? { coverage: req.coverage } : {}) }, entity: config, profile: req.profile, resolutions: req.resolutions, capabilities: req.capabilities, env: { statsig: statsigEnv, ld: ldEnv }, now: req.now, ...dir });
@@ -492,17 +492,17 @@ export function planMigration(req: PlanRequest): Plan {
     item.owned = !!ldFlag && !!flagOwner(ldFlag);
     let adopt = false;
     const other = shellOwner.get(r.flagKey);
-    if (other && other !== config.uid) return void finishItem(item, 'error', `${describeOwner(other)} also produces LD key “${r.flagKey}”: StatSig keeps gates and configs in separate namespaces, LD has one key space. Rename one in StatSig or migrate one at a time.`);
+    if (other && other !== config.uid) return void finishItem(item, 'error', `${describeOwner(other)} also produces LaunchDarkly key “${r.flagKey}”: StatSig keeps gates and configs in separate namespaces, LaunchDarkly has one key space. Rename one in StatSig or migrate one at a time.`);
     shellOwner.set(r.flagKey, config.uid);
     if (ldFlag) {
       const owner = flagOwner(ldFlag);
-      if (owner && (owner.id !== config.id || owner.source !== snapshot.source.alias)) return void finishItem(item, 'error', `LD flag “${r.flagKey}” was migrated from ${owner.source}/${owner.id}; consolidation arrives in M8`);
-      if (owner && owner.type && owner.type !== 'config') return void finishItem(item, 'error', `LD flag “${r.flagKey}” was migrated from the StatSig ${owner.type} of the same name (gates and configs share one LD key space)`);
-      if (ldFlag.kind && ldFlag.kind !== 'multivariate') return void finishItem(item, 'error', `LD flag “${r.flagKey}” exists and is not a multivariate (JSON) flag`);
+      if (owner && (owner.id !== config.id || owner.source !== snapshot.source.alias)) return void finishItem(item, 'error', `LaunchDarkly flag “${r.flagKey}” was migrated from ${owner.source}/${owner.id}; consolidation arrives in M8`);
+      if (owner && owner.type && owner.type !== 'config') return void finishItem(item, 'error', `LaunchDarkly flag “${r.flagKey}” was migrated from the StatSig ${owner.type} of the same name (gates and configs share one LaunchDarkly key space)`);
+      if (ldFlag.kind && ldFlag.kind !== 'multivariate') return void finishItem(item, 'error', `LaunchDarkly flag “${r.flagKey}” exists and is not a multivariate (JSON) flag`);
       if (!owner) {
         const c = collision(item, { sourceId: config.source.sourceId, kind: 'config', uid: config.uid, id: config.id }, r.flagKey, 'flag', 'flag key');
-        if (c === 'skip') return void finishItem(item, 'skipped', `LD flag “${r.flagKey}” exists and was not adopted`);
-        if (c === 'open') return void finishItem(item, 'blocked', `LD flag “${r.flagKey}” already exists`);
+        if (c === 'skip') return void finishItem(item, 'skipped', `LaunchDarkly flag “${r.flagKey}” exists and was not adopted`);
+        if (c === 'open') return void finishItem(item, 'blocked', `LaunchDarkly flag “${r.flagKey}” already exists`);
         adopt = true;
       } else {
         const g = variationGuard(item, { sourceId: config.source.sourceId, kind: 'config', uid: config.uid, id: config.id }, ldFlag, r.shell, ldEnv);
@@ -568,8 +568,8 @@ export function planMigration(req: PlanRequest): Plan {
       if (ldMetric.kind === 'custom' && ldMetric.eventKey === desired.eventKey) adopt = true;
       else {
         const c = collision(item, { sourceId: owner.sourceId, kind: 'autotune', uid: owner.uid, id: owner.entityId }, desired.key, 'metric', 'metric key');
-        if (c === 'skip') return finishItem(item, 'skipped', `LD metric “${desired.key}” exists and was not adopted`);
-        if (c === 'open') return finishItem(item, 'blocked', `LD metric “${desired.key}” already exists`);
+        if (c === 'skip') return finishItem(item, 'skipped', `LaunchDarkly metric “${desired.key}” exists and was not adopted`);
+        if (c === 'open') return finishItem(item, 'blocked', `LaunchDarkly metric “${desired.key}” already exists`);
         adopt = true;
       }
     }
@@ -605,7 +605,7 @@ export function planMigration(req: PlanRequest): Plan {
     const item: PlanItem = { uid: a.uid, kind: 'autotune', entityId: a.id, sourceId: a.source.sourceId, ldKey: a.id, ldEnv, status: 'ready', dependency: false, requiredBy: [], decisions: [], exists: false };
     items.set(itemKey, item);
     if (!statsigEnv) {
-      finishItem(item, 'error', `no StatSig environment of ${snapshot.source.alias} is mapped to LD “${ldEnv}”`);
+      finishItem(item, 'error', `no StatSig environment of ${snapshot.source.alias} is mapped to LaunchDarkly “${ldEnv}”`);
       return;
     }
     item.statsigEnv = statsigEnv;
@@ -627,24 +627,24 @@ export function planMigration(req: PlanRequest): Plan {
     let adopt = false;
     const other = shellOwner.get(r.flagKey);
     if (other && other !== a.uid) {
-      finishItem(item, 'error', `${describeOwner(other)} also produces LD key “${r.flagKey}” (consolidation arrives in M8; migrate one source at a time)`);
+      finishItem(item, 'error', `${describeOwner(other)} also produces LaunchDarkly key “${r.flagKey}” (consolidation arrives in M8; migrate one source at a time)`);
       return;
     }
     shellOwner.set(r.flagKey, a.uid);
     if (ldFlag) {
       const owner = flagOwner(ldFlag);
       if (owner && (owner.id !== a.id || owner.source !== snapshot.source.alias)) {
-        finishItem(item, 'error', `LD flag “${r.flagKey}” was migrated from ${owner.source}/${owner.id}; consolidation arrives in M8`);
+        finishItem(item, 'error', `LaunchDarkly flag “${r.flagKey}” was migrated from ${owner.source}/${owner.id}; consolidation arrives in M8`);
         return;
       }
       if (ldFlag.kind && ldFlag.kind !== 'multivariate') {
-        finishItem(item, 'error', `LD flag “${r.flagKey}” exists and is not a multivariate (JSON) flag`);
+        finishItem(item, 'error', `LaunchDarkly flag “${r.flagKey}” exists and is not a multivariate (JSON) flag`);
         return;
       }
       if (!owner) {
         const c = collision(item, { sourceId: a.source.sourceId, kind: 'autotune', uid: a.uid, id: a.id }, r.flagKey, 'flag', 'flag key');
-        if (c === 'skip') return void finishItem(item, 'skipped', `LD flag “${r.flagKey}” exists and was not adopted`);
-        if (c === 'open') return void finishItem(item, 'blocked', `LD flag “${r.flagKey}” already exists`);
+        if (c === 'skip') return void finishItem(item, 'skipped', `LaunchDarkly flag “${r.flagKey}” exists and was not adopted`);
+        if (c === 'open') return void finishItem(item, 'blocked', `LaunchDarkly flag “${r.flagKey}” already exists`);
         adopt = true;
       }
     }
@@ -671,8 +671,8 @@ export function planMigration(req: PlanRequest): Plan {
         banditExists = true;
         if (!ownsSegment(ex, snapshot.source.alias)) {
           const c = collision(item, { sourceId: a.source.sourceId, kind: 'autotune', uid: a.uid, id: a.id }, r.bandit.key, 'bandit', ldEnv);
-          if (c === 'skip') return void finishItem(item, 'skipped', `LD experiment “${r.bandit.key}” exists in ${ldEnv} and was not adopted`);
-          if (c === 'open') return void finishItem(item, 'blocked', `LD experiment “${r.bandit.key}” already exists in ${ldEnv}`);
+          if (c === 'skip') return void finishItem(item, 'skipped', `LaunchDarkly experiment “${r.bandit.key}” exists in ${ldEnv} and was not adopted`);
+          if (c === 'open') return void finishItem(item, 'blocked', `LaunchDarkly experiment “${r.bandit.key}” already exists in ${ldEnv}`);
           banditAdopt = true;
         }
       }
@@ -720,8 +720,8 @@ export function planMigration(req: PlanRequest): Plan {
     let adopt = false;
     if (ldSeg && !ownsSegment(ldSeg, snapshot.source.alias)) {
       const c = collision(item, { sourceId: snapshot.source.sourceId, kind: 'segment', uid: seg.uid, id: seg.key }, r.segmentKey, 'segment', ldEnv);
-      if (c === 'skip') return finishItem(item, 'skipped', `LD segment “${r.segmentKey}” exists and was not adopted`);
-      if (c === 'open') return finishItem(item, 'blocked', `LD segment “${r.segmentKey}” already exists`);
+      if (c === 'skip') return finishItem(item, 'skipped', `LaunchDarkly segment “${r.segmentKey}” exists and was not adopted`);
+      if (c === 'open') return finishItem(item, 'blocked', `LaunchDarkly segment “${r.segmentKey}” already exists`);
       adopt = true;
     }
     if (r.unresolved.length) return finishItem(item, 'blocked', `${r.unresolved.length} open decision${r.unresolved.length === 1 ? '' : 's'}`);
@@ -762,7 +762,7 @@ export function planMigration(req: PlanRequest): Plan {
     const sourceEnv = envFor(snapshot.source.sourceId, ldEnv);
     const item: PlanItem = { uid: flag.uid, kind: 'flag', entityId: flag.key, sourceId: snapshot.source.sourceId, ldKey: flag.key, ldEnv, status: 'ready', dependency: requiredBy !== null, requiredBy: requiredBy ? [requiredBy] : [], decisions: [], exists: false };
     items.set(itemKey, item);
-    if (!sourceEnv) return finishItem(item, 'error', `no environment of ${snapshot.source.alias} is mapped to LD “${ldEnv}”`);
+    if (!sourceEnv) return finishItem(item, 'error', `no environment of ${snapshot.source.alias} is mapped to LaunchDarkly “${ldEnv}”`);
     item.statsigEnv = sourceEnv;
 
     const r: NeutralFlagMapResult = mapNeutralFlag({ canonical: { snapshot }, entity: flag, profile: req.profile, resolutions: req.resolutions, capabilities: req.capabilities, env: { statsig: sourceEnv, ld: ldEnv }, now: req.now, ...dir });
@@ -776,16 +776,16 @@ export function planMigration(req: PlanRequest): Plan {
     item.owned = !!ldFlag && !!flagOwner(ldFlag);
     let adopt = false;
     const other = shellOwner.get(r.flagKey);
-    if (other && other !== flag.uid) return finishItem(item, 'error', `${describeOwner(other)} also produces LD key “${r.flagKey}” (migrate one source at a time; consolidation arrives in M8)`);
+    if (other && other !== flag.uid) return finishItem(item, 'error', `${describeOwner(other)} also produces LaunchDarkly key “${r.flagKey}” (migrate one source at a time; consolidation arrives in M8)`);
     shellOwner.set(r.flagKey, flag.uid);
     if (ldFlag) {
       const owner = flagOwner(ldFlag);
-      if (owner && (owner.id !== flag.key || owner.source !== snapshot.source.alias)) return finishItem(item, 'error', `LD flag “${r.flagKey}” was migrated from ${owner.source}/${owner.id}; consolidation arrives in M8`);
-      if (ldFlag.kind && ldFlag.kind !== r.flagKind) return finishItem(item, 'error', `LD flag “${r.flagKey}” exists and is a ${ldFlag.kind} flag, the source flag is ${r.flagKind}`);
+      if (owner && (owner.id !== flag.key || owner.source !== snapshot.source.alias)) return finishItem(item, 'error', `LaunchDarkly flag “${r.flagKey}” was migrated from ${owner.source}/${owner.id}; consolidation arrives in M8`);
+      if (ldFlag.kind && ldFlag.kind !== r.flagKind) return finishItem(item, 'error', `LaunchDarkly flag “${r.flagKey}” exists and is a ${ldFlag.kind} flag, the source flag is ${r.flagKind}`);
       if (!owner) {
         const c = collision(item, { sourceId: snapshot.source.sourceId, kind: 'flag', uid: flag.uid, id: flag.key }, r.flagKey, 'flag', 'flag key');
-        if (c === 'skip') return finishItem(item, 'skipped', `LD flag “${r.flagKey}” exists and was not adopted`);
-        if (c === 'open') return finishItem(item, 'blocked', `LD flag “${r.flagKey}” already exists`);
+        if (c === 'skip') return finishItem(item, 'skipped', `LaunchDarkly flag “${r.flagKey}” exists and was not adopted`);
+        if (c === 'open') return finishItem(item, 'blocked', `LaunchDarkly flag “${r.flagKey}” already exists`);
         adopt = true;
       } else if (r.flagKind === 'multivariate') {
         const g = variationGuard(item, { sourceId: snapshot.source.sourceId, kind: 'flag', uid: flag.uid, id: flag.key }, ldFlag, r.shell, ldEnv);
@@ -851,8 +851,8 @@ export function planMigration(req: PlanRequest): Plan {
     let adopt = false;
     if (existing && !ownsSegment(existing, snapshot.source.alias)) {
       const c = collision(item, { sourceId: prompt.source.sourceId, kind: 'prompt', uid: prompt.uid, id: prompt.id }, r.key, 'AI Config', 'AI Config key');
-      if (c === 'skip') return void finishItem(item, 'skipped', `LD AI Config “${r.key}” exists and was not adopted`);
-      if (c === 'open') return void finishItem(item, 'blocked', `LD AI Config “${r.key}” already exists`);
+      if (c === 'skip') return void finishItem(item, 'skipped', `LaunchDarkly AI Config “${r.key}” exists and was not adopted`);
+      if (c === 'open') return void finishItem(item, 'blocked', `LaunchDarkly AI Config “${r.key}” already exists`);
       adopt = true;
     }
     if (r.unresolved.length) return void finishItem(item, 'blocked', `${r.unresolved.length} open decision${r.unresolved.length === 1 ? '' : 's'}`);
@@ -928,7 +928,7 @@ export function planMigration(req: PlanRequest): Plan {
       }
       const sourceEnv = envFor(snapshot.source.sourceId, ldEnv);
       if (!sourceEnv) {
-        errors.push(`No environment of ${snapshot.source.alias} is mapped to LD “${ldEnv}”, so segment ${uid} cannot be planned there.`);
+        errors.push(`No environment of ${snapshot.source.alias} is mapped to LaunchDarkly “${ldEnv}”, so segment ${uid} cannot be planned there.`);
         continue;
       }
       if (n) planNeutralSegment(snapshot, n.segment.key, sourceEnv, ldEnv, null);

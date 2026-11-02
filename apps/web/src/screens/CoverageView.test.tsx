@@ -61,7 +61,7 @@ describe('CoverageView', () => {
     render(<CoverageView sources={[]} snapshots={{}} onOpenResource={vi.fn()} />);
     for (const a of AREAS) expect(screen.getByRole('heading', { name: a.title })).toBeTruthy();
     expect(screen.getByText(`${COVERAGE.length} of ${COVERAGE.length} rows`)).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: /No LD equivalent/ }));
+    fireEvent.click(screen.getByRole('button', { name: /No LaunchDarkly equivalent/ }));
     const none = COVERAGE.filter((e) => e.status === 'none').length;
     expect(screen.getByText(`${none} of ${COVERAGE.length} rows`)).toBeTruthy();
     // Every visible row is a real limitation.

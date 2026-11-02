@@ -435,9 +435,9 @@ export function WorkspaceScreen({
               </>
             ) : ld.status === "connected" ? (
               ld.projectKey ? (
-                `LD · ${ld.projectKey}`
+                `LaunchDarkly · ${ld.projectKey}`
               ) : (
-                "LD · choose project"
+                "LaunchDarkly · choose project"
               )
             ) : (
               "Connect LaunchDarkly"

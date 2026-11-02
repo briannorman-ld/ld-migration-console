@@ -61,7 +61,7 @@ export function CoverageView({
       <PageTitle eyebrow="Coverage">What migrates</PageTitle>
       <p className="max-w-3xl text-sm text-fg-muted">
         Every StatSig construct, what it becomes in LaunchDarkly, and how completely this console gets it there. Rows that say <b>Migrates with decisions</b>{' '}
-        are written automatically once you answer the Decision; rows marked <b>No LD equivalent</b> are the real limitations. The same list is published as{' '}
+        are written automatically once you answer the Decision; rows marked <b>No LaunchDarkly equivalent</b> are the real limitations. The same list is published as{' '}
         <code>docs/LIMITATIONS.md</code>.
       </p>
 

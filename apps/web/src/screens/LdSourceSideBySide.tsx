@@ -164,7 +164,7 @@ export function LdSourceSideBySide({
       return n;
     });
 
-  if (ldSources.length === 0) return <Callout tone="blue">No LaunchDarkly source is attached. Add one under Connections to compare a source LD project with the target.</Callout>;
+  if (ldSources.length === 0) return <Callout tone="blue">No LaunchDarkly source is attached. Add one under Connections to compare a source LaunchDarkly project with the target.</Callout>;
 
   return (
     <div className="pb-20">
@@ -267,7 +267,7 @@ export function LdSourceSideBySide({
                             {s.ldEnv}
                           </span>
                         ))}
-                        {r.strip.length === 0 && <span className="text-xs text-fg-subtle">connect LD</span>}
+                        {r.strip.length === 0 && <span className="text-xs text-fg-subtle">connect LaunchDarkly</span>}
                       </div>
                     </td>
                   </tr>

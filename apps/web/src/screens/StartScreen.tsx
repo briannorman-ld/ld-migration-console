@@ -137,7 +137,7 @@ export function StartScreen({ onOpen }: { onOpen: (workspaceId: string) => void 
                       <div className="pointer-events-none flex min-w-0 items-center gap-2">
                         <span className="truncate font-medium text-fg">{w.name}</span>
                         {w.isDemo && <Badge tone="violet">demo</Badge>}
-                        {w.ld?.projectKey && <Badge tone="blue">LD · {w.ld.projectKey}</Badge>}
+                        {w.ld?.projectKey && <Badge tone="blue">LaunchDarkly · {w.ld.projectKey}</Badge>}
                       </div>
                       <div className="flex shrink-0 items-center gap-3">
                         <span className="pointer-events-none text-xs text-fg-subtle">updated {new Date(w.updatedAt).toLocaleString()}</span>

@@ -120,7 +120,7 @@ export async function ensureDemoWorkspace(): Promise<string> {
   sources.push({
     id: `${DEMO_WORKSPACE_ID}-legacy`,
     alias: 'legacy',
-    label: 'acme-legacy (LD)',
+    label: 'acme-legacy (LaunchDarkly)',
     kind: 'launchdarkly',
     ld: { instance: 'us', projectKey: ACME_LEGACY_PROJECT_KEY, baseUrl: demoLdBaseUrl(appRoot()) },
     isDemo: true,

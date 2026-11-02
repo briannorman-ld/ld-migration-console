@@ -39,7 +39,7 @@ export function normalizeLdSnapshot(raw: RawLdSnapshot, opts: NormalizeLdOptions
     for (const env of envKeys) {
       const c = f.environments?.[env];
       if (!c) {
-        warn({ code: 'partial_spec', path: `${path}/environments/${env}`, message: `LD returned no configuration for environment “${env}”; treated as off with no rules.` });
+        warn({ code: 'partial_spec', path: `${path}/environments/${env}`, message: `LaunchDarkly returned no configuration for environment “${env}”; treated as off with no rules.` });
         environments.push({ env, on: false, offVariation: f.defaults?.offVariation ?? Math.max(0, f.variations.length - 1), fallthrough: { variation: f.defaults?.onVariation ?? 0 }, rules: [], targets: [], prerequisites: [] });
         continue;
       }

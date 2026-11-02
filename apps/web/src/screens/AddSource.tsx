@@ -40,7 +40,7 @@ export function AddSource({ workspaceId, onDone }: { workspaceId: string; onDone
     const source: SourceDescriptor = {
       id: crypto.randomUUID(),
       alias: a,
-      label: label || (kind === 'launchdarkly' ? `${ldProject.trim()} (LD)` : a),
+      label: label || (kind === 'launchdarkly' ? `${ldProject.trim()} (LaunchDarkly)` : a),
       kind,
       createdAt: new Date().toISOString(),
       ...(kind === 'console_api' ? { baseUrl: STATSIG_CONSOLE_BASE_URL, ...scope } : {}),
@@ -97,7 +97,7 @@ export function AddSource({ workspaceId, onDone }: { workspaceId: string; onDone
         <div className="grid grid-cols-2 gap-3">
           <div>
             <Label htmlFor="src-label">Name</Label>
-            <Input id="src-label" value={label} placeholder={kind === 'launchdarkly' ? 'acme-legacy (LD)' : 'acme-web'} onChange={(e) => setLabel(e.target.value)} />
+            <Input id="src-label" value={label} placeholder={kind === 'launchdarkly' ? 'acme-legacy (LaunchDarkly)' : 'acme-web'} onChange={(e) => setLabel(e.target.value)} />
           </div>
           <div>
             <Label htmlFor="src-alias">Alias (prefix for consolidation)</Label>

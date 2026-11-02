@@ -118,18 +118,18 @@ export function resolveUnit(ctx: ConditionContext, unitType: string): UnitTarget
         key: `create:${proposed}`,
         label: `Create context kind “${proposed}”`,
         explanation: canCreate
-          ? `The migration creates the LD context kind “${proposed}” for StatSig's ${unitType}. Your app must send a “${proposed}” context.`
-          : `This token can't create context kinds. Ask an LD admin to create “${proposed}” first; SDK evaluations also auto-create kinds.`,
+          ? `The migration creates the LaunchDarkly context kind “${proposed}” for StatSig's ${unitType}. Your app must send a “${proposed}” context.`
+          : `This token can't create context kinds. Ask a LaunchDarkly admin to create “${proposed}” first; SDK evaluations also auto-create kinds.`,
         resultingFidelity: 'full',
       },
       {
         key: attributeOption(unitType),
         label: `Keep “${unitType}” as an attribute of the user context`,
-        explanation: `No new context kind. Conditions on ${unitType} become clauses on the user attribute “${unitType}”, rollouts bucket by it, and ID overrides become a targeting rule (LD targets individuals only by key). Your app must send ${unitType} as a user attribute.`,
+        explanation: `No new context kind. Conditions on ${unitType} become clauses on the user attribute “${unitType}”, rollouts bucket by it, and ID overrides become a targeting rule (LaunchDarkly targets individuals only by key). Your app must send ${unitType} as a user attribute.`,
         resultingFidelity: 'full',
       },
       ...plannedKindOptions(plannedContextKinds(ctx.decisions.resolutions, ctx.profile), new Set([proposed, ...ctx.capabilities.existingContextKinds]), unitType, canCreate),
-      ...existing.map((k) => ({ key: `existing:${k}`, label: `Use the existing kind “${k}”`, explanation: `StatSig's ${unitType} becomes the key of the LD “${k}” context.`, resultingFidelity: 'full' as const })),
+      ...existing.map((k) => ({ key: `existing:${k}`, label: `Use the existing kind “${k}”`, explanation: `StatSig's ${unitType} becomes the key of the LaunchDarkly “${k}” context.`, resultingFidelity: 'full' as const })),
     ];
     const choice = ctx.decisions.choose(
       {
@@ -138,7 +138,7 @@ export function resolveUnit(ctx: ConditionContext, unitType: string): UnitTarget
         subject: { sourceId: ctx.sourceId, kind: 'unit_type', uid: `${ctx.sourceId}/unit_type/${unitType}`, id: unitType },
         path: 'kind',
         title: `Context kind for unit type ${unitType}`,
-        explanation: `StatSig buckets and targets by ${unitType}. LD needs somewhere for it: its own context kind, or an attribute of another context (the user context here; the Unit types page offers any kind). A custom unit ID is never the key of the user context.`,
+        explanation: `StatSig buckets and targets by ${unitType}. LaunchDarkly needs somewhere for it: its own context kind, or an attribute of another context (the user context here; the Unit types page offers any kind). A custom unit ID is never the key of the user context.`,
         sourceFragment: { unitType },
         options,
         recommended: options[0]!.key,
@@ -187,7 +187,7 @@ export function splitOverrides(ctx: ConditionContext, groups: OverrideGroup[]): 
   for (const gs of perAttribute.values()) {
     const n = gs.reduce((c, g) => c + g.values.length, 0);
     const { contextKind, attribute } = gs[0]!;
-    ctx.fidelity.push({ fidelity: 'full', message: `${n} ${gs[0]!.unitType} override${n === 1 ? '' : 's'} became ${gs.length} targeting rule${gs.length === 1 ? '' : 's'} on ${contextKind} attribute “${attribute}”: LD targets individuals only by context key.` });
+    ctx.fidelity.push({ fidelity: 'full', message: `${n} ${gs[0]!.unitType} override${n === 1 ? '' : 's'} became ${gs.length} targeting rule${gs.length === 1 ? '' : 's'} on ${contextKind} attribute “${attribute}”: LaunchDarkly targets individuals only by context key.` });
   }
   return { targets, rules };
 }
@@ -231,22 +231,22 @@ export function translateCondition(ctx: ConditionContext, c: Condition, loc: Loc
     case 'user_agent':
       return derived(ctx, c, loc);
     default:
-      return unsupported(ctx, c, loc, UNSUPPORTED_WHY[c.type] ?? `StatSig condition type “${c.type}” has no LD equivalent.`);
+      return unsupported(ctx, c, loc, UNSUPPORTED_WHY[c.type] ?? `StatSig condition type “${c.type}” has no LaunchDarkly equivalent.`);
   }
 }
 
 const UNSUPPORTED_WHY: Record<string, string> = {
-  target_app: 'StatSig target apps decide which SDK keys see a gate. LD has no per-app targeting clause (the closest is the ld_application context, which needs SDK configuration).',
+  target_app: 'StatSig target apps decide which SDK keys see a gate. LaunchDarkly has no per-app targeting clause (the closest is the ld_application context, which needs SDK configuration).',
   javascript: 'Custom JavaScript conditions run inside StatSig only.',
-  experiment_group: 'Experiment-group conditions depend on StatSig experiment assignment, which does not move to LD (PLAN §11).',
-  url: 'StatSig reads the page URL in its web SDK. LD only sees attributes your app sends.',
-  user_bucket: 'StatSig bucket conditions depend on StatSig hashing; LD buckets differently.',
+  experiment_group: 'Experiment-group conditions depend on StatSig experiment assignment, which does not move to LaunchDarkly (PLAN §11).',
+  url: 'StatSig reads the page URL in its web SDK. LaunchDarkly only sees attributes your app sends.',
+  user_bucket: 'StatSig bucket conditions depend on StatSig hashing; LaunchDarkly buckets differently.',
   unknown: 'The source sent a condition type this app does not recognize.',
 };
 
 function mappedAttribute(ctx: ConditionContext, c: Condition, loc: Loc): Dnf {
   const { attribute, renamed } = attributeFor(ctx.profile, c.type, c.field);
-  if (renamed) note(ctx, loc, 'full', `Custom field “${c.field}” maps to LD attribute “${attribute}” (“${c.field}” is reserved in LD).`);
+  if (renamed) note(ctx, loc, 'full', `Custom field “${c.field}” maps to LaunchDarkly attribute “${attribute}” (“${c.field}” is reserved in LaunchDarkly).`);
   return attributeCondition(ctx, c, loc, ctx.userKind, attribute);
 }
 
@@ -260,11 +260,11 @@ function derived(ctx: ConditionContext, c: Condition, loc: Loc): Dnf {
       subject: subjectAt(ctx, loc),
       path: path(ctx, loc),
       title: `${c.type} is derived by StatSig`,
-      explanation: `StatSig fills ${c.type} from ${from} when your app doesn't send it. LD SDKs don't derive attributes, so your app must send “${attribute}” (it is added to the context contract).`,
+      explanation: `StatSig fills ${c.type} from ${from} when your app doesn't send it. LaunchDarkly SDKs don't derive attributes, so your app must send “${attribute}” (it is added to the context contract).`,
       sourceFragment: c.raw,
       fingerprintOf: { conditionType: c.type, attribute },
       options: [
-        { key: 'map', label: `Map to attribute “${attribute}”`, explanation: `Target the LD attribute “${attribute}”. Exact once your app sends it.`, resultingFidelity: 'partial' },
+        { key: 'map', label: `Map to attribute “${attribute}”`, explanation: `Target the LaunchDarkly attribute “${attribute}”. Exact once your app sends it.`, resultingFidelity: 'partial' },
         DROP_RULE,
         SKIP,
       ],
@@ -395,7 +395,7 @@ function attributeCondition(ctx: ConditionContext, c: Condition, loc: Loc, conte
     case 'not_array_contains_all':
       // De Morgan: "not (has a and has b)" = "lacks a" or "lacks b" → one LD rule per value.
       out = typed().map((forms) => [clause('in', forms, true)]);
-      if (out.length > 1) note(ctx, loc, 'full', `not_array_contains_all expands into ${out.length} LD rules (one per value).`);
+      if (out.length > 1) note(ctx, loc, 'full', `not_array_contains_all expands into ${out.length} LaunchDarkly rules (one per value).`);
       break;
     case 'is_null':
     case 'is_not_null':
@@ -404,7 +404,7 @@ function attributeCondition(ctx: ConditionContext, c: Condition, loc: Loc, conte
     case 'not_in_segment_list':
       return segmentCondition(ctx, c, loc, targets.map(String), op === 'not_in_segment_list');
     default:
-      return unsupported(ctx, c, loc, `StatSig operator “${String(c.operator)}” has no LD equivalent.`);
+      return unsupported(ctx, c, loc, `StatSig operator “${String(c.operator)}” has no LaunchDarkly equivalent.`);
   }
 
   if (op && PASSES_WHEN_MISSING.has(op) && !(contextKind === 'user' && attribute === 'key') && out.length > 0) {
@@ -415,7 +415,7 @@ function attributeCondition(ctx: ConditionContext, c: Condition, loc: Loc, conte
         subject: subjectAt(ctx, loc),
         path: path(ctx, loc),
         title: `Users without “${attribute}” behave differently`,
-        explanation: `StatSig's “${op}” passes users who don't send ${attribute === 'key' ? `a ${contextKind} ID` : `“${attribute}”`}. In LD a clause on a missing attribute never matches, even when negated, so those users won't match this rule.`,
+        explanation: `StatSig's “${op}” passes users who don't send ${attribute === 'key' ? `a ${contextKind} ID` : `“${attribute}”`}. In LaunchDarkly a clause on a missing attribute never matches, even when negated, so those users won't match this rule.`,
         sourceFragment: c.raw,
         fingerprintOf: { op, attribute, contextKind },
         options: [
@@ -450,13 +450,13 @@ function caseInsensitive(ctx: ConditionContext, c: Condition, loc: Loc, op: stri
       subject: subjectAt(ctx, loc),
       path: path(ctx, loc),
       title: `Case-insensitive match (${op})`,
-      explanation: `StatSig's “${op}” ignores case: “${values[0]}” also matches “${values[0]!.toLowerCase()}”. LD's “${spec.op}” is case-sensitive.`,
+      explanation: `StatSig's “${op}” ignores case: “${values[0]}” also matches “${values[0]!.toLowerCase()}”. LaunchDarkly's “${spec.op}” is case-sensitive.`,
       sourceFragment: c.raw,
       fingerprintOf: normalizeCondition(c),
       options: [
-        { key: 'regex', label: 'Case-folded regex', explanation: `Use LD “matches” with a pattern that accepts any casing, e.g. ${caseFoldedPattern(values[0]!, spec.anchor)}. Exact, but harder to read and edit in LD.`, resultingFidelity: 'full' },
+        { key: 'regex', label: 'Case-folded regex', explanation: `Use LaunchDarkly “matches” with a pattern that accepts any casing, e.g. ${caseFoldedPattern(values[0]!, spec.anchor)}. Exact, but harder to read and edit in LaunchDarkly.`, resultingFidelity: 'full' },
         { key: 'variants', label: 'Add lowercase and uppercase variants', explanation: `Keep “${spec.op}” and add each value as written, lowercased and uppercased. Mixed casings like “${mixedCase(values[0]!)}” won't match.`, resultingFidelity: 'partial' },
-        { key: 'exact', label: 'Keep exact values (case-sensitive)', explanation: 'Only the exact casing in StatSig matches in LD.', resultingFidelity: 'partial' },
+        { key: 'exact', label: 'Keep exact values (case-sensitive)', explanation: 'Only the exact casing in StatSig matches in LaunchDarkly.', resultingFidelity: 'partial' },
         SKIP,
       ],
       recommended: 'regex',
@@ -516,8 +516,8 @@ function typedTargets(ctx: ConditionContext, c: Condition, loc: Loc, op: string,
       title: `Typed values: ${op} on ${looseTargets.map((t) => JSON.stringify(t)).join(', ')}`,
       explanation:
         exact === 'both'
-          ? `StatSig's “${op}” compares loosely: the target ${JSON.stringify(ex)} matches “${attribute}” sent as ${String(exNum)} and as ${exStr}. LD's “in” compares typed JSON values, so ${exStr} and ${String(exNum)} are different values.`
-          : `StatSig's “${op}” with the number ${String(ex)} matches only a number in the “${attribute}” array (strings don't match). LD's “in” compares typed JSON values too, so the values can stay as they are; choose “both” if your app may send strings.`,
+          ? `StatSig's “${op}” compares loosely: the target ${JSON.stringify(ex)} matches “${attribute}” sent as ${String(exNum)} and as ${exStr}. LaunchDarkly's “in” compares typed JSON values, so ${exStr} and ${String(exNum)} are different values.`
+          : `StatSig's “${op}” with the number ${String(ex)} matches only a number in the “${attribute}” array (strings don't match). LaunchDarkly's “in” compares typed JSON values too, so the values can stay as they are; choose “both” if your app may send strings.`,
       sourceFragment: c.raw,
       fingerprintOf: { op, targets, attribute },
       options: [
@@ -532,7 +532,7 @@ function typedTargets(ctx: ConditionContext, c: Condition, loc: Loc, op: string,
   );
   applyCommon(choice, loc);
   if (choice === 'both') {
-    if (exact !== 'both') note(ctx, loc, 'partial', `“${attribute}” matches both numbers and strings in LD; StatSig's ${op} matched numbers only.`);
+    if (exact !== 'both') note(ctx, loc, 'partial', `“${attribute}” matches both numbers and strings in LaunchDarkly; StatSig's ${op} matched numbers only.`);
     return both;
   }
   if (choice === 'number') {
@@ -545,7 +545,7 @@ function typedTargets(ctx: ConditionContext, c: Condition, loc: Loc, op: string,
 
 /** 6.6: `Number()` in StatSig accepts "25"; LD's numeric operators need a number. One note per attribute. */
 function numericContract(ctx: ConditionContext, attribute: string): void {
-  const message = `“${attribute}” must be sent as a number: StatSig's numeric operators coerced numeric strings, LD's don't.`;
+  const message = `“${attribute}” must be sent as a number: StatSig's numeric operators coerced numeric strings, LaunchDarkly's don't.`;
   if (!ctx.fidelity.some((n) => n.message === message)) ctx.fidelity.push({ fidelity: 'full', message });
 }
 
@@ -573,7 +573,7 @@ function versionTargets(ctx: ConditionContext, c: Condition, loc: Loc, op: strin
     else if (to !== v) padded.push(`“${v}” → “${to}”`);
     return to;
   });
-  if (padded.length) note(ctx, loc, 'full', `Version ${padded.join(', ')} for LD semver (StatSig pads missing parts with 0 and ignores leading zeros, so this is exact).`);
+  if (padded.length) note(ctx, loc, 'full', `Version ${padded.join(', ')} for LaunchDarkly semver (StatSig pads missing parts with 0 and ignores leading zeros, so this is exact).`);
   if (lossy.length === 0) return { values };
 
   const list = lossy.map((l) => `“${l.from}” ${l.why}`).join('; ');
@@ -587,7 +587,7 @@ function versionTargets(ctx: ConditionContext, c: Condition, loc: Loc, op: strin
       subject: subjectAt(ctx, loc),
       path: path(ctx, loc),
       title: `Version ${lossy.map((l) => `“${l.from}”`).join(', ')} isn't semver`,
-      explanation: `${list.charAt(0).toUpperCase()}${list.slice(1)}. StatSig compares any number of dot-separated parts and ignores everything after “-”. LD's semVer operators need valid semver: a four-part version never matches at all, and a prerelease like 5.3.0-beta sorts below 5.3.0.`,
+      explanation: `${list.charAt(0).toUpperCase()}${list.slice(1)}. StatSig compares any number of dot-separated parts and ignores everything after “-”. LaunchDarkly's semVer operators need valid semver: a four-part version never matches at all, and a prerelease like 5.3.0-beta sorts below 5.3.0.`,
       sourceFragment: c.raw,
       fingerprintOf: { op, targets: raw },
       options: [
@@ -595,8 +595,8 @@ function versionTargets(ctx: ConditionContext, c: Condition, loc: Loc, op: strin
           key: 'truncate',
           label: `Compare against ${truncated}`,
           explanation: [
-            hasParts ? 'Drop the fourth and later parts: versions that differ only there compare equal in LD, and your app must send a three-part version or the clause never matches.' : '',
-            hasSuffix ? 'Drop the suffix: StatSig ignored it on both sides, but LD sorts a prerelease attribute value (5.3.0-beta) below 5.3.0, so prerelease builds fall on the other side of the comparison.' : '',
+            hasParts ? 'Drop the fourth and later parts: versions that differ only there compare equal in LaunchDarkly, and your app must send a three-part version or the clause never matches.' : '',
+            hasSuffix ? 'Drop the suffix: StatSig ignored it on both sides, but LaunchDarkly sorts a prerelease attribute value (5.3.0-beta) below 5.3.0, so prerelease builds fall on the other side of the comparison.' : '',
           ]
             .filter(Boolean)
             .join(' '),
@@ -615,7 +615,7 @@ function versionTargets(ctx: ConditionContext, c: Condition, loc: Loc, op: strin
     note(ctx, loc, 'partial', choice === 'drop_condition' ? `Non-semver version condition dropped (the rule matches more users).` : `Rule with a non-semver version condition dropped.`);
     return { dnf: common };
   }
-  note(ctx, loc, 'partial', `Version ${lossy.map((l) => `“${l.from}” → “${l.to}”`).join(', ')}: ${hasParts ? 'the app must send three-part versions; versions differing only after the third part compare equal' : 'prerelease builds sort below the release in LD'}.`);
+  note(ctx, loc, 'partial', `Version ${lossy.map((l) => `“${l.from}” → “${l.to}”`).join(', ')}: ${hasParts ? 'the app must send three-part versions; versions differing only after the third part compare equal' : 'prerelease builds sort below the release in LaunchDarkly'}.`);
   return { values };
 }
 
@@ -664,7 +664,7 @@ function regex(ctx: ConditionContext, c: Condition, loc: Loc, patterns: string[]
       subject: subjectAt(ctx, loc),
       path: path(ctx, loc),
       title: `Regex uses ${found.join(', ')}`,
-      explanation: `The pattern ${patterns.join(', ')} uses ${found.join(', ')}, which some LD SDK regex engines (for example Go's RE2) don't support. Those SDKs will treat the clause as not matching.`,
+      explanation: `The pattern ${patterns.join(', ')} uses ${found.join(', ')}, which some LaunchDarkly SDK regex engines (for example Go's RE2) don't support. Those SDKs will treat the clause as not matching.`,
       sourceFragment: c.raw,
       fingerprintOf: { patterns },
       options: [
@@ -696,8 +696,8 @@ function nullCheck(ctx: ConditionContext, c: Condition, loc: Loc, op: 'is_null' 
       path: path(ctx, loc),
       title: isNull ? `“${attribute}” is not set` : `“${attribute}” is set`,
       explanation: isNull
-        ? `LD has no clause that matches a missing attribute: a clause on a missing attribute never matches, even when negated. This rule can't be expressed in LD.`
-        : `LD has no “is set” operator. A regex that matches anything is the closest equivalent for string attributes.`,
+        ? `LaunchDarkly has no clause that matches a missing attribute: a clause on a missing attribute never matches, even when negated. This rule can't be expressed in LaunchDarkly.`
+        : `LaunchDarkly has no “is set” operator. A regex that matches anything is the closest equivalent for string attributes.`,
       sourceFragment: c.raw,
       fingerprintOf: { op, attribute },
       options,
@@ -721,7 +721,7 @@ function unsupported(ctx: ConditionContext, c: Condition, loc: Loc, why: string)
       severity: 'blocking',
       subject: subjectAt(ctx, loc),
       path: path(ctx, loc),
-      title: `No LD equivalent: ${c.type}${c.operator ? ` ${String(c.operator)}` : ''}`,
+      title: `No LaunchDarkly equivalent: ${c.type}${c.operator ? ` ${String(c.operator)}` : ''}`,
       explanation: why,
       sourceFragment: c.raw,
       fingerprintOf: normalizeCondition(c),
@@ -798,8 +798,8 @@ function timeCondition(ctx: ConditionContext, c: Condition, loc: Loc): Dnf {
       ? [
           {
             key: 'schedule',
-            label: `Schedule the flip in LD at ${when}`,
-            explanation: `Mirror how StatSig behaves today, and create an LD scheduled change that applies the targeting as of ${when} at that moment. Exact, with no re-sync needed. Enterprise plans${sc === 'unknown' ? '; your plan is checked on the first write' : ''}.`,
+            label: `Schedule the flip in LaunchDarkly at ${when}`,
+            explanation: `Mirror how StatSig behaves today, and create a LaunchDarkly scheduled change that applies the targeting as of ${when} at that moment. Exact, with no re-sync needed. Enterprise plans${sc === 'unknown' ? '; your plan is checked on the first write' : ''}.`,
             resultingFidelity: 'full' as const,
           },
         ]
@@ -807,7 +807,7 @@ function timeCondition(ctx: ConditionContext, c: Condition, loc: Loc): Dnf {
     {
       key: 'resolve_now',
       label: nowValue ? 'Keep the rule without the time check' : 'Leave the rule out for now',
-      explanation: `Mirror how StatSig behaves today, and re-sync after ${when} so LD catches up.`,
+      explanation: `Mirror how StatSig behaves today, and re-sync after ${when} so LaunchDarkly catches up.`,
       resultingFidelity: 'partial',
     },
     SKIP,
@@ -822,7 +822,7 @@ function timeCondition(ctx: ConditionContext, c: Condition, loc: Loc): Dnf {
       subject: subjectAt(ctx, loc),
       path: path(ctx, loc),
       title: `Time condition: ${op} ${when}`,
-      explanation: `This rule ${nowValue ? 'applies now but stops' : 'starts applying'} at ${when}. LD clauses can't compare the current time; an LD scheduled change (Enterprise) can flip the targeting at that moment.`,
+      explanation: `This rule ${nowValue ? 'applies now but stops' : 'starts applying'} at ${when}. LaunchDarkly clauses can't compare the current time; a LaunchDarkly scheduled change (Enterprise) can flip the targeting at that moment.`,
       sourceFragment: c.raw,
       fingerprintOf: { op, t },
       options,
@@ -836,7 +836,7 @@ function timeCondition(ctx: ConditionContext, c: Condition, loc: Loc): Dnf {
     if (ctx.scheduleFlips) {
       ctx.scheduleFlips.add(op === 'on' ? Math.floor(t / DAY) * DAY : t);
       if (op === 'on') ctx.scheduleFlips.add((Math.floor(t / DAY) + 1) * DAY);
-      note(ctx, loc, 'full', `Time condition resolved as of the sync (${nowValue ? 'true' : 'false'}); an LD scheduled change flips it at ${when}.`);
+      note(ctx, loc, 'full', `Time condition resolved as of the sync (${nowValue ? 'true' : 'false'}); a LaunchDarkly scheduled change flips it at ${when}.`);
     }
     return nowValue ? ALWAYS : NEVER;
   }
@@ -871,8 +871,8 @@ export function bigSegmentChoice(ctx: ConditionContext, seg: Segment, count: num
       ? [
           {
             key: 'import',
-            label: 'Import as an LD big segment',
-            explanation: `Create an unbounded (big) segment and load the ${n(count)} IDs with a CSV import in replace mode, so every sync mirrors the StatSig list. Enterprise plans${bs === 'unknown' ? '; your plan is checked on the first write' : ''}. Big segments have no rules and can't be previewed in the LD UI.`,
+            label: 'Import as a LaunchDarkly big segment',
+            explanation: `Create an unbounded (big) segment and load the ${n(count)} IDs with a CSV import in replace mode, so every sync mirrors the StatSig list. Enterprise plans${bs === 'unknown' ? '; your plan is checked on the first write' : ''}. Big segments have no rules and can't be previewed in the LaunchDarkly UI.`,
             resultingFidelity: 'full' as const,
           },
         ]
@@ -888,7 +888,7 @@ export function bigSegmentChoice(ctx: ConditionContext, seg: Segment, count: num
       subject: { sourceId: seg.source.sourceId, kind: 'segment', uid: seg.uid, id: seg.id, location: `${n(count)} IDs` },
       path: 'size',
       title: `Segment “${seg.id}” has ${n(count)} IDs`,
-      explanation: `LD list segments hold at most ${n(LIST_SEGMENT_MAX)} IDs. Bigger lists need a big segment (Enterprise), filled by a CSV import.${canImport ? '' : ' Your LD plan does not include big segments.'}`,
+      explanation: `LaunchDarkly list segments hold at most ${n(LIST_SEGMENT_MAX)} IDs. Bigger lists need a big segment (Enterprise), filled by a CSV import.${canImport ? '' : ' Your LaunchDarkly plan does not include big segments.'}`,
       sourceFragment: fragment,
       fingerprintOf: { segment: seg.id, over: count > LIST_SEGMENT_MAX, canImport },
       options,
@@ -932,11 +932,11 @@ export function hashedListChoice(ctx: ConditionContext, seg: Segment, fragment: 
       subject: { sourceId: seg.source.sourceId, kind: 'segment', uid: seg.uid, id: seg.id, location: `${pct}% reconciled` },
       path: 'coverage',
       title: `Segment “${seg.id}”: raw IDs cover ${pct}% of the StatSig list`,
-      explanation: `Reconciliation: ${what}${cov.extra ? `; ${n(cov.extra)} uploaded IDs are not in StatSig's list and are left out` : ''}. The LD segment will hold the ${n(cov.matched)} matched IDs.`,
+      explanation: `Reconciliation: ${what}${cov.extra ? `; ${n(cov.extra)} uploaded IDs are not in StatSig's list and are left out` : ''}. The LaunchDarkly segment will hold the ${n(cov.matched)} matched IDs.`,
       sourceFragment: fragment,
       fingerprintOf: { segment: seg.id, matched: cov.matched, total: cov.total, verified: cov.verified },
       options: [
-        { key: 'accept', label: `Accept ${pct}% coverage`, explanation: `Migrate the ${n(cov.matched)} IDs the upload covers. Users in the ${n(cov.missing)} missing IDs are in the segment in StatSig but not in LD.`, resultingFidelity: 'partial' },
+        { key: 'accept', label: `Accept ${pct}% coverage`, explanation: `Migrate the ${n(cov.matched)} IDs the upload covers. Users in the ${n(cov.missing)} missing IDs are in the segment in StatSig but not in LaunchDarkly.`, resultingFidelity: 'partial' },
         { key: 'skip', label: 'Skip until a fuller upload', explanation: 'Keep the segment and the rules that need it in StatSig; upload a more complete CSV later.', resultingFidelity: 'skipped' },
       ],
       recommended: 'accept',

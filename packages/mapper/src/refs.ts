@@ -79,7 +79,7 @@ function computeInline(ctx: ConditionContext, state: InlineState, gateId: string
     for (const r of rules) {
       const conds = r.conditions.map((c, i) => translateCondition(inner, c, { ruleId: r.id, ruleName: r.name, index: i }));
       const d = andDnf(conds);
-      if (!d) return { ok: false, reason: `gate “${gateId}” expands into more than ${MAX_EXPANSION} LD rules` };
+      if (!d) return { ok: false, reason: `gate “${gateId}” expands into more than ${MAX_EXPANSION} LaunchDarkly rules` };
       ruleTerms.push(...d);
     }
   } catch (e) {
@@ -90,7 +90,7 @@ function computeInline(ctx: ConditionContext, state: InlineState, gateId: string
 
   if (negate) {
     const d = notDnf(ruleTerms);
-    return d ? { ok: true, dnf: d, gate } : { ok: false, reason: `“fails ${gateId}” expands into more than ${MAX_EXPANSION} LD rules` };
+    return d ? { ok: true, dnf: d, gate } : { ok: false, reason: `“fails ${gateId}” expands into more than ${MAX_EXPANSION} LaunchDarkly rules` };
   }
 
   // StatSig checks overrides before rules: pass = passIds ∨ (¬failIds ∧ rules).
@@ -103,7 +103,7 @@ function computeInline(ctx: ConditionContext, state: InlineState, gateId: string
     else failClauses.push({ contextKind, attribute, op: 'in', values: o.ids, negate: true });
   }
   const dnf = [...passTerms, ...ruleTerms.map((t) => [...t, ...failClauses])];
-  if (dnf.length > MAX_EXPANSION) return { ok: false, reason: `gate “${gateId}” expands into more than ${MAX_EXPANSION} LD rules` };
+  if (dnf.length > MAX_EXPANSION) return { ok: false, reason: `gate “${gateId}” expands into more than ${MAX_EXPANSION} LaunchDarkly rules` };
   return { ok: true, dnf, gate };
 }
 

@@ -90,13 +90,13 @@ describe('MonitoringPanel', () => {
     expect(h.onDismissAlerts).toHaveBeenCalledTimes(1);
   });
 
-  it('offers a sync for drifted items, a retire link for archived ones, and the LD-authoritative switch', () => {
+  it('offers a sync for drifted items, a retire link for archived ones, and the LaunchDarkly-authoritative switch', () => {
     const h = setup();
     fireEvent.click(screen.getByRole('button', { name: 'Sync' }));
     expect(h.onSync).toHaveBeenCalledWith(expect.objectContaining({ id: 'new_checkout_flow', ldEnv: 'test' }));
-    const retire = screen.getByRole('link', { name: 'Retire in LD' });
+    const retire = screen.getByRole('link', { name: 'Retire in LaunchDarkly' });
     expect(retire.getAttribute('href')).toContain('/projects/statsig-migration/flags/legacy_browser_banner/settings');
-    fireEvent.click(screen.getByLabelText('LD authoritative for new_checkout_flow in test'));
+    fireEvent.click(screen.getByLabelText('LaunchDarkly authoritative for new_checkout_flow in test'));
     expect(h.onToggleAuthoritative).toHaveBeenCalledWith(expect.objectContaining({ id: 'new_checkout_flow' }), true);
   });
 

@@ -57,7 +57,7 @@ describe('unit types: the choice', () => {
     expect(choiceValue('kind', '  ')).toBeNull();
   });
 
-  it('refuses keys LD would refuse, the user key for a custom unit ID, and attributes for userID', () => {
+  it('refuses keys LaunchDarkly would refuse, the user key for a custom unit ID, and attributes for userID', () => {
     expect(choiceError('kind', 'account', 'companyID')).toBeUndefined();
     expect(choiceError('kind', 'user', 'userID')).toBeUndefined();
     expect(choiceError('kind', '', 'companyID')).toBeUndefined();
@@ -77,7 +77,7 @@ describe('unit types: the choice', () => {
 describe('unit types: standing', () => {
   const res = (unitType: string, optionKey: string): Resolution => ({ id: `unit_type_kind:s-mobile/unit_type/${unitType}:kind`, type: 'unit_type_kind', optionKey, scope: 'resource', decidedAt: '2026-11-02T00:00:00Z' });
 
-  it('exists for user and for kinds LD has; otherwise asks per item unless configured', () => {
+  it('exists for user and for kinds LaunchDarkly has; otherwise asks per item unless configured', () => {
     expect(unitTypeStanding(profile(), [], 's-mobile', 'userID', EXISTING)).toEqual({ kind: 'exists', target: { contextKind: 'user', attribute: 'key' } });
     expect(unitTypeStanding(profile(), [], 's-mobile', 'stableID', EXISTING)).toEqual({ kind: 'exists', target: { contextKind: 'device', attribute: 'key' } });
     expect(unitTypeStanding(profile(), [], 's-mobile', 'companyID', EXISTING)).toEqual({ kind: 'asks', target: { contextKind: 'company', attribute: 'key' } });
@@ -128,7 +128,7 @@ describe('unit types: conflicts', () => {
     expect(acrossSources(p, [{ sourceId: 's-web', label: 'w', unitTypes: ['companyID'] }, { sourceId: 's-mobile', label: 'm', unitTypes: ['companyID'] }])[0]!.targets[1]!.kind).toBe('account.companyID');
   });
 
-  it('offers user, the kinds LD has and every kind another unit type keys or carries an attribute on', () => {
+  it('offers user, the kinds LaunchDarkly has and every kind another unit type keys or carries an attribute on', () => {
     const p = profile({ companyID: 'account', orgID: 'attribute:tenant/orgID' });
     expect(knownKinds(p, [{ sourceId: 's-mobile', unitTypes: ['userID', 'stableID', 'companyID', 'deviceID', 'orgID'] }], ['user', 'device', 'org'])).toEqual(['user', 'account', 'device', 'org', 'tenant']);
   });

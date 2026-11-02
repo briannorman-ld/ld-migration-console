@@ -27,7 +27,7 @@ export function MappingView({ workspaceId, sources, snapshots, m, onConnect, onU
       await createLdEnvironment(workspaceId, { key, name: statsigEnv, critical: isProduction });
       save((p) => void ((p.sources[sourceId] ??= { envMapping: {}, unitTypeKinds: {} }).envMapping[statsigEnv] = key));
     } catch (e) {
-      setCreateError(`Could not create LD environment “${key}”: ${(e as Error).message}`);
+      setCreateError(`Could not create LaunchDarkly environment “${key}”: ${(e as Error).message}`);
     } finally {
       setCreating(undefined);
     }
@@ -40,12 +40,12 @@ export function MappingView({ workspaceId, sources, snapshots, m, onConnect, onU
           <button className="font-medium underline" onClick={onConnect}>
             Connect LaunchDarkly
           </button>{' '}
-          to map StatSig environments to the LD project's environments.
+          to map StatSig environments to the LaunchDarkly project's environments.
         </Callout>
       )}
       {m.connected && m.ld.probing && (
         <p className="flex items-center gap-2 text-xs text-fg-muted">
-          <Spinner /> Refreshing the LD project ({m.ld.probing})…
+          <Spinner /> Refreshing the LaunchDarkly project ({m.ld.probing})…
         </p>
       )}
       {sources.map((s) => {
@@ -78,7 +78,7 @@ export function MappingView({ workspaceId, sources, snapshots, m, onConnect, onU
                         <td className="py-1.5 text-fg-subtle">→</td>
                         <td className="py-1.5">
                           <Select
-                            aria-label={`LD environment for ${e.name}`}
+                            aria-label={`LaunchDarkly environment for ${e.name}`}
                             disabled={!m.connected}
                             value={sp.envMapping[e.name] ?? ''}
                             onChange={(ev) => save((p) => void ((p.sources[s.id] ??= { envMapping: {}, unitTypeKinds: {} }).envMapping[e.name] = ev.target.value || null))}
@@ -97,10 +97,10 @@ export function MappingView({ workspaceId, sources, snapshots, m, onConnect, onU
                               variant="ghost"
                               className="py-1 text-xs"
                               disabled={!!creating}
-                              title={`Create LD environment “${sanitizeKey(e.name).toLowerCase()}” in project ${m.ld.projectKey} through the LD API, then map ${e.name} to it`}
+                              title={`Create LaunchDarkly environment “${sanitizeKey(e.name).toLowerCase()}” in project ${m.ld.projectKey} through the LaunchDarkly API, then map ${e.name} to it`}
                               onClick={() => void createEnv(s.id, e.name, !!e.isProduction)}
                             >
-                              {creating === `${s.id}|${e.name}` ? <Spinner /> : null} Create “{sanitizeKey(e.name).toLowerCase()}” in LD
+                              {creating === `${s.id}|${e.name}` ? <Spinner /> : null} Create “{sanitizeKey(e.name).toLowerCase()}” in LaunchDarkly
                             </Button>
                           )}
                         </td>
@@ -110,7 +110,7 @@ export function MappingView({ workspaceId, sources, snapshots, m, onConnect, onU
                 </table>
                 {dup.length > 0 && (
                   <div className="mt-2">
-                    <Callout tone="red">Two StatSig environments map to LD “{dup[0]}”. Within one source, map at most one environment to each LD environment.</Callout>
+                    <Callout tone="red">Two StatSig environments map to LaunchDarkly “{dup[0]}”. Within one source, map at most one environment to each LaunchDarkly environment.</Callout>
                   </div>
                 )}
                 {createError && (
@@ -119,7 +119,7 @@ export function MappingView({ workspaceId, sources, snapshots, m, onConnect, onU
                   </div>
                 )}
                 <p className="mt-2 text-xs text-fg-muted">
-                  Environments marked “not migrated” keep LD's default (off, serving false) and keep calling StatSig. A StatSig environment with no LD counterpart can be created in the LD project from here
+                  Environments marked “not migrated” keep LaunchDarkly's default (off, serving false) and keep calling StatSig. A StatSig environment with no LaunchDarkly counterpart can be created in the LaunchDarkly project from here
                   (POST /environments; production tiers are created as critical).
                 </p>
               </div>
@@ -141,11 +141,11 @@ export function MappingView({ workspaceId, sources, snapshots, m, onConnect, onU
                   })}
                 </ul>
                 <p className="mt-2 text-xs text-fg-muted">
-                  Where each unit type's IDs go in LD is chosen on the{' '}
+                  Where each unit type's IDs go in LaunchDarkly is chosen on the{' '}
                   <button type="button" className="text-link hover:underline" onClick={onUnitTypes}>
                     Unit types
                   </button>{' '}
-                  page: the key of a context kind (created during the migration if LD lacks it) or an attribute of a context kind. Custom unit IDs are never folded into “user”.
+                  page: the key of a context kind (created during the migration if LaunchDarkly lacks it) or an attribute of a context kind. Custom unit IDs are never folded into “user”.
                 </p>
               </div>
             </div>

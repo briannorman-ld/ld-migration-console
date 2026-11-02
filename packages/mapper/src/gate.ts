@@ -69,7 +69,7 @@ function trimRedundantRules(ctx: ConditionContext, out: DesiredRule[], emitted: 
   const n = candidates.length;
   const plural = (k: number, one: string, many: string) => (k === 1 ? one : many);
   const explanation = [
-    `In StatSig a ${served === PASS ? '100 %' : '0 %'} rule serves ${label} to the users it matches, and so does the default rule: the LD flag would carry ${n} ${plural(n, 'rule', 'rules')} that ${plural(n, 'changes', 'change')} nothing on ${plural(n, 'its', 'their')} own.`,
+    `In StatSig a ${served === PASS ? '100 %' : '0 %'} rule serves ${label} to the users it matches, and so does the default rule: the LaunchDarkly flag would carry ${n} ${plural(n, 'rule', 'rules')} that ${plural(n, 'changes', 'change')} nothing on ${plural(n, 'its', 'their')} own.`,
     trailing.length ? `${names(trailing)}: every rule after ${plural(trailing.length, 'it', 'them')} serves ${label} too, so dropping ${plural(trailing.length, 'it', 'them')} keeps the same result for everyone.` : '',
     exclusions.length ? `${names(exclusions)}: a later rule serves something else, so ${plural(exclusions.length, 'it acts', 'they act')} as an exclusion. Dropping ${plural(exclusions.length, 'it', 'them')} changes the result for users who also match that later rule.` : '',
     'Keeping them mirrors StatSig rule for rule, which can matter for monitoring or for rules you plan to change later.',
@@ -87,7 +87,7 @@ function trimRedundantRules(ctx: ConditionContext, out: DesiredRule[], emitted: 
       sourceFragment: { defaultServes: label, rules: candidates.map((c) => ({ id: c.id, name: c.name, passPercentage: c.passPercentage, kind: c.cls })) },
       fingerprintOf: candidates.map((c) => ({ id: c.id, kind: c.cls })).sort((a, b) => a.id.localeCompare(b.id)),
       options: [
-        { key: 'keep', label: 'Keep every rule', explanation: 'The LD flag has the same rules as the StatSig gate, redundant ones included.', resultingFidelity: 'full' },
+        { key: 'keep', label: 'Keep every rule', explanation: 'The LaunchDarkly flag has the same rules as the StatSig gate, redundant ones included.', resultingFidelity: 'full' },
         ...(trailing.length
           ? [
               {
@@ -317,7 +317,7 @@ function serveFor(ctx: ConditionContext, gate: Gate, ruleId: string, ruleName: s
       subject: { ...ctx.subject, ruleId, ruleName, location: `rule “${ruleName}”` },
       path: `rule:${ruleId}:rollout`,
       title: `${pass}% rollout: users will be re-bucketed`,
-      explanation: `StatSig buckets with sha256(salt.ruleSalt.unitID); LD buckets with hash(flagKey.salt.key). ${pass}% of users still pass, but not the same users: some who see the feature today won't, and others will.`,
+      explanation: `StatSig buckets with sha256(salt.ruleSalt.unitID); LaunchDarkly buckets with hash(flagKey.salt.key). ${pass}% of users still pass, but not the same users: some who see the feature today won't, and others will.`,
       sourceFragment: { rule: ruleName, passPercentage: pass, idType },
       fingerprintOf: { passPercentage: pass },
       options: [
@@ -329,7 +329,7 @@ function serveFor(ctx: ConditionContext, gate: Gate, ruleId: string, ruleName: s
     'acknowledge',
   );
   if (choice === 'skip') throw new SkipItem(`waiting for the ${pass}% rollout in rule “${ruleName}” to finish`);
-  ctx.fidelity.push({ fidelity: 'partial', message: `${pass}% rollout re-buckets users (StatSig and LD hash differently).`, location: `rule “${ruleName}”` });
+  ctx.fidelity.push({ fidelity: 'partial', message: `${pass}% rollout re-buckets users (StatSig and LaunchDarkly hash differently).`, location: `rule “${ruleName}”` });
   const weight = Math.round(pass * 1000);
   return { rollout: rolloutFor(resolveUnit(ctx, idType || gate.idType), [{ variation: PASS, weight }, { variation: FAIL, weight: 100_000 - weight }]) };
 }
@@ -348,7 +348,7 @@ function holdoutsAttached(ctx: ConditionContext, gate: Gate, holdouts: Holdout[]
   for (const id of [...gate.holdoutIds].sort()) {
     const h = holdouts.find((x) => x.id === id);
     if (!h) {
-      ctx.fidelity.push({ fidelity: 'partial', message: `Holdout “${id}” is attached but isn't in this StatSig snapshot: its share of users (held out in StatSig) will get the feature in LD.`, location: `holdout “${id}”` });
+      ctx.fidelity.push({ fidelity: 'partial', message: `Holdout “${id}” is attached but isn't in this StatSig snapshot: its share of users (held out in StatSig) will get the feature in LaunchDarkly.`, location: `holdout “${id}”` });
       continue;
     }
     const name = h.name || h.id;
@@ -366,11 +366,11 @@ function holdoutsAttached(ctx: ConditionContext, gate: Gate, holdouts: Holdout[]
         subject: { ...ctx.subject, location: `holdout “${name}”` },
         path: `holdout:${h.id}`,
         title: `Holdout “${name}” holds ${pct}% of users out of this gate`,
-        explanation: `StatSig evaluates the ${h.isGlobal ? 'global ' : ''}holdout before the rules: ${pct}% of ${unit}s${scope} get false whatever the rules say. LD has no holdout on a single flag (LD holdouts are separate populations), so the migrated flag has no held-out share.`,
+        explanation: `StatSig evaluates the ${h.isGlobal ? 'global ' : ''}holdout before the rules: ${pct}% of ${unit}s${scope} get false whatever the rules say. LaunchDarkly has no holdout on a single flag (LaunchDarkly holdouts are separate populations), so the migrated flag has no held-out share.`,
         sourceFragment: { holdoutId: h.id, passPercentage: pct, isGlobal: h.isGlobal, idType: h.idType, targetingGateId: h.targetingGateId },
         fingerprintOf: { holdoutId: h.id, passPercentage: pct },
         options: [
-          { key: 'acknowledge', label: 'Migrate without the holdout', explanation: `${pct}% of users held out in StatSig will get the feature in LD once the flag serves it to them.`, resultingFidelity: 'partial' },
+          { key: 'acknowledge', label: 'Migrate without the holdout', explanation: `${pct}% of users held out in StatSig will get the feature in LaunchDarkly once the flag serves it to them.`, resultingFidelity: 'partial' },
           { key: 'skip', label: 'Keep the gate in StatSig until the holdout ends', explanation: `Skip this item for now. End or remove the holdout in StatSig, then migrate the gate without it.`, resultingFidelity: 'skipped' },
         ],
         recommended: 'acknowledge',
@@ -378,7 +378,7 @@ function holdoutsAttached(ctx: ConditionContext, gate: Gate, holdouts: Holdout[]
       'acknowledge',
     );
     if (choice === 'skip') throw new SkipItem(`holdout “${name}” (${pct}%) is still attached in StatSig`);
-    ctx.fidelity.push({ fidelity: 'partial', message: `Holdout “${name}” (${pct}%) is not carried over: users it holds out in StatSig get the feature in LD.`, location: `holdout “${name}”` });
+    ctx.fidelity.push({ fidelity: 'partial', message: `Holdout “${name}” (${pct}%) is not carried over: users it holds out in StatSig get the feature in LaunchDarkly.`, location: `holdout “${name}”` });
   }
 }
 
@@ -389,8 +389,8 @@ export function expansion(ctx: ConditionContext, ruleId: string, ruleName: strin
       severity: 'blocking',
       subject: { ...ctx.subject, ruleId, ruleName, location: `rule “${ruleName}”` },
       path: `rule:${ruleId}:expansion`,
-      title: `Rule “${ruleName}” expands into ${size} LD rules`,
-      explanation: `Translating this rule's ORs (inlined gates, not_array_contains_all, on) would need more than ${MAX_EXPANSION} LD rules.`,
+      title: `Rule “${ruleName}” expands into ${size} LaunchDarkly rules`,
+      explanation: `Translating this rule's ORs (inlined gates, not_array_contains_all, on) would need more than ${MAX_EXPANSION} LaunchDarkly rules.`,
       sourceFragment: { rule: ruleName, size },
       options: [DROP_RULE, SKIP],
     },
@@ -427,7 +427,7 @@ export function gateReference(ctx: ConditionContext, state: InlineState, o: Gate
           {
             key: 'prerequisite',
             label: `Use “${ref}” as a prerequisite`,
-            explanation: `Every rule requires ${ref}, so an LD prerequisite on the migrated “${ref}” flag is equivalent${o.hasPassOverrides ? ', except that LD checks prerequisites before individual targets: overrides that pass this gate stop applying to users who fail the prerequisite' : ''}. Enterprise plans${ctx.capabilities.prerequisites === 'unknown' ? '; your plan is checked on the first write' : ''}. “${ref}” is migrated to the same environment first.`,
+            explanation: `Every rule requires ${ref}, so a LaunchDarkly prerequisite on the migrated “${ref}” flag is equivalent${o.hasPassOverrides ? ', except that LaunchDarkly checks prerequisites before individual targets: overrides that pass this gate stop applying to users who fail the prerequisite' : ''}. Enterprise plans${ctx.capabilities.prerequisites === 'unknown' ? '; your plan is checked on the first write' : ''}. “${ref}” is migrated to the same environment first.`,
             resultingFidelity: o.hasPassOverrides ? ('partial' as const) : ('full' as const),
           },
         ]
@@ -506,10 +506,10 @@ function overrideTargets(ctx: ConditionContext, overrides: Gate['overrides']): R
 }
 
 function flagShell(ctx: ConditionContext, gate: Gate, alias: string, key: string): DesiredFlagShell {
-  if (key !== gate.id) ctx.fidelity.push({ fidelity: 'full', message: `Flag key “${key}” differs from the StatSig name “${gate.id}” (LD keys allow letters, digits, . _ -).` });
+  if (key !== gate.id) ctx.fidelity.push({ fidelity: 'full', message: `Flag key “${key}” differs from the StatSig name “${gate.id}” (LaunchDarkly keys allow letters, digits, . _ -).` });
   const tags = unique([TAG_MIGRATED, sourceTag(alias), ...gate.tags.map(sanitizeTag)].filter(Boolean));
   const renamed = gate.tags.filter((t) => sanitizeTag(t) !== t);
-  if (renamed.length) ctx.fidelity.push({ fidelity: 'full', message: `Tag${renamed.length === 1 ? '' : 's'} ${renamed.map((t) => `“${t}”`).join(', ')} renamed to fit LD's tag format.` });
+  if (renamed.length) ctx.fidelity.push({ fidelity: 'full', message: `Tag${renamed.length === 1 ? '' : 's'} ${renamed.map((t) => `“${t}”`).join(', ')} renamed to fit LaunchDarkly's tag format.` });
 
   const clientSideAvailability = chooseClientSideAvailability(ctx, gate.targetApps);
 
@@ -542,7 +542,7 @@ export function chooseClientSideAvailability(ctx: ConditionContext, targetApps: 
       subject: { ...ctx.subject, location: 'flag settings' },
       path: 'client_side_availability',
       title: 'Client-side availability',
-      explanation: 'StatSig client SDKs can evaluate every gate. LD flags are only sent to client-side and mobile SDKs when you allow it.',
+      explanation: 'StatSig client SDKs can evaluate every gate. LaunchDarkly flags are only sent to client-side and mobile SDKs when you allow it.',
       sourceFragment: { targetApps },
       fingerprintOf: {},
       options: [

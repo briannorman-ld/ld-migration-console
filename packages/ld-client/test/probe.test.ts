@@ -44,7 +44,7 @@ function mockLd(opts: { serviceToken?: boolean; teams?: number; tokenLookup?: nu
 
 const client = () => new LdClient({ instance: 'us', token: TOKEN, transport: { retry: { baseDelayMs: 1, maxDelayMs: 2 } } });
 
-describe('LD capability probe (PLAN §5.2)', () => {
+describe('LaunchDarkly capability probe (PLAN §5.2)', () => {
   it('builds the capability matrix from read-only probes', async () => {
     mockLd({ teams: 405 });
     const m = await probeCapabilities(client(), 'acme');

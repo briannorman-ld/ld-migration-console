@@ -427,7 +427,7 @@ describe('scheduled changes (PLAN §5.1; time_condition → schedule)', () => {
     expect(scheduledIdsFrom(['fp', '1', 't', 'dh', 'sc:x', 'sc:y'])).toEqual(['x', 'y']);
   });
 
-  it('when LD refuses the scheduled change, the step fails, the capability is learned and nothing half-scheduled is left', async () => {
+  it('when LaunchDarkly refuses the scheduled change, the step fails, the capability is learned and nothing half-scheduled is left', async () => {
     const ld = fakeLd({ createScheduledChange: async () => Promise.reject(new LdWriteError(405, '/scheduled-changes', { message: 'Not available on this plan' })) });
     const learned: unknown[] = [];
     const { ex, run } = setup(ld.client, [shell('a'), scheduledEnv('a')]);
@@ -462,7 +462,7 @@ describe('scheduled changes (PLAN §5.1; time_condition → schedule)', () => {
   });
 });
 
-describe('segment members over LD’s 1,500-target request limit', () => {
+describe('segment members over LaunchDarkly’s 1,500-target request limit', () => {
   const listSegment = (ids: string[]): PlanStep => ({
     id: 'segment:test:wholesale_partners',
     deps: [],
@@ -531,7 +531,7 @@ describe('big segments (PLAN §8.3 big_segment)', () => {
     return { ld, segments };
   };
 
-  it('an LD-source big segment is created without an import, and its sync comment names LaunchDarkly', async () => {
+  it('a LaunchDarkly-source big segment is created without an import, and its sync comment names LaunchDarkly', async () => {
     const { ld, segments } = withSegments();
     const ex = new Executor({ client: ld.client, projectKey: 'p', journal: { save: async () => undefined }, sleep: async () => undefined, now: () => new Date('2026-10-30T00:00:00Z') });
     const step: PlanStep = {
@@ -763,7 +763,7 @@ describe('segment provenance footer', () => {
     expect(parseFooter(once)).toEqual({ from: 'statsig', src: 'web', id: 'vip', fp: 'abc', d: 'd', at: '2026-10-22T00:00:00.000Z' });
   });
 
-  it('writes the source kind into the footer for an LD-source segment (PLAN §20.3)', () => {
+  it('writes the source kind into the footer for a LaunchDarkly-source segment (PLAN §20.3)', () => {
     const f = footer({ sourceKind: 'launchdarkly', sourceAlias: 'legacy', statsigId: 'legacy-beta-orgs', statsigFingerprint: 'abc', decisionSetHash: 'd' }, new Date('2026-10-30T00:00:00Z'));
     expect(f).toBe('[ld-migration: from=launchdarkly; src=legacy; id=legacy-beta-orgs; fp=abc; d=d; at=2026-10-30T00:00:00.000Z]');
     expect(parseFooter(withFooter('Beta orgs', f))?.from).toBe('launchdarkly');

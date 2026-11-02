@@ -16,7 +16,7 @@ export const TYPE_LABEL: Record<string, string> = {
   time_condition: 'Time condition',
   derived_attribute: 'Derived attribute',
   unit_type_kind: 'Unit type → context kind',
-  key_collision: 'LD key already exists',
+  key_collision: 'LaunchDarkly key already exists',
   source_collision: 'Same key in two sources',
   big_segment: 'Big ID list',
   hashed_id_list: 'Hashed ID list',
@@ -25,7 +25,7 @@ export const TYPE_LABEL: Record<string, string> = {
   regex_dialect: 'Regex portability',
   null_check: 'Null check',
   client_side_availability: 'Client-side availability',
-  unsupported_condition: 'No LD equivalent',
+  unsupported_condition: 'No LaunchDarkly equivalent',
   rule_expansion: 'Rule expansion',
   redundant_rules: 'Rules the default rule makes redundant',
   autotune_running: 'Autotune running in StatSig',
@@ -34,7 +34,7 @@ export const TYPE_LABEL: Record<string, string> = {
   variation_change_affects_migrated_env: 'New variation on a migrated flag',
   copy_custom_properties: 'Copy custom properties',
   prerequisite_unsupported: 'Prerequisites not available',
-  maintainer_unknown: 'Owner is not an LD member',
+  maintainer_unknown: 'Owner is not a LaunchDarkly member',
 };
 
 /**
@@ -134,7 +134,7 @@ function CustomKindOption({ decision: d, current, count, onChoose }: { decision:
         <Badge tone={FIDELITY_TONE.full}>full</Badge>
       </div>
       <p className="mt-1 flex-1 text-xs text-fg-muted">
-        The migration creates the LD context kind you name for {unit}, and your app must send a context of that kind. Letters, digits, <code>.</code>, <code>_</code> and <code>-</code>;{' '}
+        The migration creates the LaunchDarkly context kind you name for {unit}, and your app must send a context of that kind. Letters, digits, <code>.</code>, <code>_</code> and <code>-</code>;{' '}
         <code>kind</code> and <code>multi</code> are reserved.
       </p>
       <div className="mt-2 flex items-center gap-2">

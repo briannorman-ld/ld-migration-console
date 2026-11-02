@@ -32,11 +32,11 @@ export function SelectionBar({
         {describeUids(selected)} across the explorers
         {ldEnvs.length ? (
           <>
-            , to LD <b>{ldEnvs.join(', ')}</b>
+            , to LaunchDarkly <b>{ldEnvs.join(', ')}</b>
           </>
         ) : (
           <>
-            ; <b>{env || 'the environment'}</b> is not mapped to an LD environment yet
+            ; <b>{env || 'the environment'}</b> is not mapped to a LaunchDarkly environment yet
           </>
         )}
         .
@@ -61,7 +61,7 @@ export function SelectionBar({
   );
 }
 
-const LABEL: Record<SelectionKind, string> = { gate: 'Gates', config: 'Dynamic configs', autotune: 'Autotunes', flag: 'LD flags', segment: 'Segments', prompt: 'AI Configs' };
+const LABEL: Record<SelectionKind, string> = { gate: 'Gates', config: 'Dynamic configs', autotune: 'Autotunes', flag: 'LaunchDarkly flags', segment: 'Segments', prompt: 'AI Configs' };
 
 /** Where a selection kind is viewed: a StatSig resource list, or the LD-source list. */
 export function viewFor(kind: SelectionKind): { kind: 'resource'; resource: EntityKind } | { kind: 'ld-source'; resource: 'flag' | 'segment' } {

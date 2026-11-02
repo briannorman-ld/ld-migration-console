@@ -30,7 +30,7 @@ function step2(s: ProjectSeed): void {
       pub.passPercentage = 50;
     }
     bump(ncf, 3);
-    if (ncf) ncf.checksPerHour = 12_000; // traffic shifting to LD
+    if (ncf) ncf.checksPerHour = 12_000; // traffic shifting to LaunchDarkly
     // A config gains a new value → variation_change_affects_migrated_env.
     const ship = config('shipping_thresholds');
     ship?.rules.push({ name: 'Australia', conditions: [{ type: 'country', operator: 'any', targetValue: ['AU'] }], returnValue: { free_shipping_min: 90, currency: 'AUD' } });

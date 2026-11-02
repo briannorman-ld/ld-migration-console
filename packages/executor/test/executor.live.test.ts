@@ -92,7 +92,7 @@ describe.skipIf(!enabled)('executor against real LaunchDarkly (writes, then undo
   });
 
   afterAll(async () => {
-    console.log(`LD requests: ${stats.requests}; throttled: ${stats.throttled.length}`, stats.throttled.slice(0, 20));
+    console.log(`LaunchDarkly requests: ${stats.requests}; throttled: ${stats.throttled.length}`, stats.throttled.slice(0, 20));
     // Belt and braces: remove anything with our prefix that survived a failed test.
     for (const f of await client.listFlags(PROJECT)) if (f.key.startsWith(PREFIX)) await client.deleteFlag(PROJECT, f.key).catch(() => undefined);
     for (const sg of await client.listSegments(PROJECT, 'test')) if (sg.key.startsWith(PREFIX)) await client.deleteSegment(PROJECT, 'test', sg.key).catch(() => undefined);

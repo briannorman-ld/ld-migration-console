@@ -66,18 +66,18 @@ function pickMaintainer(ctx: MaintainerContext, entity: { owner?: Owner; team?: 
       ctx.fidelity.push({ fidelity: 'full', message: `${why}; the team “${teamKey}” is the maintainer.`, location: loc });
       return { maintainerTeamKey: teamKey };
     }
-    ctx.fidelity.push({ fidelity: 'partial', message: `${why}: no maintainer in LD (the owner stays in the migration.owner custom property).`, location: loc });
+    ctx.fidelity.push({ fidelity: 'partial', message: `${why}: no maintainer in LaunchDarkly (the owner stays in the migration.owner custom property).`, location: loc });
     return {};
   };
 
   if (!email) {
     if (teamKey) return { maintainerTeamKey: teamKey };
-    if (entity.team) ctx.fidelity.push({ fidelity: 'full', message: `Team “${entity.team}” has no LD team yet; create it on the People step to make it the maintainer.`, location: loc });
+    if (entity.team) ctx.fidelity.push({ fidelity: 'full', message: `Team “${entity.team}” has no LaunchDarkly team yet; create it on the People step to make it the maintainer.`, location: loc });
     return {};
   }
 
   const choice = ctx.profile.maintainers?.[email];
-  if (choice === 'unassigned') return unassigned(`Owner ${email} left without an LD member (People step)`);
+  if (choice === 'unassigned') return unassigned(`Owner ${email} left without a LaunchDarkly member (People step)`);
   if (choice && 'memberId' in choice) return { maintainerId: choice.memberId };
   if (choice && 'teamKey' in choice) return { maintainerTeamKey: choice.teamKey };
 
@@ -87,7 +87,7 @@ function pickMaintainer(ctx: MaintainerContext, entity: { owner?: Owner; team?: 
   const readable = ctx.directory?.membersReadable ?? false;
   const options: DecisionOption[] = [
     { key: 'unassigned', label: 'No maintainer', explanation: 'The flag is created without a maintainer. The owner email stays in the migration.owner custom property, so it can be assigned later.', resultingFidelity: 'partial' },
-    ...(teamKey ? [{ key: teamOption(teamKey), label: `Assign the team “${teamKey}”`, explanation: `${entity.team} exists in LD as a team; the team becomes the maintainer.`, resultingFidelity: 'full' as const }] : []),
+    ...(teamKey ? [{ key: teamOption(teamKey), label: `Assign the team “${teamKey}”`, explanation: `${entity.team} exists in LaunchDarkly as a team; the team becomes the maintainer.`, resultingFidelity: 'full' as const }] : []),
   ];
   const picked = ctx.decisions.choose(
     {
@@ -97,8 +97,8 @@ function pickMaintainer(ctx: MaintainerContext, entity: { owner?: Owner; team?: 
       path: 'maintainer',
       title: `Owner ${email} is not a LaunchDarkly member`,
       explanation: readable
-        ? `No member of the LD account has this email, so the flag cannot carry its owner as maintainer. Invite them on the People step of the guide (they become the maintainer on the next sync), assign the team, pick another member, or leave it unassigned.`
-        : `This token cannot list the LD account's members, so owners cannot be matched. Connect with a token that may read members, invite the owner, or leave the flag without a maintainer.`,
+        ? `No member of the LaunchDarkly account has this email, so the flag cannot carry its owner as maintainer. Invite them on the People step of the guide (they become the maintainer on the next sync), assign the team, pick another member, or leave it unassigned.`
+        : `This token cannot list the LaunchDarkly account's members, so owners cannot be matched. Connect with a token that may read members, invite the owner, or leave the flag without a maintainer.`,
       sourceFragment: entity.owner,
       fingerprintOf: { email, team: teamKey ?? null },
       options,
@@ -108,6 +108,6 @@ function pickMaintainer(ctx: MaintainerContext, entity: { owner?: Owner; team?: 
   );
   if (picked.startsWith('team:')) return { maintainerTeamKey: picked.slice('team:'.length) };
   if (picked.startsWith('member:')) return { maintainerId: picked.slice('member:'.length) };
-  ctx.fidelity.push({ fidelity: 'partial', message: `Owner ${email} is not an LD member: no maintainer (kept in migration.owner).`, location: loc });
+  ctx.fidelity.push({ fidelity: 'partial', message: `Owner ${email} is not a LaunchDarkly member: no maintainer (kept in migration.owner).`, location: loc });
   return {};
 }

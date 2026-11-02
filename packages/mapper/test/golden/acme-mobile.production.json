@@ -109,7 +109,7 @@
       "name": "new_checkout_flow",
       "fidelity": "partial",
       "notes": [
-        "partial: 50% rollout re-buckets users (StatSig and LD hash differently). [rule “App 5.2+ (50%)”]"
+        "partial: 50% rollout re-buckets users (StatSig and LaunchDarkly hash differently). [rule “App 5.2+ (50%)”]"
       ],
       "decisions": [
         "choice client_side_availability (flag settings) → both",
@@ -189,10 +189,10 @@
       "notes": [
         "partial: Your app must send “osName” (StatSig derived it from the user agent). [rule “iOS 13+” › condition 1]",
         "partial: Your app must send “osVersion” (StatSig derived it from the user agent). [rule “iOS 13+” › condition 2]",
-        "full: Version “13.0” → “13.0.0” for LD semver (StatSig pads missing parts with 0 and ignores leading zeros, so this is exact). [rule “iOS 13+” › condition 2]",
+        "full: Version “13.0” → “13.0.0” for LaunchDarkly semver (StatSig pads missing parts with 0 and ignores leading zeros, so this is exact). [rule “iOS 13+” › condition 2]",
         "partial: Your app must send “osName” (StatSig derived it from the user agent). [rule “Android 10+” › condition 1]",
         "partial: Your app must send “osVersion” (StatSig derived it from the user agent). [rule “Android 10+” › condition 2]",
-        "full: Version “10” → “10.0.0” for LD semver (StatSig pads missing parts with 0 and ignores leading zeros, so this is exact). [rule “Android 10+” › condition 2]"
+        "full: Version “10” → “10.0.0” for LaunchDarkly semver (StatSig pads missing parts with 0 and ignores leading zeros, so this is exact). [rule “Android 10+” › condition 2]"
       ],
       "decisions": [
         "choice client_side_availability (flag settings) → both",
@@ -476,7 +476,7 @@
       "name": "beta_channel_features",
       "fidelity": "partial",
       "notes": [
-        "partial: Version “5.3.0-beta” → “5.3.0”: prerelease builds sort below the release in LD. [rule “Beta builds 5.3+” › condition 1]"
+        "partial: Version “5.3.0-beta” → “5.3.0”: prerelease builds sort below the release in LaunchDarkly. [rule “Beta builds 5.3+” › condition 1]"
       ],
       "decisions": [
         "choice client_side_availability (flag settings) → both",

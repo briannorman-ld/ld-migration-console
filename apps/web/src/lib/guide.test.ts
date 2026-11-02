@@ -6,7 +6,7 @@ const blocking = { severity: 'blocking' } as DecisionPoint;
 const choice = { severity: 'choice' } as DecisionPoint;
 
 describe('guide: where an item stands', () => {
-  it('skipped and blocked win over what LD holds; otherwise LD decides', () => {
+  it('skipped and blocked win over what LaunchDarkly holds; otherwise LaunchDarkly decides', () => {
     expect(classify({ skipped: 'archived', unresolved: [blocking] }, { status: 'in_sync' })).toBe('skipped');
     expect(classify({ unresolved: [blocking] }, { status: 'in_sync' })).toBe('blocked');
     expect(classify({ unresolved: [choice] }, { status: 'in_sync' })).toBe('in_sync');
@@ -99,7 +99,7 @@ describe('guide: people and teams (PLAN §8.3)', () => {
       ...over,
     }) as never;
 
-  it('groups owners by email across kinds, counts their live items and matches LD members case-insensitively', () => {
+  it('groups owners by email across kinds, counts their live items and matches LaunchDarkly members case-insensitively', () => {
     const p = computePeople([snapshot], m(), { membersReadable: true, teamsReadable: true, canInvite: true, canCreateTeams: true });
     expect(p.owners.map((o) => [o.email, o.items, o.status, o.team ?? null])).toEqual([
       ['bob@acme.example', 2, 'member', 'Checkout'],
@@ -162,24 +162,24 @@ describe('guide: people and teams (PLAN §8.3)', () => {
     expect(provisionedBy('people', 'launchdarkly')).toBeUndefined();
   });
 
-  it('an invitation carries the LD keys of the teams the owner is in, when those teams exist', () => {
+  it('an invitation carries the LaunchDarkly keys of the teams the owner is in, when those teams exist', () => {
     const teams = [
       { name: 'Checkout', memberEmails: ['bob@acme.example', 'Gone@acme.example'], items: 2, status: 'exists' as const, ldKey: 'checkout', ldMemberIds: [] },
       { name: 'Search', memberEmails: [], items: 1, status: 'missing' as const, ldMemberIds: [] },
       { name: 'Platform', memberEmails: [], items: 0, status: 'exists' as const, ldKey: 'platform', ldMemberIds: [] },
     ];
     expect(teamKeysFor({ email: 'gone@acme.example', team: 'Platform' }, teams)).toEqual(['checkout', 'platform']); // member of one, items in another
-    expect(teamKeysFor({ email: 'priya@acme.example', team: 'Search' }, teams)).toEqual([]); // Search is not in LD yet
+    expect(teamKeysFor({ email: 'priya@acme.example', team: 'Search' }, teams)).toEqual([]); // Search is not in LaunchDarkly yet
     expect(teamKeysFor({ email: 'nobody@acme.example' }, teams)).toEqual([]);
   });
 });
 
-describe('guide: the saved LD listing', () => {
+describe('guide: the saved LaunchDarkly listing', () => {
   it('marks the tallies as of the saved read while the live refresh runs, and drops the mark once it has landed', () => {
     const base: GuideInput = { sources: [], snapshots: [], m: null, env: '', decisions: [], monitoring: { attention: 0, rows: 0, loaded: false }, interruptedRuns: 0 };
     const m = (ld: Partial<NonNullable<GuideInput['m']>['ld']>) => ({ ...base, m: { ld: { status: 'connected', projectKey: 'p1', matrix: { capabilities: [], environments: [] }, ...ld }, connected: true, capabilities: {} } as unknown as NonNullable<GuideInput['m']> });
     expect(computeGuide(m({ stale: '2026-11-02T10:00:00Z' })).ldAsOf).toEqual({ at: '2026-11-02T10:00:00Z', refreshing: true });
-    expect(computeGuide(m({ stale: '2026-11-02T10:00:00Z', error: 'Could not read the LD project: 503' })).ldAsOf).toEqual({ at: '2026-11-02T10:00:00Z', refreshing: false });
+    expect(computeGuide(m({ stale: '2026-11-02T10:00:00Z', error: 'Could not read the LaunchDarkly project: 503' })).ldAsOf).toEqual({ at: '2026-11-02T10:00:00Z', refreshing: false });
     expect(computeGuide(m({})).ldAsOf).toBeUndefined();
     expect(computeGuide(base).ldAsOf).toBeUndefined();
   });

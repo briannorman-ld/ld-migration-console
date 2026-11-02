@@ -5,7 +5,7 @@ import vercel from '../vercel.json';
 const directive = (csp: string, name: string) => csp.split('; ').find((d) => d.startsWith(`${name} `))?.split(' ').slice(1) ?? [];
 
 describe('Content-Security-Policy', () => {
-  it('limits connect-src to self + the StatSig and LD API hosts in production', () => {
+  it('limits connect-src to self + the StatSig and LaunchDarkly API hosts in production', () => {
     const csp = buildCsp('production');
     expect(directive(csp, 'connect-src')).toEqual(["'self'", ...CONNECT_HOSTS]);
     expect(directive(csp, 'script-src')).toEqual(["'self'"]);

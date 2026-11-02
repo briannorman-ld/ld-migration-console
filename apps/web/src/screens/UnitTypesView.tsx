@@ -36,8 +36,8 @@ export function UnitTypesView({ sources, snapshots, m, onConnect, onDecisions }:
       <div>
         <h2 className="font-display text-xl font-semibold tracking-tight">Unit types</h2>
         <p className="mt-1 text-sm text-fg-muted">
-          StatSig buckets and targets by unit types; LaunchDarkly by context kinds. Choose once per unit type where its IDs go: the key of a context kind (created by the migration if LD lacks
-          it), or an attribute of a context kind: <code>user</code>, a kind LD already has, or one this migration creates for another unit type. A custom unit ID is never the key of the{' '}
+          StatSig buckets and targets by unit types; LaunchDarkly by context kinds. Choose once per unit type where its IDs go: the key of a context kind (created by the migration if LaunchDarkly lacks
+          it), or an attribute of a context kind: <code>user</code>, a kind LaunchDarkly already has, or one this migration creates for another unit type. A custom unit ID is never the key of the{' '}
           <code>user</code> context. Unit types left on their default ask per item on the{' '}
           <button type="button" className="text-link hover:underline" onClick={onDecisions}>
             Decisions
@@ -55,7 +55,7 @@ export function UnitTypesView({ sources, snapshots, m, onConnect, onDecisions }:
       )}
       {m.connected && m.ld.probing && (
         <p className="flex items-center gap-2 text-xs text-fg-muted">
-          <Spinner /> Refreshing the LD project ({m.ld.probing})…
+          <Spinner /> Refreshing the LaunchDarkly project ({m.ld.probing})…
         </p>
       )}
       {withSnap.map(({ source: s, snapshot }) => {
@@ -153,7 +153,7 @@ export function UnitTypesView({ sources, snapshots, m, onConnect, onDecisions }:
 }
 
 const STANDING: Record<UnitTypeStanding['kind'], { tone: 'green' | 'blue' | 'amber' | 'slate'; label: string }> = {
-  exists: { tone: 'green', label: 'exists in LD' },
+  exists: { tone: 'green', label: 'exists in LaunchDarkly' },
   creates: { tone: 'blue', label: 'will be created' },
   attribute: { tone: 'slate', label: 'attribute' },
   asks: { tone: 'amber', label: 'asks per item' },
@@ -274,7 +274,7 @@ function UnitTypeRow({
               ))}
           </datalist>
           {value && (
-            <Button variant="ghost" className="py-1 text-xs" onClick={reset} title="Back to the default: the mapper proposes a kind and asks per item if LD lacks it">
+            <Button variant="ghost" className="py-1 text-xs" onClick={reset} title="Back to the default: the mapper proposes a kind and asks per item if LaunchDarkly lacks it">
               Reset
             </Button>
           )}
@@ -288,19 +288,19 @@ function UnitTypeRow({
             {standing.kind === 'attribute' && (
               <>
                 attribute <code className="font-mono">{standing.target.attribute}</code> of kind <code className="font-mono">{standing.target.contextKind}</code>
-                {standing.kindExists ? (connected || standing.target.contextKind === 'user' ? '' : ' (LD not connected)') : !canCreate ? ' — the kind is missing and this token cannot create kinds; an admin must' : connected ? ' — the kind will be created' : ' — the kind will be created (LD not connected)'}
+                {standing.kindExists ? (connected || standing.target.contextKind === 'user' ? '' : ' (LaunchDarkly not connected)') : !canCreate ? ' — the kind is missing and this token cannot create kinds; an admin must' : connected ? ' — the kind will be created' : ' — the kind will be created (LaunchDarkly not connected)'}
               </>
             )}
             {standing.kind === 'exists' && (
               <>
                 kind <code className="font-mono">{standing.target.contextKind}</code>
-                {!connected && standing.target.contextKind !== 'user' ? ' (LD not connected)' : ''}
+                {!connected && standing.target.contextKind !== 'user' ? ' (LaunchDarkly not connected)' : ''}
               </>
             )}
             {standing.kind === 'creates' && (
               <>
                 kind <code className="font-mono">{standing.target.contextKind}</code>
-                {!canCreate ? ' — this token cannot create kinds; an admin must' : connected ? '' : ' (LD not connected)'}
+                {!canCreate ? ' — this token cannot create kinds; an admin must' : connected ? '' : ' (LaunchDarkly not connected)'}
               </>
             )}
             {standing.kind === 'asks' &&
@@ -310,7 +310,7 @@ function UnitTypeRow({
                 </>
               ) : (
                 <>
-                  default <code className="font-mono">{standing.target.contextKind}</code>, missing in LD: each item asks. Set it here to answer once.
+                  default <code className="font-mono">{standing.target.contextKind}</code>, missing in LaunchDarkly: each item asks. Set it here to answer once.
                 </>
               ))}
           </span>

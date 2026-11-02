@@ -30,6 +30,6 @@ export function scheduledChanges(ctx: ConditionContext, inline: InlineState, tra
       state: { on: env.on, offVariation: env.offVariation, fallthrough: env.fallthrough, rules: env.rules, targets: env.targets, prerequisites: env.prerequisites },
     });
   }
-  if (out.length) ctx.fidelity.push({ fidelity: 'full', message: `${out.length} LD scheduled change${out.length === 1 ? '' : 's'} (${out.map((c) => c.executionDate).join(', ')}) flip the targeting when the time conditions do.` });
+  if (out.length) ctx.fidelity.push({ fidelity: 'full', message: `${out.length} LaunchDarkly scheduled change${out.length === 1 ? '' : 's'} (${out.map((c) => c.executionDate).join(', ')}) flip the targeting when the time conditions do.` });
   return out;
 }

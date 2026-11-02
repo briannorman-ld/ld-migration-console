@@ -111,7 +111,7 @@ export function mapAutotune(args: MapArgs<Autotune>): AutotuneMapResult {
     const contextKind = unit.contextKind;
     const arms = buildArms(ctx, a);
     if (arms.length < 2) throw new SkipItem(`has a single value “${arms[0]?.name ?? ''}” (nothing to tune: hard-code it, or create a plain flag)`);
-    if (flagKey !== a.id) fidelity.push({ fidelity: 'full', message: `Flag key “${flagKey}” differs from the StatSig name “${a.id}” (LD keys allow letters, digits, . _ -).` });
+    if (flagKey !== a.id) fidelity.push({ fidelity: 'full', message: `Flag key “${flagKey}” differs from the StatSig name “${a.id}” (LaunchDarkly keys allow letters, digits, . _ -).` });
 
     // What the flag serves in this environment (PLAN §11 table, applied to autotunes).
     let on = false;
@@ -123,7 +123,7 @@ export function mapAutotune(args: MapArgs<Autotune>): AutotuneMapResult {
       on = true;
       serve = { variation: w };
       bandit = false;
-      fidelity.push({ fidelity: 'full', message: `Concluded in StatSig: winner “${arms[w]!.name}” is served to everyone, so no bandit is created in LD.` });
+      fidelity.push({ fidelity: 'full', message: `Concluded in StatSig: winner “${arms[w]!.name}” is served to everyone, so no bandit is created in LaunchDarkly.` });
     } else {
       if (state === 'running') {
         const choice = decisions.choose(
@@ -133,21 +133,21 @@ export function mapAutotune(args: MapArgs<Autotune>): AutotuneMapResult {
             subject,
             path: 'running',
             title: 'Running in StatSig: wait for a winner, or pre-stage the bandit?',
-            explanation: `This autotune is still exploring ${arms.length} arms in StatSig. LD can't take over its learned allocation: a new LD bandit starts from equal traffic and learns again. The default is to wait and migrate the winner once StatSig picks it.`,
+            explanation: `This autotune is still exploring ${arms.length} arms in StatSig. LaunchDarkly can't take over its learned allocation: a new LaunchDarkly bandit starts from equal traffic and learns again. The default is to wait and migrate the winner once StatSig picks it.`,
             sourceFragment: { isStarted: a.isStarted, winner: a.winner, variants: a.variants.map((v) => v.name) },
             fingerprintOf: { isStarted: a.isStarted },
             options: [
               { key: 'wait', label: 'Wait: migrate after StatSig picks a winner', explanation: 'Skip for now. The item shows “running in StatSig”; once it concludes, the winner migrates as a flag at 100%.', resultingFidelity: 'skipped' },
-              { key: 'prestage', label: 'Pre-stage: flag (off) and a draft bandit now', explanation: 'Creates the JSON flag, the success metric and an LD bandit draft. Nothing is served until you turn the flag on and start the bandit in LD.', resultingFidelity: 'partial' },
+              { key: 'prestage', label: 'Pre-stage: flag (off) and a draft bandit now', explanation: 'Creates the JSON flag, the success metric and a LaunchDarkly bandit draft. Nothing is served until you turn the flag on and start the bandit in LaunchDarkly.', resultingFidelity: 'partial' },
             ],
             recommended: 'wait',
           },
           'wait',
         );
         if (choice === 'wait') throw new SkipItem(`running in StatSig (${arms.length} arms); migrate after it picks a winner`);
-        fidelity.push({ fidelity: 'partial', message: `Pre-staged while running in StatSig: the LD bandit starts from equal traffic; StatSig's learned allocation doesn't carry over.` });
+        fidelity.push({ fidelity: 'partial', message: `Pre-staged while running in StatSig: the LaunchDarkly bandit starts from equal traffic; StatSig's learned allocation doesn't carry over.` });
       } else {
-        fidelity.push({ fidelity: 'full', message: `Not started in StatSig: the flag is created off with a draft bandit. Start it from LD when ready.` });
+        fidelity.push({ fidelity: 'full', message: `Not started in StatSig: the flag is created off with a draft bandit. Start it from LaunchDarkly when ready.` });
       }
       serve = { rollout: rolloutFor(unit, arms.map((x, i) => ({ variation: i, weight: x.weight }))) };
     }
@@ -169,7 +169,7 @@ export function mapAutotune(args: MapArgs<Autotune>): AutotuneMapResult {
           analysisUnits: [contextKind],
         };
         deps.set(`metric:${key}`, { kind: 'metric', key, entityId: a.successEvent });
-        fidelity.push({ fidelity: 'full', message: `Success event “${a.successEvent}” becomes the LD metric “${key}”. Your app must send it through LD track("${a.successEvent}").` });
+        fidelity.push({ fidelity: 'full', message: `Success event “${a.successEvent}” becomes the LaunchDarkly metric “${key}”. Your app must send it through LaunchDarkly track("${a.successEvent}").` });
       } else {
         const fromSpec = a.completeness.missing.includes('metrics');
         const choice = decisions.choose(
@@ -180,12 +180,12 @@ export function mapAutotune(args: MapArgs<Autotune>): AutotuneMapResult {
             path: 'metric',
             title: 'No success event: the bandit has nothing to optimize',
             explanation: fromSpec
-              ? 'Config specs don’t carry an autotune’s success event. Connect this project through the Console API to migrate the bandit, or create the flag only and add the metric and bandit in LD by hand.'
-              : 'This autotune has no success event in StatSig, so LD can’t create a bandit for it.',
+              ? 'Config specs don’t carry an autotune’s success event. Connect this project through the Console API to migrate the bandit, or create the flag only and add the metric and bandit in LaunchDarkly by hand.'
+              : 'This autotune has no success event in StatSig, so LaunchDarkly can’t create a bandit for it.',
             sourceFragment: { successEvent: a.successEvent ?? null, missing: a.completeness.missing },
             fingerprintOf: { fromSpec },
             options: [
-              { key: 'flag_only', label: 'Create the flag only', explanation: 'The JSON flag is created off with equal traffic to every arm. Create a metric and the bandit in LD yourself.', resultingFidelity: 'manual' },
+              { key: 'flag_only', label: 'Create the flag only', explanation: 'The JSON flag is created off with equal traffic to every arm. Create a metric and the bandit in LaunchDarkly yourself.', resultingFidelity: 'manual' },
               SKIP,
             ],
           },
@@ -193,18 +193,18 @@ export function mapAutotune(args: MapArgs<Autotune>): AutotuneMapResult {
         );
         if (choice === 'skip') throw new SkipItem('has no success event to turn into a metric');
         bandit = false;
-        fidelity.push({ fidelity: 'manual', message: 'No success event: the flag is created without a bandit. Add a metric and a multi-armed bandit on it in LD.' });
+        fidelity.push({ fidelity: 'manual', message: 'No success event: the flag is created without a bandit. Add a metric and a multi-armed bandit on it in LaunchDarkly.' });
       }
     }
-    if (bandit && unit.attribute !== 'key') fidelity.push({ fidelity: 'partial', message: `Randomizes by the user key: LD experiments randomize by context kind, not by the user attribute “${unit.attribute}” that ${a.idType} maps to.` });
+    if (bandit && unit.attribute !== 'key') fidelity.push({ fidelity: 'partial', message: `Randomizes by the user key: LaunchDarkly experiments randomize by context kind, not by the user attribute “${unit.attribute}” that ${a.idType} maps to.` });
     if (bandit && contextKind !== 'user') {
       deps.set(`randomization_unit:${contextKind}`, { kind: 'randomization_unit', key: contextKind, entityId: a.idType });
-      fidelity.push({ fidelity: 'full', message: `Randomizes by “${contextKind}”: the migration enables it as a randomization unit in the LD project's experimentation settings.` });
+      fidelity.push({ fidelity: 'full', message: `Randomizes by “${contextKind}”: the migration enables it as a randomization unit in the LaunchDarkly project's experimentation settings.` });
     }
 
     const tags = unique([TAG_MIGRATED, sourceTag(alias), ...a.tags.map(sanitizeTag)].filter(Boolean));
     const renamed = a.tags.filter((t) => sanitizeTag(t) !== t);
-    if (renamed.length) fidelity.push({ fidelity: 'full', message: `Tag${renamed.length === 1 ? '' : 's'} ${renamed.map((t) => `“${t}”`).join(', ')} renamed to fit LD's tag format.` });
+    if (renamed.length) fidelity.push({ fidelity: 'full', message: `Tag${renamed.length === 1 ? '' : 's'} ${renamed.map((t) => `“${t}”`).join(', ')} renamed to fit LaunchDarkly's tag format.` });
     const shell: DesiredFlagShell = {
       key: flagKey,
       name: a.name || a.id,
@@ -237,7 +237,7 @@ export function mapAutotune(args: MapArgs<Autotune>): AutotuneMapResult {
             tags,
           }
         : null;
-    if (desiredBandit) fidelity.push({ fidelity: 'full', message: `“${arms[0]!.name}” is the bandit's baseline arm (LD needs one; StatSig has none).` });
+    if (desiredBandit) fidelity.push({ fidelity: 'full', message: `“${arms[0]!.name}” is the bandit's baseline arm (LaunchDarkly needs one; StatSig has none).` });
     return finish({ shell, env: desiredEnv, bandit: desiredBandit, metric });
   } catch (e) {
     if (e instanceof SkipItem) return skip(e.reason);
@@ -272,10 +272,10 @@ function buildArms(ctx: ConditionContext, a: Autotune): Arm[] {
         subject: ctx.subject,
         path: 'duplicate_values',
         title: `${dupes.length === 1 ? 'Two variants serve' : 'Several variants serve'} the same value`,
-        explanation: `LD flag variations must have distinct values. ${dupes.map((d) => d.names.map((n) => `“${n}”`).join(' and ')).join('; ')} return identical JSON, so LD can't tell them apart.`,
+        explanation: `LaunchDarkly flag variations must have distinct values. ${dupes.map((d) => d.names.map((n) => `“${n}”`).join(' and ')).join('; ')} return identical JSON, so LaunchDarkly can't tell them apart.`,
         sourceFragment: dupes.map((d) => ({ variants: d.names, json: d.value })),
         options: [
-          { key: 'merge', label: 'Merge them into one arm', explanation: 'One LD variation (and bandit arm) with their combined traffic. Users see the same values as in StatSig; the bandit just has fewer arms.', resultingFidelity: 'partial' },
+          { key: 'merge', label: 'Merge them into one arm', explanation: 'One LaunchDarkly variation (and bandit arm) with their combined traffic. Users see the same values as in StatSig; the bandit just has fewer arms.', resultingFidelity: 'partial' },
           SKIP,
         ],
         recommended: 'merge',

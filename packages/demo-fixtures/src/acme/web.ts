@@ -231,7 +231,7 @@ export function acmeWeb(): ProjectSeed {
       },
       {
         id: 'cross_sell_matrix',
-        description: 'Cross-sell for shoppers missing items in two category sets. Two not_array_contains_all conditions multiply into 12 LD rules (cap 10).',
+        description: 'Cross-sell for shoppers missing items in two category sets. Two not_array_contains_all conditions multiply into 12 LaunchDarkly rules (cap 10).',
         owner: P.priya,
         tags: ['search'],
         rules: [
@@ -284,21 +284,21 @@ export function acmeWeb(): ProjectSeed {
       },
       {
         id: 'pwa_offline_mode',
-        description: 'Offline mode for PWA shell 1.2+. Two-part version target: StatSig pads it to 1.2.0; LD semver wants three parts (exact after padding).',
+        description: 'Offline mode for PWA shell 1.2+. Two-part version target: StatSig pads it to 1.2.0; LaunchDarkly semver wants three parts (exact after padding).',
         owner: P.marco,
         tags: ['growth'],
         rules: [{ name: 'Shell 1.2+', conditions: [{ type: 'app_version', operator: 'version_gte', targetValue: '1.2' }] }],
       },
       {
         id: 'pos_firmware_sync',
-        description: 'In-store POS sync for firmware 2.1.0.450+. Four-part build version: StatSig compares all four parts; LD semver never matches a four-part string.',
+        description: 'In-store POS sync for firmware 2.1.0.450+. Four-part build version: StatSig compares all four parts; LaunchDarkly semver never matches a four-part string.',
         owner: P.marco,
         tags: ['platform'],
         rules: [{ name: 'Firmware 2.1.0.450+', conditions: [{ type: 'custom_field', field: 'firmware_version', operator: 'version_gte', targetValue: '2.1.0.450' }] }],
       },
       {
         id: 'eu_cookie_banner',
-        description: 'Cookie consent banner in the EU (country derived from IP). Tagged “★ Core”, which LD tags cannot spell.',
+        description: 'Cookie consent banner in the EU (country derived from IP). Tagged “★ Core”, which LaunchDarkly tags cannot spell.',
         owner: P.alice,
         tags: ['platform', '★ Core'],
         type: 'PERMANENT',
@@ -344,7 +344,7 @@ export function acmeWeb(): ProjectSeed {
       },
       {
         id: 'qa_debug_panel',
-        description: 'Debug panel enabled only in the custom qa environment (no LD match).',
+        description: 'Debug panel enabled only in the custom qa environment (no LaunchDarkly match).',
         owner: P.sam,
         tags: ['platform'],
         rules: [{ name: 'QA everyone', environments: ['qa'], conditions: [{ type: 'public' }] }],
@@ -385,7 +385,7 @@ export function acmeWeb(): ProjectSeed {
       },
       {
         id: 'anon_homepage_variant',
-        description: 'Homepage variant for anonymous visitors, bucketed by stableID (LD “device” context kind).',
+        description: 'Homepage variant for anonymous visitors, bucketed by stableID (LaunchDarkly “device” context kind).',
         owner: P.marco,
         idType: 'stableID',
         tags: ['growth'],
@@ -400,7 +400,7 @@ export function acmeWeb(): ProjectSeed {
       },
       {
         id: 'labs_menu',
-        description: 'Labs menu for the staff_or_beta segment, which references a gate (inlined into the LD segment).',
+        description: 'Labs menu for the staff_or_beta segment, which references a gate (inlined into the LaunchDarkly segment).',
         owner: P.marco,
         tags: ['growth'],
         rules: [{ name: 'Labs', conditions: [{ type: 'passes_segment', targetValue: 'staff_or_beta' }] }],
@@ -446,14 +446,14 @@ export function acmeWeb(): ProjectSeed {
       },
       {
         id: 'loyalty_tier_perks',
-        description: 'Perks for loyalty tiers 2 and 3. Numeric target values: StatSig compares them as strings, LD `in` compares typed values.',
+        description: 'Perks for loyalty tiers 2 and 3. Numeric target values: StatSig compares them as strings, LaunchDarkly `in` compares typed values.',
         owner: P.marco,
         tags: ['growth'],
         rules: [{ name: 'Tier 2+', conditions: [{ type: 'custom_field', field: 'loyalty_tier', operator: 'any', targetValue: [2, 3] }] }],
       },
       {
         id: 'legacy_partner_allowlist',
-        description: 'Legacy allowlist on the deprecated encoded_any operator (hashed values). Current StatSig SDKs and LD have no equivalent.',
+        description: 'Legacy allowlist on the deprecated encoded_any operator (hashed values). Current StatSig SDKs and LaunchDarkly have no equivalent.',
         owner: P.former,
         tags: ['platform'],
         rules: [{ name: 'Encoded partners', conditions: [{ type: 'custom_field', field: 'partner_code', operator: 'encoded_any', targetValue: ['Z3ZhQ2xpZW50', 'c2VydmljZTE='] }] }],
@@ -519,7 +519,7 @@ export function acmeWeb(): ProjectSeed {
       },
       {
         id: 'clearance_category_badge',
-        description: 'Clearance badge for category IDs 12 and 48. Numeric array targets: StatSig matches only numbers in the array; LD `in` is typed too, but apps often send IDs as strings.',
+        description: 'Clearance badge for category IDs 12 and 48. Numeric array targets: StatSig matches only numbers in the array; LaunchDarkly `in` is typed too, but apps often send IDs as strings.',
         owner: P.priya,
         tags: ['search'],
         rules: [{ name: 'Clearance categories', conditions: [{ type: 'custom_field', field: 'category_ids', operator: 'array_contains_any', targetValue: [12, 48] }] }],
@@ -527,7 +527,7 @@ export function acmeWeb(): ProjectSeed {
       // --- MANUAL condition types --------------------------------------------------------------
       {
         id: 'storefront_url_banner',
-        description: 'Banner on specific URLs (url condition: no LD equivalent).',
+        description: 'Banner on specific URLs (url condition: no LaunchDarkly equivalent).',
         owner: P.marco,
         tags: ['growth'],
         targetApps: ['storefront-client-only'],
@@ -587,7 +587,7 @@ export function acmeWeb(): ProjectSeed {
       },
       {
         id: 'Holiday Banner 2026',
-        description: 'Name with spaces and capitals: legal in StatSig, but LD keys allow only letters, digits, “.”, “_” and “-”.',
+        description: 'Name with spaces and capitals: legal in StatSig, but LaunchDarkly keys allow only letters, digits, “.”, “_” and “-”.',
         owner: P.marco,
         tags: ['growth'],
         rules: [{ name: 'Everyone', conditions: [{ type: 'public' }] }],
@@ -694,7 +694,7 @@ export function acmeWeb(): ProjectSeed {
       },
       {
         id: 'maintenance_mode',
-        description: 'Maintenance page copy. Same name as the maintenance_mode gate: StatSig namespaces gates and configs separately, LD keys are one namespace.',
+        description: 'Maintenance page copy. Same name as the maintenance_mode gate: StatSig namespaces gates and configs separately, LaunchDarkly keys are one namespace.',
         owner: P.sam,
         tags: ['platform'],
         defaultValue: { message: 'We will be back shortly.', eta_minutes: 30 },
@@ -758,7 +758,7 @@ export function acmeWeb(): ProjectSeed {
       {
         id: 'staff_or_beta',
         type: 'rule_based',
-        description: 'Staff (via the employees_only gate) or beta opt-ins. A gate reference inside a segment must inline: LD segments have no prerequisites.',
+        description: 'Staff (via the employees_only gate) or beta opt-ins. A gate reference inside a segment must inline: LaunchDarkly segments have no prerequisites.',
         owner: P.marco,
         rules: [
           { name: 'Staff', conditions: [{ type: 'passes_gate', targetValue: 'employees_only' }] },
@@ -768,14 +768,14 @@ export function acmeWeb(): ProjectSeed {
       {
         id: 'early_adopters',
         type: 'rule_based',
-        description: 'Users in the new checkout rollout. References a gate with a partial rollout, which cannot be inlined into an LD segment.',
+        description: 'Users in the new checkout rollout. References a gate with a partial rollout, which cannot be inlined into a LaunchDarkly segment.',
         owner: P.bob,
         rules: [{ name: 'New checkout', conditions: [{ type: 'passes_gate', targetValue: 'new_checkout_flow' }] }],
       },
       {
         id: 'beta_or_vip',
         type: 'rule_based',
-        description: 'Beta opt-ins or VIP customers. A segment whose rules match other segments: LD wants those segments in the environment first (KNOWN-EDGE-CASES 9.15).',
+        description: 'Beta opt-ins or VIP customers. A segment whose rules match other segments: LaunchDarkly wants those segments in the environment first (KNOWN-EDGE-CASES 9.15).',
         owner: P.marco,
         rules: [
           { name: 'Beta', conditions: [{ type: 'passes_segment', targetValue: 'beta_testers' }] },
@@ -806,7 +806,7 @@ export function acmeWeb(): ProjectSeed {
       {
         id: 'fraud_blocklist',
         type: 'id_list',
-        description: 'Users blocked by the fraud team. 20k IDs → LD big segment.',
+        description: 'Users blocked by the fraud team. 20k IDs → LaunchDarkly big segment.',
         owner: P.sam,
         idList: { pattern: 'fraud-user-{n}', count: 20000, pad: 6 },
       },
@@ -980,7 +980,7 @@ export function acmeWeb(): ProjectSeed {
       {
         // 11.8: not started → JSON flag (off) + metric + drafted bandit.
         id: 'hero_image_autotune',
-        description: 'Not started yet: homepage hero image candidates (drafted as an LD bandit).',
+        description: 'Not started yet: homepage hero image candidates (drafted as a LaunchDarkly bandit).',
         owner: P.marco,
         successEvent: 'hero_click',
         isStarted: false,
@@ -1017,7 +1017,7 @@ export function acmeWeb(): ProjectSeed {
       {
         // 11.12: two variants with identical JSON → duplicate_variant_value (merge or skip).
         id: 'free_shipping_copy_autotune',
-        description: 'Two variants return the same JSON (LD variations must be distinct).',
+        description: 'Two variants return the same JSON (LaunchDarkly variations must be distinct).',
         owner: P.marco,
         successEvent: 'checkout_start',
         isStarted: false,
@@ -1030,7 +1030,7 @@ export function acmeWeb(): ProjectSeed {
       {
         // 11.13: companyID autotune → bandit randomized by the “company” context kind (randomization unit).
         id: 'b2b_pricing_autotune',
-        description: 'Randomized by companyID: the LD bandit needs “company” as a randomization unit.',
+        description: 'Randomized by companyID: the LaunchDarkly bandit needs “company” as a randomization unit.',
         owner: P.dana,
         successEvent: 'quote_requested',
         isStarted: false,
@@ -1050,7 +1050,7 @@ export function acmeWeb(): ProjectSeed {
       {
         name: 'engagement_score',
         type: 'composite',
-        description: 'Composite of clicks and purchases (no LD equivalent).',
+        description: 'Composite of clicks and purchases (no LaunchDarkly equivalent).',
         owner: P.marco,
         components: [{ name: 'purchase_count', type: 'event_count_custom' }, { name: 'promo_clicks', type: 'event_count_custom' }],
       },

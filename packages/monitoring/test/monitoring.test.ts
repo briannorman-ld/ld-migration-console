@@ -79,7 +79,7 @@ describe('monitorRows', () => {
     ]);
   });
 
-  it('distinguishes StatSig changed, LD changed and conflict', () => {
+  it('distinguishes StatSig changed, LaunchDarkly changed and conflict', () => {
     const later = Date.parse(SYNCED) + 86400_000;
     const ss = monitorRows({ items: [item({ statsigFingerprint: 'fp2' })], ldFlags: flags(flag()), statuses: {}, settings: [], samples: [], now: NOW })[0]!;
     const ld = monitorRows({ items: [item()], ldFlags: flags(flag({ env: { test: { lastModified: later } } })), statuses: {}, settings: [], samples: [], now: NOW })[0]!;
@@ -90,7 +90,7 @@ describe('monitorRows', () => {
     expect(both.status).toBe('conflict');
   });
 
-  it('uses the journaled LD version when the summary has no modification time', () => {
+  it('uses the journaled LaunchDarkly version when the summary has no modification time', () => {
     const row = monitorRows({ items: [item()], ldFlags: flags(flag({ env: { test: { version: 9 } } })), statuses: {}, settings: [], samples: [], ldVersionsAtSync: { 'new_checkout_flow|test': 7 }, now: NOW })[0]!;
     expect(row.status).toBe('ld_changed');
     expect(row.ldChangeEvidence).toBe('version 9, was 7 at sync');
@@ -101,14 +101,14 @@ describe('monitorRows', () => {
     expect(row.status).toBe('archived_in_statsig');
   });
 
-  it('silences StatSig changes once LD is authoritative, and says so in the lifecycle', () => {
+  it('silences StatSig changes once LaunchDarkly is authoritative, and says so in the lifecycle', () => {
     const row = monitorRows({ items: [item({ statsigFingerprint: 'fp2' })], ldFlags: flags(flag()), statuses: { test: { new_checkout_flow: { name: 'active' } } }, settings: [{ flagKey: 'new_checkout_flow', ldEnv: 'test', ldAuthoritative: true, setAt: NOW }], samples: [], now: NOW })[0]!;
     expect(row.status).toBe('ld_authoritative');
     expect(row.statsigChanged).toBe(true);
     expect(row.lifecycle).toBe('ld_authoritative');
   });
 
-  it('reads LD traffic from flag statuses and moves the lifecycle to dual-running', () => {
+  it('reads LaunchDarkly traffic from flag statuses and moves the lifecycle to dual-running', () => {
     const row = monitorRows({ items: [item()], ldFlags: flags(flag()), statuses: { test: { new_checkout_flow: { name: 'active', lastRequested: '2026-10-23T11:59:00Z' } } }, settings: [], samples: [], now: NOW })[0]!;
     expect(row.traffic).toBe('active');
     expect(row.lastRequested).toBe('2026-10-23T11:59:00Z');
@@ -116,7 +116,7 @@ describe('monitorRows', () => {
     expect(row.ldOn).toBe(true);
   });
 
-  it('calls an item cut over after seven days of LD traffic and zero StatSig checks', () => {
+  it('calls an item cut over after seven days of LaunchDarkly traffic and zero StatSig checks', () => {
     const samples: MonitorSample[] = [
       { flagKey: 'new_checkout_flow', ldEnv: 'test', at: '2026-10-10T00:00:00Z', ldStatus: 'active', statsigChecksPerHour: 40 },
       { flagKey: 'new_checkout_flow', ldEnv: 'test', at: '2026-10-15T12:00:00Z', ldStatus: 'active', statsigChecksPerHour: 0 },
@@ -129,7 +129,7 @@ describe('monitorRows', () => {
     expect(lifecycleOf('in_sync', 'active', false, '2026-10-18T00:00:00Z', NOW)).toBe('dual_running');
   });
 
-  it('lists LD flags with our provenance whose StatSig entity is gone', () => {
+  it('lists LaunchDarkly flags with our provenance whose StatSig entity is gone', () => {
     const gone = flag({ key: 'retired_gate', customProperties: { 'migration.id': { value: ['retired_gate'] }, 'migration.source': { value: ['web'] }, 'migration.sync.test': { value: ['fp', '1', SYNCED, 'dh'] }, 'migration.sync.production': { value: [] } } });
     const foreign: LdFlagInfo = { key: 'hand_made', tags: [], customProperties: {} };
     const rows = monitorRows({ items: [item()], ldFlags: flags(flag(), gone, foreign), statuses: {}, settings: [], samples: [], now: NOW });

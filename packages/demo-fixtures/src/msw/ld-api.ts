@@ -72,6 +72,6 @@ export function createLdApiHandlers(opts: MockLdApiOptions): HttpHandler[] {
     route('/flags/:projectKey/:key', ({ params, p }) => (inProject(params, p) ? (p.flags.find((f) => f.key === params.key) ?? NOT_FOUND) : NOT_FOUND)),
     route('/segments/:projectKey/:envKey', ({ params, p, url }) => (inProject(params, p) ? page(p.segments[params.envKey!] ?? [], url) : NOT_FOUND)),
     route('/segments/:projectKey/:envKey/:key', ({ params, p }) => (inProject(params, p) ? ((p.segments[params.envKey!] ?? []).find((s) => s.key === params.key) ?? NOT_FOUND) : NOT_FOUND)),
-    ...writes.map((m) => http[m](`${base}/*`, () => HttpResponse.json({ code: 'method_not_allowed', message: 'The demo LD source is read-only.' }, { status: 405 }))),
+    ...writes.map((m) => http[m](`${base}/*`, () => HttpResponse.json({ code: 'method_not_allowed', message: 'The demo LaunchDarkly source is read-only.' }, { status: 405 }))),
   ];
 }

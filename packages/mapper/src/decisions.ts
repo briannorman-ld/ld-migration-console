@@ -132,7 +132,7 @@ export class DecisionCollector {
 
 // Option helpers shared by several decision types.
 export const SKIP: DecisionOption = { key: 'skip', label: 'Skip this item', explanation: "Don't migrate it. It stays in StatSig only.", resultingFidelity: 'skipped' };
-export const DROP_RULE: DecisionOption = { key: 'drop_rule', label: 'Drop the rule', explanation: 'The LD flag will not have this rule. Users it matched fall through to the next rule.', resultingFidelity: 'partial' };
+export const DROP_RULE: DecisionOption = { key: 'drop_rule', label: 'Drop the rule', explanation: 'The LaunchDarkly flag will not have this rule. Users it matched fall through to the next rule.', resultingFidelity: 'partial' };
 export const DROP_CONDITION: DecisionOption = { key: 'drop_condition', label: 'Drop the condition', explanation: 'Keep the rule without this condition, so it matches more users than in StatSig.', resultingFidelity: 'partial' };
 
 /**
@@ -145,7 +145,7 @@ export function optionLabel(d: Pick<DecisionPoint, 'type' | 'options'>, optionKe
   if (d.type === 'unit_type_kind' && optionKey.startsWith('create:')) return `Create context kind “${optionKey.slice('create:'.length)}”`;
   const attr = d.type === 'unit_type_kind' ? attributeTarget(optionKey) : undefined;
   if (attr) return `Keep “${attr.attribute}” as an attribute of the ${attr.contextKind} context`;
-  if (d.type === 'maintainer_unknown' && optionKey.startsWith('member:')) return `Assign LD member ${optionKey.slice('member:'.length)}`;
+  if (d.type === 'maintainer_unknown' && optionKey.startsWith('member:')) return `Assign LaunchDarkly member ${optionKey.slice('member:'.length)}`;
   if (d.type === 'maintainer_unknown' && optionKey.startsWith('team:')) return `Assign the team “${optionKey.slice('team:'.length)}”`;
   return optionKey;
 }

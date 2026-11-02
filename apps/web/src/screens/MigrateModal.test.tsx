@@ -27,7 +27,7 @@ const ldEnvs = [
 describe('target environments in the plan', () => {
   afterEach(cleanup);
 
-  it('lists every LD environment with the source environments mapped to it', () => {
+  it('lists every LaunchDarkly environment with the source environments mapped to it', () => {
     expect(envChoices({ ldEnvs, profile }, sources)).toEqual([
       { key: 'test', name: 'Test', critical: false, mappedFrom: ['acme-web staging', 'acme-mobile staging'] },
       { key: 'production', name: 'Production', critical: true, mappedFrom: ['acme-web production'] },
@@ -62,8 +62,8 @@ describe('target environments in the plan', () => {
     render(<FlagsTable flags={flags} />);
     expect(screen.getAllByRole('row')).toHaveLength(5);
     expect(screen.getAllByText('new')).toHaveLength(2);
-    expect(screen.getByText('in LD (created by this console)')).toBeTruthy();
-    expect(screen.getByText('exists in LD · adopting')).toBeTruthy();
+    expect(screen.getByText('in LaunchDarkly (created by this console)')).toBeTruthy();
+    expect(screen.getByText('exists in LaunchDarkly · adopting')).toBeTruthy();
     expect(screen.getAllByText('create')).toHaveLength(1);
     expect(screen.getAllByText('update')).toHaveLength(2);
     expect(screen.getByText('2 open decisions')).toBeTruthy();
@@ -71,6 +71,6 @@ describe('target environments in the plan', () => {
     expect(first.textContent).toContain('production');
     expect(first.textContent).toContain('blocked');
     // No environment column: the flag itself is created once for the project.
-    expect(screen.queryByText('LD env')).toBeNull();
+    expect(screen.queryByText('LaunchDarkly env')).toBeNull();
   });
 });

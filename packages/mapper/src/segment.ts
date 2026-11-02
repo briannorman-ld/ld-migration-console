@@ -91,15 +91,15 @@ export function mapSegment(args: MapArgs<Segment>): SegmentMapResult {
       const ids = unique(size.ids);
       if (unit.attribute !== 'key') {
         // The unit type is a user attribute: LD segments list members by key only, so the IDs become a rule.
-        if (ids.length > LIST_SEGMENT_MAX) throw new SkipItem(`${ids.length.toLocaleString('en-US')} ${seg.idType} IDs on the user attribute “${unit.attribute}”: LD matches attributes only in rules, and a clause that long is not practical; create a context kind for ${seg.idType} instead`);
+        if (ids.length > LIST_SEGMENT_MAX) throw new SkipItem(`${ids.length.toLocaleString('en-US')} ${seg.idType} IDs on the user attribute “${unit.attribute}”: LaunchDarkly matches attributes only in rules, and a clause that long is not practical; create a context kind for ${seg.idType} instead`);
         base.rules.push({ description: `${seg.idType} IDs`, clauses: [{ contextKind: kind, attribute: unit.attribute, op: 'in', values: ids, negate: false }] });
-        fidelity.push({ fidelity: 'full', message: `${ids.length} ${seg.idType} IDs matched by a rule on user attribute “${unit.attribute}” (LD lists segment members only by context key).` });
+        fidelity.push({ fidelity: 'full', message: `${ids.length} ${seg.idType} IDs matched by a rule on user attribute “${unit.attribute}” (LaunchDarkly lists segment members only by context key).` });
         return finish(base);
       }
       if (ids.length > LIST_SEGMENT_MAX) {
         const { choice } = bigSegmentChoice(ctx, seg, ids.length, fragment);
-        if (choice === 'skip') throw new SkipItem(`${ids.length.toLocaleString('en-US')} IDs exceed LD's ${LIST_SEGMENT_MAX.toLocaleString('en-US')}-ID list segment limit`);
-        if (choice !== 'import') return finish(null, `${ids.length.toLocaleString('en-US')} IDs exceed LD's ${LIST_SEGMENT_MAX.toLocaleString('en-US')}-ID list segment limit; the rules referencing it were changed instead`);
+        if (choice === 'skip') throw new SkipItem(`${ids.length.toLocaleString('en-US')} IDs exceed LaunchDarkly's ${LIST_SEGMENT_MAX.toLocaleString('en-US')}-ID list segment limit`);
+        if (choice !== 'import') return finish(null, `${ids.length.toLocaleString('en-US')} IDs exceed LaunchDarkly's ${LIST_SEGMENT_MAX.toLocaleString('en-US')}-ID list segment limit; the rules referencing it were changed instead`);
         base.unbounded = { contextKind: kind, ids };
         fidelity.push({ fidelity: 'full', message: `Big segment: ${ids.length.toLocaleString('en-US')} ${seg.idType} IDs imported from CSV (replace mode) on every sync.` });
         return finish(base);
@@ -117,13 +117,13 @@ export function mapSegment(args: MapArgs<Segment>): SegmentMapResult {
       if (bad && !bad.ok) throw new SkipItem(`rule “${loc.ruleName}” references a gate that can't be inlined (${bad.reason})`);
       return parts.flatMap((p) => (p.ok ? p.dnf : []));
     };
-    if (!seg.enabled) fidelity.push({ fidelity: 'full', message: 'Disabled in StatSig: the LD segment has no rules, so nobody matches it.' });
+    if (!seg.enabled) fidelity.push({ fidelity: 'full', message: 'Disabled in StatSig: the LaunchDarkly segment has no rules, so nobody matches it.' });
     const rules = seg.enabled ? resolveRulesForEnvironment(seg.rules, env.statsig).rules : [];
     const out: DesiredSegmentRule[] = [];
     for (const r of rules) {
       if (r.passPercentage <= 0) continue;
       const dnf = andDnf(r.conditions.map((c, i) => translateCondition(ctx, c, { ruleId: r.id, ruleName: r.name, index: i })));
-      if (!dnf) throw new SkipItem(`rule “${r.name}” expands into more than ${MAX_EXPANSION} LD rules`);
+      if (!dnf) throw new SkipItem(`rule “${r.name}” expands into more than ${MAX_EXPANSION} LaunchDarkly rules`);
       const unit = resolveUnit(ctx, r.idType || seg.idType);
       const kind = unit.contextKind;
       let weight: number | undefined;
@@ -135,7 +135,7 @@ export function mapSegment(args: MapArgs<Segment>): SegmentMapResult {
             subject: { ...ctx.subject, ruleId: r.id, ruleName: r.name, location: `rule “${r.name}”` },
             path: `rule:${r.id}:rollout`,
             title: `${r.passPercentage}% of matching users: re-bucketed`,
-            explanation: `StatSig and LD hash users differently, so a different ${r.passPercentage}% of matching users are in the segment.`,
+            explanation: `StatSig and LaunchDarkly hash users differently, so a different ${r.passPercentage}% of matching users are in the segment.`,
             sourceFragment: { rule: r.name, passPercentage: r.passPercentage },
             fingerprintOf: { passPercentage: r.passPercentage },
             options: [
@@ -154,7 +154,7 @@ export function mapSegment(args: MapArgs<Segment>): SegmentMapResult {
         if (later > 0)
           ctx.fidelity.push({
             fidelity: 'partial',
-            message: `Users matching “${r.name}” but outside its ${r.passPercentage}% fail the segment in StatSig; in LD they go on to the ${later} later rule${later === 1 ? '' : 's'} and may match there.`,
+            message: `Users matching “${r.name}” but outside its ${r.passPercentage}% fail the segment in StatSig; in LaunchDarkly they go on to the ${later} later rule${later === 1 ? '' : 's'} and may match there.`,
             location: `rule “${r.name}”`,
           });
       }

@@ -128,7 +128,7 @@ export function acmeMobile(): ProjectSeed {
       },
       {
         id: 'android_min_version',
-        description: 'Four-part build versions (5.2.0.100) compare fine in StatSig but are not valid semver for LD.',
+        description: 'Four-part build versions (5.2.0.100) compare fine in StatSig but are not valid semver for LaunchDarkly.',
         owner: P.dana,
         tags: ['mobile'],
         targetApps: ['acme-android'],
@@ -136,7 +136,7 @@ export function acmeMobile(): ProjectSeed {
       },
       {
         id: 'beta_channel_features',
-        description: 'Prerelease suffix: StatSig strips “-beta” before comparing; LD orders prereleases below the release.',
+        description: 'Prerelease suffix: StatSig strips “-beta” before comparing; LaunchDarkly orders prereleases below the release.',
         owner: P.dana,
         tags: ['mobile'],
         rules: [{ name: 'Beta builds 5.3+', conditions: [{ type: 'app_version', operator: 'version_gte', targetValue: '5.3.0-beta' }] }],
@@ -165,7 +165,7 @@ export function acmeMobile(): ProjectSeed {
       },
       {
         id: 'webview_checkout_fallback',
-        description: 'Checkout in a webview when a JS check passes (javascript condition: no LD equivalent).',
+        description: 'Checkout in a webview when a JS check passes (javascript condition: no LaunchDarkly equivalent).',
         owner: P.dana,
         tags: ['mobile'],
         rules: [{ name: 'JS check', conditions: [{ type: 'javascript', operator: 'any', targetValue: ['window.ApplePaySession === undefined'] }] }],

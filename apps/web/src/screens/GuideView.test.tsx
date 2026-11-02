@@ -109,7 +109,7 @@ describe('GuideView: teams and people', () => {
     openStep(/^Teams/);
     expect(screen.getByText(/Teams belong to your LaunchDarkly/).textContent).toMatch(/not to the project “shop”/);
     expect(screen.getByText('Checkout')).toBeTruthy(); // the team row
-    expect(screen.getByText(/Teams are an LD Enterprise feature/)).toBeTruthy(); // this token's matrix lacks the teams capability
+    expect(screen.getByText(/Teams are a LaunchDarkly Enterprise feature/)).toBeTruthy(); // this token's matrix lacks the teams capability
     expect(screen.queryByRole('button', { name: /Create all/ })).toBeNull();
     expect(screen.queryByText(/people are not in LaunchDarkly\./)).toBeNull(); // no owner rows in the Teams step
   });
@@ -121,7 +121,7 @@ describe('GuideView: teams and people', () => {
     // The bulk action sits above the team list.
     expect(teamsBar.compareDocumentPosition(screen.getByText('Checkout')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Create all 2 teams' }));
-    await screen.findByRole('button', { name: 'Create all 2 teams' }); // the model is static here, so the row stays until LD state refreshes
+    await screen.findByRole('button', { name: 'Create all 2 teams' }); // the model is static here, so the row stays until LaunchDarkly state refreshes
     expect(createLdTeam).toHaveBeenCalledTimes(2);
     expect(createLdTeam.mock.calls.map((c) => c[1])).toEqual([
       { key: 'checkout', name: 'Checkout', memberIDs: ['mem-bob'] },
@@ -166,7 +166,7 @@ describe('GuideView: teams and people', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Invite 2 people' }));
     expect(inviteLdMembers.mock.calls[0]![1]).toEqual([
       { email: 'gone@acme.example', name: 'Jordan Former', teamKeys: ['checkout'] },
-      { email: 'priya@acme.example', name: 'Priya Raman' }, // Search is not in LD yet
+      { email: 'priya@acme.example', name: 'Priya Raman' }, // Search is not in LaunchDarkly yet
     ]);
   });
 

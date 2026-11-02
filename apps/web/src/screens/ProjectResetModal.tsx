@@ -100,7 +100,7 @@ export function ProjectResetModal({ workspaceId, ld, onClose }: { workspaceId: s
       <Card className="flex max-h-full w-full max-w-2xl flex-col overflow-hidden border-error-line/60 shadow-raised">
         <header className="flex items-center gap-3 border-b border-line px-5 py-3">
           <Badge tone="red">danger</Badge>
-          <h2 className="font-display text-lg font-semibold tracking-tight">Reset LD project “{ld.projectKey}”</h2>
+          <h2 className="font-display text-lg font-semibold tracking-tight">Reset LaunchDarkly project “{ld.projectKey}”</h2>
           {phase.kind === 'confirm' && (
             <span className="text-xs text-fg-muted">
               confirmation {phase.step + 1} of {GATES.length}

@@ -80,7 +80,7 @@ export function MigrateModal({
 }) {
   const [phase, setPhase] = useState<Phase>({
     kind: "loading",
-    message: "Reading the LD project…",
+    message: "Reading the LaunchDarkly project…",
   });
   const [confirm, setConfirm] = useState("");
   const [showSteps, setShowSteps] = useState(false);
@@ -206,7 +206,7 @@ export function MigrateModal({
           <h2 className="font-display text-xl font-semibold tracking-tight">
             Migrate {describeSelection(selection)}
           </h2>
-          {m.ld.projectKey && <Badge tone="blue">LD · {m.ld.projectKey}</Badge>}
+          {m.ld.projectKey && <Badge tone="blue">LaunchDarkly · {m.ld.projectKey}</Badge>}
           <CloseButton
             onClick={onClose}
             disabled={phase.kind === "running"}
@@ -325,7 +325,7 @@ export function MigrateModal({
                   {showSteps ? "▾" : "▸"} {plan.steps.length} operation
                   {plan.steps.length === 1 ? "" : "s"}
                   <span className="ml-2 font-normal text-fg-muted">
-                    about {plan.requests} LD requests, ~
+                    about {plan.requests} LaunchDarkly requests, ~
                     {seconds < 60
                       ? `${seconds}s`
                       : `${Math.round(seconds / 60)} min`}
@@ -390,7 +390,7 @@ export function MigrateModal({
               run={activeRun}
               title={
                 phase.dryRun
-                  ? "Dry run (LD validates, nothing is saved)"
+                  ? "Dry run (LaunchDarkly validates, nothing is saved)"
                   : "Migrating"
               }
               onCancel={() => cancelRun(workspaceId)}
@@ -505,7 +505,7 @@ function ItemsTable({ items }: { items: PlanItem[] }) {
               {i.exists && i.kind !== "gate" && i.kind !== "config" && i.kind !== "autotune" && i.kind !== "flag" && (
                 <>
                   {" "}
-                  <Badge tone="amber">exists in LD</Badge>
+                  <Badge tone="amber">exists in LaunchDarkly</Badge>
                 </>
               )}
             </td>
@@ -535,9 +535,9 @@ function ItemsTable({ items }: { items: PlanItem[] }) {
 /** How the flag relates to what is in LD today: new, created by the console earlier, or a foreign flag being adopted. */
 function flagPresence(f: PlanFlag): { label: string; tone: "slate" | "green" | "amber" } {
   if (!f.exists) return { label: "new", tone: "slate" };
-  if (f.owned) return { label: "in LD (created by this console)", tone: "green" };
-  if (f.adopt) return { label: "exists in LD · adopting", tone: "amber" };
-  return { label: "exists in LD", tone: "amber" };
+  if (f.owned) return { label: "in LaunchDarkly (created by this console)", tone: "green" };
+  if (f.adopt) return { label: "exists in LaunchDarkly · adopting", tone: "amber" };
+  return { label: "exists in LaunchDarkly", tone: "amber" };
 }
 
 /** The flags of the plan, one row each: project-level, so no environment column (PLAN §7). */
@@ -548,7 +548,7 @@ export function FlagsTable({ flags }: { flags: PlanFlag[] }) {
         <tr>
           <th className="py-1 pr-3 font-medium">Flag</th>
           <th className="py-1 pr-3 font-medium">Type</th>
-          <th className="py-1 pr-3 font-medium">In LD</th>
+          <th className="py-1 pr-3 font-medium">In LaunchDarkly</th>
           <th className="py-1 pr-3 font-medium">Status</th>
           <th className="py-1 font-medium">Targeting</th>
         </tr>
