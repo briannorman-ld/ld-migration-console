@@ -582,16 +582,7 @@ function OwnerLine({ o, teams, members, busy, canInvite, onInvite, onChoose }: {
                 Assign team “{team.ldKey}”
               </Button>
             )}
-            {members.length > 0 && (
-              <Select aria-label={`LD member for ${o.email}`} className="py-0.5 text-xs" value="" onChange={(e) => e.target.value && onChoose({ memberId: e.target.value })}>
-                <option value="">Pick a member…</option>
-                {members.map((m) => (
-                  <option key={m._id} value={m._id}>
-                    {label(m)}
-                  </option>
-                ))}
-              </Select>
-            )}
+            {/* No "pick another member" here: an owner who is not in LD is invited or left unassigned, never mapped onto an existing member. */}
             <Button variant="ghost" className="py-0.5 text-xs" onClick={() => onChoose('unassigned')}>
               Leave unassigned
             </Button>
