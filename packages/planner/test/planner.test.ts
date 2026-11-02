@@ -44,6 +44,17 @@ function acceptAll(req: PlanRequest): PlanRequest {
 }
 
 describe('planMigration', () => {
+  it('writes the segments a segment matches before it (KNOWN-EDGE-CASES 9.15)', () => {
+    const segUid = (id: string) => web.segments.find((s) => s.id === id)!.uid;
+    const plan = planMigration(acceptAll(request([], { segments: [segUid('beta_or_vip')] })));
+    const ids = plan.steps.map((s) => s.id);
+    expect(ids).toContain('segment:test:beta_or_vip');
+    expect(ids.indexOf('segment:test:beta_testers')).toBeLessThan(ids.indexOf('segment:test:beta_or_vip'));
+    expect(ids.indexOf('segment:test:vip_customers')).toBeLessThan(ids.indexOf('segment:test:beta_or_vip'));
+    expect(plan.steps.find((s) => s.id === 'segment:test:beta_or_vip')!.deps).toEqual(expect.arrayContaining(['segment:test:beta_testers', 'segment:test:vip_customers']));
+    expect(plan.items.filter((i) => i.dependency).map((i) => i.entityId).sort()).toEqual(['beta_testers', 'vip_customers']);
+  });
+
   it('plans context kinds on their own (the guide creates them before segments), skipping kinds LD has', () => {
     const plan = planMigration(request([], { contextKinds: [{ key: 'plan', unitType: 'planKey' }, { key: 'user', unitType: 'userID' }, { key: 'company', unitType: 'companyID' }] }));
     expect(plan.steps.map((s) => s.id).sort()).toEqual(['context_kind:company', 'context_kind:plan']);

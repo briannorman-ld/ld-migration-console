@@ -2989,6 +2989,43 @@
       "decisions": []
     },
     {
+      "segment": "beta_or_vip",
+      "fidelity": "full",
+      "decisions": [],
+      "rules": [
+        {
+          "description": "Beta",
+          "clauses": [
+            {
+              "contextKind": "user",
+              "attribute": "segmentMatch",
+              "op": "segmentMatch",
+              "values": [
+                "beta_testers"
+              ],
+              "negate": false
+            }
+          ]
+        },
+        {
+          "description": "VIP",
+          "clauses": [
+            {
+              "contextKind": "user",
+              "attribute": "segmentMatch",
+              "op": "segmentMatch",
+              "values": [
+                "vip_customers"
+              ],
+              "negate": false
+            }
+          ]
+        }
+      ],
+      "included": 0,
+      "includedContexts": []
+    },
+    {
       "segment": "beta_waitlist",
       "fidelity": "full",
       "decisions": [],

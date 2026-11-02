@@ -732,6 +732,15 @@ describe('known edge cases (docs/KNOWN-EDGE-CASES.md)', () => {
     const seg = (id: string, env = { statsig: 'production', ld: 'production' }) =>
       mapSegment({ canonical: { snapshot: web }, entity: web.segments.find((s) => s.id === id)!, profile: profileFor(web, MAPPING), resolutions: new Map(), capabilities: CAPS, env, now: NOW });
 
+    it('a segment rule that matches other segments becomes segmentMatch clauses with those segments as dependencies (9.15)', () => {
+      const r = seg('beta_or_vip');
+      expect(r.desired?.rules.map((x) => x.clauses)).toEqual([
+        [{ contextKind: 'user', attribute: 'segmentMatch', op: 'segmentMatch', values: ['beta_testers'], negate: false }],
+        [{ contextKind: 'user', attribute: 'segmentMatch', op: 'segmentMatch', values: ['vip_customers'], negate: false }],
+      ]);
+      expect(r.dependencies.filter((d) => d.kind === 'segment').map((d) => d.key).sort()).toEqual(['beta_testers', 'vip_customers']);
+    });
+
     it('a segment rule with a pass percentage becomes a weighted rule and needs an acknowledgement', () => {
       const r = seg('churn_risk');
       expect(r.desired?.rules[0]).toMatchObject({ weight: 10_000, rolloutContextKind: 'user' });

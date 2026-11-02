@@ -40,6 +40,7 @@ function fakeLd(over: Partial<Record<keyof LdWriter, (...a: never[]) => unknown>
     getSegment: async () => null,
     createSegment: async (_p, _e, b) => ({ key: b.key, name: b.name, tags: b.tags }),
     patchSegmentJson: async (_p, _e, key) => ({ key, name: key }),
+    patchSegmentSemantic: async (_p, _e, key, patch) => (calls.push(`semantic segment ${key} ${patch.instructions.map((i) => `${i.kind}:${Array.isArray(i.values) ? i.values.length : ''}`).join(',')}`), { key, name: key }),
     deleteSegment: async () => undefined,
     putContextKind: async () => undefined,
     getMetric: async (_p, key) => (calls.push(`get metric ${key}`), metrics.get(key) ?? null),
@@ -448,6 +449,51 @@ describe('scheduled changes (PLAN §5.1; time_condition → schedule)', () => {
     await ex.undo(run);
     expect(ld.calls.filter((c) => !c.startsWith('get'))).toEqual(['unschedule sc-1', 'delete a']);
     expect(ld.scheduled.size).toBe(0);
+  });
+});
+
+describe('segment members over LD’s 1,500-target request limit', () => {
+  const listSegment = (ids: string[]): PlanStep => ({
+    id: 'segment:test:wholesale_partners',
+    deps: [],
+    op: 'upsert_segment',
+    ldEnv: 'test',
+    key: 'wholesale_partners',
+    exists: false,
+    adopt: false,
+    desired: { key: 'wholesale_partners', ldEnv: 'test', statsigEnv: 'staging', name: 'Wholesale partners', description: '', tags: ['migrated-from-statsig'], rules: [], included: ids, includedContexts: [] },
+    provenance: { sourceKind: 'statsig', sourceAlias: 'web', statsigType: 'segment', statsigId: 'wholesale_partners', statsigFingerprint: 'fp', decisionSetHash: 'dh' },
+  });
+  const withSegments = () => {
+    const segments = new Map<string, Record<string, unknown>>();
+    const ld = fakeLd({
+      getSegment: async (_p: string, _e: string, key: string) => segments.get(key) ?? null,
+      createSegment: async (_p: string, _e: string, b: Record<string, unknown>) => (segments.set(b.key as string, { key: b.key, name: b.name, tags: b.tags, included: [] }), segments.get(b.key as string)!),
+      patchSegmentJson: async (_p: string, _e: string, key: string, ops: { path: string; value?: unknown }[]) => (ld.calls.push(`json segment ${key} ${ops.map((o) => o.path).join(',')}`), segments.get(key)!),
+    });
+    return ld;
+  };
+
+  it('writes a small list in the one JSON patch, as before', async () => {
+    const ld = withSegments();
+    const ex = new Executor({ client: ld.client, projectKey: 'p', journal: { save: async () => undefined }, now: () => new Date('2026-11-02T00:00:00Z') });
+    const out = await ex.run(newRun({ id: 'r', workspaceId: 'w', projectKey: 'p', label: 's', dryRun: false, steps: [listSegment(Array.from({ length: 1500 }, (_, i) => `p-${i}`))], now: new Date() }));
+    expect(out.steps[0]!.status).toBe('done');
+    expect(ld.calls.filter((c) => c.includes('segment'))).toEqual(['json segment wholesale_partners /rules,/included,/includedContexts,/description,/tags']);
+  });
+
+  it('writes a bigger list in batches of 1,500 after the rules, each in its own request', async () => {
+    const ld = withSegments();
+    const ex = new Executor({ client: ld.client, projectKey: 'p', journal: { save: async () => undefined }, now: () => new Date('2026-11-02T00:00:00Z') });
+    const out = await ex.run(newRun({ id: 'r', workspaceId: 'w', projectKey: 'p', label: 's', dryRun: false, steps: [listSegment(Array.from({ length: 3200 }, (_, i) => `p-${i}`))], now: new Date() }));
+    expect(out.steps[0]!.status).toBe('done');
+    expect(out.steps[0]!.message).toMatch(/3200 IDs in 4 requests/);
+    expect(ld.calls.filter((c) => c.includes('segment'))).toEqual([
+      'json segment wholesale_partners /rules,/description,/tags',
+      'semantic segment wholesale_partners addIncludedUsers:1500',
+      'semantic segment wholesale_partners addIncludedUsers:1500',
+      'semantic segment wholesale_partners addIncludedUsers:200',
+    ]);
   });
 });
 

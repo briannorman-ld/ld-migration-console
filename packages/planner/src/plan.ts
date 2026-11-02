@@ -254,9 +254,10 @@ export function planMigration(req: PlanRequest): Plan {
   };
   ensureKinds((req.contextKinds ?? []).map((k) => ({ kind: 'context_kind', key: k.key, entityId: k.unitType })));
 
-  const planSegment = (snapshot: CanonicalSnapshot, segmentId: string, statsigEnv: string, ldEnv: string, requiredBy: string | null): { stepId?: string; ok: boolean; reason?: string } => {
+  const planSegment = (snapshot: CanonicalSnapshot, segmentId: string, statsigEnv: string, ldEnv: string, requiredBy: string | null, stack: string[] = []): { stepId?: string; ok: boolean; reason?: string } => {
     const seg = snapshot.segments.find((s) => s.id === segmentId);
     if (!seg) return { ok: false, reason: `segment “${segmentId}” not found` };
+    if (stack.includes(seg.uid)) return { ok: false, reason: `segment “${segmentId}” references itself through other segments` };
     const itemKey = `${seg.uid}|${ldEnv}`;
     const existing = items.get(itemKey);
     if (existing) {
@@ -278,10 +279,19 @@ export function planMigration(req: PlanRequest): Plan {
       adopt = true;
     }
     if (r.unresolved.length) return finishItem(item, 'blocked', `${r.unresolved.length} open decision${r.unresolved.length === 1 ? '' : 's'}`);
+    // A segment rule that matches another segment (segmentMatch) needs that segment in the same
+    // environment first: LD refuses the rule otherwise.
+    const deps = ensureKinds(r.dependencies);
+    for (const d of r.dependencies) {
+      if (d.kind !== 'segment') continue;
+      const inner = planSegment(snapshot, d.entityId ?? d.key, statsigEnv, ldEnv, seg.uid, [...stack, seg.uid]);
+      if (inner.ok && inner.stepId) deps.push(inner.stepId);
+      else return finishItem(item, 'blocked', `depends on ${inner.reason ?? `segment “${d.key}”`}`);
+    }
     const stepId = `segment:${ldEnv}:${r.segmentKey}`;
     steps.set(stepId, {
       id: stepId,
-      deps: ensureKinds(r.dependencies),
+      deps,
       op: 'upsert_segment',
       ldEnv,
       key: r.segmentKey,
@@ -641,9 +651,10 @@ export function planMigration(req: PlanRequest): Plan {
   const neutralSegmentsByUid = new Map(req.snapshots.flatMap((s) => (s.neutral?.segments ?? []).map((g) => [g.uid, { segment: g, snapshot: s }] as const)));
   const segmentsByUid = new Map(req.snapshots.flatMap((s) => s.segments.map((g) => [g.uid, { segment: g, snapshot: s }] as const)));
 
-  const planNeutralSegment = (snapshot: CanonicalSnapshot, key: string, sourceEnv: string, ldEnv: string, requiredBy: string | null): { stepId?: string; ok: boolean; reason?: string } => {
+  const planNeutralSegment = (snapshot: CanonicalSnapshot, key: string, sourceEnv: string, ldEnv: string, requiredBy: string | null, stack: string[] = []): { stepId?: string; ok: boolean; reason?: string } => {
     const seg = snapshot.neutral?.segments.find((g) => g.key === key);
     if (!seg) return { ok: false, reason: `segment “${key}” not found` };
+    if (stack.includes(seg.uid)) return { ok: false, reason: `segment “${key}” references itself through other segments` };
     const itemKey = `${seg.uid}|${ldEnv}`;
     const existing = items.get(itemKey);
     if (existing) {
@@ -668,11 +679,18 @@ export function planMigration(req: PlanRequest): Plan {
       adopt = true;
     }
     if (r.unresolved.length) return finishItem(item, 'blocked', `${r.unresolved.length} open decision${r.unresolved.length === 1 ? '' : 's'}`);
+    const deps = ensureKinds(r.dependencies, migrationKindOf(snapshot.source.sourceKind));
+    for (const d of r.dependencies) {
+      if (d.kind !== 'segment') continue;
+      const inner = planNeutralSegment(snapshot, d.entityId ?? d.key, sourceEnv, ldEnv, seg.uid, [...stack, seg.uid]);
+      if (inner.ok && inner.stepId) deps.push(inner.stepId);
+      else return finishItem(item, 'blocked', `depends on ${inner.reason ?? `segment “${d.key}”`}`);
+    }
     const stepId = `segment:${ldEnv}:${r.segmentKey}`;
     const version = seg.environments.find((e) => e.env === sourceEnv)?.version;
     steps.set(stepId, {
       id: stepId,
-      deps: ensureKinds(r.dependencies, migrationKindOf(snapshot.source.sourceKind)),
+      deps,
       op: 'upsert_segment',
       ldEnv,
       key: r.segmentKey,

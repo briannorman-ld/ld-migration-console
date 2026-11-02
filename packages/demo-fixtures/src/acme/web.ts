@@ -749,6 +749,16 @@ export function acmeWeb(): ProjectSeed {
         rules: [{ name: 'New checkout', conditions: [{ type: 'passes_gate', targetValue: 'new_checkout_flow' }] }],
       },
       {
+        id: 'beta_or_vip',
+        type: 'rule_based',
+        description: 'Beta opt-ins or VIP customers. A segment whose rules match other segments: LD wants those segments in the environment first (KNOWN-EDGE-CASES 9.15).',
+        owner: P.marco,
+        rules: [
+          { name: 'Beta', conditions: [{ type: 'passes_segment', targetValue: 'beta_testers' }] },
+          { name: 'VIP', conditions: [{ type: 'passes_segment', targetValue: 'vip_customers' }] },
+        ],
+      },
+      {
         id: 'beta_waitlist',
         type: 'id_list',
         description: 'Waitlist for the next beta; currently empty.',

@@ -27,6 +27,7 @@ export type LdWriter = Pick<
   | 'getSegment'
   | 'createSegment'
   | 'patchSegmentJson'
+  | 'patchSegmentSemantic'
   | 'deleteSegment'
   | 'putContextKind'
   | 'getMetric'
@@ -532,12 +533,22 @@ export class Executor {
     }
     if (d.unbounded) return this.bigSegment(run, rec, s, current, description);
 
+    // LD caps target operations at 1,500 per request, however the request is written. Small member
+    // lists go in the one JSON patch with the rules; bigger ones are written afterwards in semantic
+    // patches of at most 1,500 targets each.
+    const targets = targetInstructions(current, d);
+    const targetOps = targets.reduce((n, i) => n + (i.values as string[]).length, 0);
+    const batched = targetOps > TARGET_BATCH;
     const patch: JsonPatchOp[] = [
       { op: 'add', path: '/rules', value: d.rules.map((r) => ({ description: r.description, clauses: r.clauses, ...(r.weight !== undefined ? { weight: r.weight, rolloutContextKind: r.rolloutContextKind, ...(r.bucketBy ? { bucketBy: r.bucketBy } : {}) } : {}) })) },
-      { op: 'add', path: '/included', value: d.included },
-      { op: 'add', path: '/includedContexts', value: d.includedContexts },
-      // Excluded keys exist only for LD-source segments (PLAN §20.3); a StatSig segment leaves them alone.
-      ...(d.excluded || d.excludedContexts ? [{ op: 'add' as const, path: '/excluded', value: d.excluded ?? [] }, { op: 'add' as const, path: '/excludedContexts', value: d.excludedContexts ?? [] }] : []),
+      ...(batched
+        ? []
+        : [
+            { op: 'add' as const, path: '/included', value: d.included },
+            { op: 'add' as const, path: '/includedContexts', value: d.includedContexts },
+            // Excluded keys exist only for LD-source segments (PLAN §20.3); a StatSig segment leaves them alone.
+            ...(d.excluded || d.excludedContexts ? [{ op: 'add' as const, path: '/excluded', value: d.excluded ?? [] }, { op: 'add' as const, path: '/excludedContexts', value: d.excludedContexts ?? [] }] : []),
+          ]),
       { op: 'add', path: '/description', value: description },
       { op: 'add', path: '/tags', value: union(current.tags ?? [], d.tags) },
     ];
@@ -550,8 +561,15 @@ export class Executor {
       if (run.dryRun) return `Would file an approval request for segment “${s.key}” in ${s.ldEnv} (the environment requires approvals): ${segmentSummary(d)}.`;
       return this.segmentApproval(run, rec, s, current);
     }
-    if (run.dryRun) return `Would update segment “${s.key}” in ${s.ldEnv}: ${segmentSummary(d)}.`;
-    return `${rec.created ? 'Created' : 'Updated'} segment “${s.key}” in ${s.ldEnv}: ${segmentSummary(d)}.`;
+    const requests = batched ? ` in ${1 + targets.length} requests (LD takes at most ${TARGET_BATCH.toLocaleString('en-US')} targets per request)` : '';
+    if (run.dryRun) return `Would update segment “${s.key}” in ${s.ldEnv}: ${segmentSummary(d)}${requests}.`;
+    if (batched) {
+      for (const instruction of targets) {
+        const res = await this.c.patchSegmentSemantic(this.p, s.ldEnv, s.key, { comment: this.comment(run, s), instructions: [instruction] });
+        rec.ldVersion = res.version ?? rec.ldVersion;
+      }
+    }
+    return `${rec.created ? 'Created' : 'Updated'} segment “${s.key}” in ${s.ldEnv}: ${segmentSummary(d)}${requests}.`;
   }
 
   /**
@@ -977,8 +995,8 @@ function unique<T>(xs: T[]): T[] {
   return [...new Set(xs)];
 }
 
-/** LD caps target operations at 1,500 per instruction ("Patch segment"). */
-const TARGET_BATCH = 1500;
+/** LD caps target operations at 1,500 per request ("Patch segment": "Total number of operations on targets must not exceed batch limit of 1500"). */
+export const TARGET_BATCH = 1500;
 
 function chunks<T>(xs: T[], size: number): T[][] {
   const out: T[][] = [];
@@ -998,6 +1016,19 @@ export function segmentInstructions(current: LdSegment, d: DesiredSegment): Sema
   const out: SemanticPatch['instructions'] = [];
   for (const r of current.rules ?? []) if (r._id) out.push({ kind: 'removeRule', ruleId: r._id });
   for (const r of d.rules) out.push({ kind: 'addRule', description: r.description, clauses: r.clauses });
+  out.push(...targetInstructions(current, d));
+  const tags = d.tags.filter((t) => !(current.tags ?? []).includes(t));
+  if (tags.length) out.push({ kind: 'addTags', values: tags });
+  return out;
+}
+
+/**
+ * The target (member) changes that make `current` match `d`, as semantic-patch instructions of at
+ * most TARGET_BATCH values each: included keys, included contexts per kind, and (LD-source
+ * segments only) the exclusions. Each instruction fits in a request of its own.
+ */
+export function targetInstructions(current: LdSegment, d: DesiredSegment): SemanticPatch['instructions'] {
+  const out: SemanticPatch['instructions'] = [];
   const diff = (have: string[], want: string[]) => ({ add: want.filter((v) => !have.includes(v)), remove: have.filter((v) => !want.includes(v)) });
   const users = diff(current.included ?? [], d.included);
   for (const c of chunks(users.remove, TARGET_BATCH)) out.push({ kind: 'removeIncludedUsers', values: c });
@@ -1020,8 +1051,6 @@ export function segmentInstructions(current: LdSegment, d: DesiredSegment): Sema
       for (const c of chunks(t.add, TARGET_BATCH)) out.push({ kind: 'addExcludedTargets', contextKind: kind, values: c });
     }
   }
-  const tags = d.tags.filter((t) => !(current.tags ?? []).includes(t));
-  if (tags.length) out.push({ kind: 'addTags', values: tags });
   return out;
 }
 
