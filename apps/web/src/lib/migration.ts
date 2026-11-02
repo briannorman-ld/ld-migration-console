@@ -373,13 +373,22 @@ export interface MigrationSelection {
   flags?: string[];
   /** Segment uids chosen on their own (LD-source segments). */
   segments?: string[];
+  /** Context kinds to create on their own (guide step 3). */
+  contextKinds?: { key: string; unitType: string }[];
+}
+
+/** Only project-level steps (context kinds): the run needs no target environment. */
+export function isProjectOnlySelection(sel: MigrationSelection): boolean {
+  return !!sel.contextKinds?.length && sel.gates.length === 0 && !sel.configs?.length && sel.autotunes.length === 0 && !sel.flags?.length && !sel.segments?.length;
 }
 
 export function describeSelection(sel: MigrationSelection): string {
   const configs = sel.configs ?? [];
   const flags = sel.flags ?? [];
   const segments = sel.segments ?? [];
+  const kinds = sel.contextKinds ?? [];
   const parts = [
+    kinds.length ? `${kinds.length} context kind${kinds.length === 1 ? "" : "s"}` : "",
     sel.gates.length ? `${sel.gates.length} gate${sel.gates.length === 1 ? "" : "s"}` : "",
     configs.length ? `${configs.length} dynamic config${configs.length === 1 ? "" : "s"}` : "",
     sel.autotunes.length ? `${sel.autotunes.length} autotune${sel.autotunes.length === 1 ? "" : "s"}` : "",
@@ -396,6 +405,7 @@ export function buildPlan(input: { selection: MigrationSelection; ldEnvs: string
     autotunes: input.selection.autotunes,
     flags: input.selection.flags ?? [],
     segments: input.selection.segments ?? [],
+    contextKinds: input.selection.contextKinds ?? [],
     ldEnvs: input.ldEnvs,
     snapshots: input.snapshots,
     idLists: input.idLists,

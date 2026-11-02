@@ -97,7 +97,7 @@ export interface ApprovalRecord {
 }
 
 export interface CapabilityUpdate {
-  key: 'prerequisites' | 'big_segments' | 'scheduled_changes' | 'approvals';
+  key: 'prerequisites' | 'big_segments' | 'scheduled_changes' | 'approvals' | 'context_kinds';
   status: 'available' | 'unavailable' | 'not_permitted';
   evidence: string;
 }
@@ -483,7 +483,18 @@ export class Executor {
   private async contextKind(run: RunRecord, rec: StepRecord, s: Extract<PlanStep, { op: 'ensure_context_kind' }>): Promise<string> {
     if (run.dryRun) return `Would create context kind “${s.key}”.`;
     const from = s.sourceKind === 'launchdarkly' ? `Context kind “${s.unitType}” of the source LaunchDarkly project` : `StatSig unit type ${s.unitType}`;
-    await this.c.putContextKind(this.p, s.key, { name: s.name, description: `${from} (created by the LaunchDarkly Migration Console).` }, this.signal);
+    try {
+      await this.c.putContextKind(this.p, s.key, { name: s.name, description: `${from} (created by the LaunchDarkly Migration Console).` }, this.signal);
+    } catch (e) {
+      // A 403 here is a missing createContextKind role, not a dead token: only the items that use this
+      // kind are skipped, the rest of the run goes on, and the capability matrix learns it.
+      if (e instanceof LdWriteError && e.status === 403) {
+        this.learned(rec, { key: 'context_kinds', status: 'not_permitted', evidence: `PUT context kind “${s.key}” → 403` });
+        throw new Error(`This token can't create context kind “${s.key}” (403: the role lacks createContextKind). Ask a LaunchDarkly admin to create it, or connect with a Developer, Maintainer or Project Admin token, then resume. Items keyed by it are skipped in this run.`);
+      }
+      throw e;
+    }
+    this.learned(rec, { key: 'context_kinds', status: 'available', evidence: `created context kind “${s.key}”` });
     rec.created = true;
     return `Created context kind “${s.key}”.`;
   }

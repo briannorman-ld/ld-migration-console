@@ -142,6 +142,25 @@ function setup(client: LdWriter, steps: PlanStep[]) {
 }
 
 describe('Executor', () => {
+  it('a 403 creating a context kind fails that step and its dependents, learns the capability, and the run goes on', async () => {
+    const ld = fakeLd({
+      putContextKind: async (_p: string, key: string) => {
+        if (key === 'plan') throw new LdWriteError(403, '/projects/p/context-kinds/plan', { message: 'Access to the requested resource was denied' });
+      },
+    });
+    const learned: unknown[] = [];
+    const kind = (key: string, deps: string[] = []): PlanStep => ({ id: `context_kind:${key}`, deps, op: 'ensure_context_kind', key, name: key, unitType: `${key}Key` });
+    const ex = new Executor({ client: ld.client, projectKey: 'p', journal: { save: async () => undefined }, onCapability: (c) => learned.push(c), now: () => new Date('2026-11-02T00:00:00Z') });
+    const out = await ex.run(newRun({ id: 'r-kinds', workspaceId: 'w', projectKey: 'p', label: 'kinds', dryRun: false, steps: [kind('plan'), kind('team', ['context_kind:plan']), kind('org')], now: new Date() }));
+    expect(out.status).not.toBe('stopped');
+    expect(out.stopReason).toBeUndefined();
+    expect(out.steps.map((s) => s.status)).toEqual(['failed', 'skipped', 'done']);
+    expect(out.steps[0]!.error).toMatch(/can't create context kind “plan”.*createContextKind/);
+    expect(out.steps[1]!.message).toMatch(/Skipped: depends on/);
+    expect(learned).toContainEqual(expect.objectContaining({ key: 'context_kinds', status: 'not_permitted' }));
+    expect(learned).toContainEqual(expect.objectContaining({ key: 'context_kinds', status: 'available' }));
+  });
+
   it('creates, sets targeting, then records provenance in a separate patch', async () => {
     const ld = fakeLd();
     const { ex, run } = setup(ld.client, [shell('a'), env('a')]);

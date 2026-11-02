@@ -93,6 +93,8 @@ export interface PlanRequest {
   flags?: string[];
   /** Segment uids to migrate on their own (neutral or StatSig); segments a flag needs are pulled in regardless. */
   segments?: string[];
+  /** Context kinds to create on their own (the guide's "create the kinds first"); kinds an item needs are pulled in regardless. */
+  contextKinds?: { key: string; unitType: string }[];
   ldEnvs: string[];
   snapshots: CanonicalSnapshot[];
   idLists?: IdLists;
@@ -250,6 +252,7 @@ export function planMigration(req: PlanRequest): Plan {
     }
     return out;
   };
+  ensureKinds((req.contextKinds ?? []).map((k) => ({ kind: 'context_kind', key: k.key, entityId: k.unitType })));
 
   const planSegment = (snapshot: CanonicalSnapshot, segmentId: string, statsigEnv: string, ldEnv: string, requiredBy: string | null): { stepId?: string; ok: boolean; reason?: string } => {
     const seg = snapshot.segments.find((s) => s.id === segmentId);
@@ -838,11 +841,13 @@ export function planMigration(req: PlanRequest): Plan {
   // Drop dependencies nothing needs any more: shells whose environment steps were removed, and
   // segments / context kinds whose only dependents are blocked (they'd be written for nothing).
   const requestedSegmentSteps = new Set([...items.values()].filter((i) => i.kind === 'segment' && !i.dependency && i.status === 'ready').map((i) => `segment:${i.ldEnv}:${i.ldKey}`));
+  // Context kinds asked for on their own (guide step 3) are wanted even with nothing depending on them.
+  const requestedKindSteps = new Set((req.contextKinds ?? []).map((k) => `context_kind:${k.key}`));
   changed = true;
   while (changed) {
     changed = false;
     for (const [id, s] of steps) {
-      if (s.op === 'update_flag_env' || s.op === 'create_bandit' || requestedSegmentSteps.has(id) || [...steps.values()].some((x) => x.deps.includes(id))) continue;
+      if (s.op === 'update_flag_env' || s.op === 'create_bandit' || requestedSegmentSteps.has(id) || requestedKindSteps.has(id) || [...steps.values()].some((x) => x.deps.includes(id))) continue;
       steps.delete(id);
       changed = true;
     }

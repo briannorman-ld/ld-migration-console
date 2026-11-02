@@ -17,7 +17,7 @@ export function kindOfUid(uid: string): SelectionKind | undefined {
 
 /** The plan request for a set of uids; uids of other kinds (experiments, say) are left out. */
 export function toSelection(uids: Iterable<string>): MigrationSelection {
-  const sel: Required<MigrationSelection> = { gates: [], configs: [], autotunes: [], flags: [], segments: [] };
+  const sel: Required<Omit<MigrationSelection, 'contextKinds'>> = { gates: [], configs: [], autotunes: [], flags: [], segments: [] };
   for (const uid of uids) {
     switch (kindOfUid(uid)) {
       case 'gate':

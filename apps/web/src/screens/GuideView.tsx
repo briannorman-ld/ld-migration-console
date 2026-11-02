@@ -6,7 +6,7 @@ import { DecisionCard } from '../components/DecisionCard.tsx';
 import { Badge, Button, Callout, Card, cx, Select, Spinner } from '../components/ui.tsx';
 import { computeGuide, describeTally, STEP_ORDER, STEP_TITLE, type GuideInput, type GuideModel, type StepKey, type Tally } from '../lib/guide.ts';
 import { KIND_LABEL } from '../lib/kinds.ts';
-import { createLdEnvironment, refreshLdState } from '../lib/ld.ts';
+import { createLdEnvironment, refreshLdState, reprobe } from '../lib/ld.ts';
 import type { MigrationSelection } from '../lib/migration.ts';
 import type { MigrationContext } from '../lib/useMigration.ts';
 
@@ -72,7 +72,7 @@ export function GuideView({
           <Step key={k} n={i + 1} title={STEP_TITLE[k]} done={g.done[k]} current={g.current === k} open={isOpen(k)} onToggle={() => setOpened((o) => ({ ...o, [k]: !isOpen(k) }))} summary={summaryFor(k, g, input)}>
             {k === 'connect' && <Connect g={g} input={input} nav={nav} />}
             {k === 'environment' && <Environment workspaceId={workspaceId} g={g} m={m} onEnvChange={onEnvChange} nav={nav} />}
-            {k === 'contexts' && <Contexts g={g} m={m} nav={nav} />}
+            {k === 'contexts' && <Contexts workspaceId={workspaceId} g={g} m={m} nav={nav} onMigrate={onMigrate} />}
             {k === 'segments' && <Items g={g} tallies={[g.segments]} noun="segment" nav={nav} onMigrate={onMigrate} toSelection={(uids) => ({ gates: [], autotunes: [], segments: uids })} />}
             {k === 'flags' && <Items g={g} tallies={[g.gates, g.configs]} noun="flag" nav={nav} onMigrate={onMigrate} toSelection={(uids) => ({ gates: uids.filter((u) => g.gates.toMigrate.includes(u)), configs: uids.filter((u) => g.configs.toMigrate.includes(u)), autotunes: [] })} />}
             {k === 'experiments' && <Experiments g={g} nav={nav} onMigrate={onMigrate} />}
@@ -233,7 +233,9 @@ function Environment({ workspaceId, g, m, onEnvChange, nav }: { workspaceId: str
   );
 }
 
-function Contexts({ g, m, nav }: { g: GuideModel; m: MigrationContext | null; nav: GuideNav }) {
+function Contexts({ workspaceId, g, m, nav, onMigrate }: { workspaceId: string; g: GuideModel; m: MigrationContext | null; nav: GuideNav; onMigrate: (selection: MigrationSelection, ldEnvs: string[]) => void }) {
+  const [probing, setProbing] = useState(false);
+  const kinds = g.contexts.toCreate;
   return (
     <>
       <p className="text-fg-muted">
@@ -253,7 +255,43 @@ function Contexts({ g, m, nav }: { g: GuideModel; m: MigrationContext | null; na
           ))}
         </ul>
       )}
-      {g.contexts.unitTypes.length > 0 && g.contexts.open.length === 0 && g.contexts.decided.length === 0 && (
+      {kinds.length > 0 && g.contexts.open.length === 0 && (
+        <div className="space-y-2 rounded-md border border-line p-3">
+          <div className="text-xs font-semibold tracking-wide text-fg-muted uppercase">Context kinds to create in LaunchDarkly</div>
+          <ul className="space-y-0.5 text-xs">
+            {kinds.map((k) => (
+              <li key={k.key} className="flex items-center gap-2">
+                <code className="font-mono">{k.key}</code> <span className="text-fg-muted">for {k.unitType}</span>
+              </li>
+            ))}
+          </ul>
+          {g.contexts.canCreate ? (
+            <div className="flex items-center gap-3">
+              <Button onClick={() => onMigrate({ gates: [], autotunes: [], contextKinds: kinds }, g.ldEnvs)}>
+                Create {kinds.length} context kind{kinds.length === 1 ? '' : 's'} in LD…
+              </Button>
+              <span className="text-xs text-fg-muted">A small run of its own, so the kinds exist before any segment or flag refers to them. Needs the createContextKind role.</span>
+            </div>
+          ) : (
+            <Callout tone="amber">
+              This token cannot create context kinds (its role lacks createContextKind). Ask a LaunchDarkly admin to create the kinds above in project “{m?.ld.projectKey}”, or connect with a
+              Developer, Maintainer or Project Admin token; then re-probe.{' '}
+              <Button
+                variant="secondary"
+                className="ml-2 py-1 text-xs"
+                disabled={probing}
+                onClick={() => {
+                  setProbing(true);
+                  void reprobe(workspaceId).finally(() => setProbing(false));
+                }}
+              >
+                {probing ? <Spinner /> : null} Re-probe
+              </Button>
+            </Callout>
+          )}
+        </div>
+      )}
+      {g.contexts.unitTypes.length > 0 && g.contexts.open.length === 0 && g.contexts.decided.length === 0 && kinds.length === 0 && (
         <p className="text-xs text-fg-muted">
           Every unit type here already has a context kind in LaunchDarkly, or is userID. Change a mapping on the{' '}
           <button type="button" className="text-link hover:underline" onClick={nav.mapping}>

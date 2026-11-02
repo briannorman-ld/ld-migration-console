@@ -75,6 +75,10 @@ export interface GuideModel {
     unitTypes: string[];
     open: DecisionInstance[];
     decided: DecisionInstance[];
+    /** Context kinds the items in this environment need and LD does not have yet. */
+    toCreate: { key: string; unitType: string }[];
+    /** Whether this token may create them (capability matrix); false shows the admin instructions instead. */
+    canCreate: boolean;
   };
   segments: Tally;
   gates: Tally;
@@ -136,7 +140,17 @@ export function computeGuide(input: GuideInput): GuideModel {
   // Contexts: the unit types of the sources that take part, and their kind decisions.
   const unitTypes = [...new Set(taking.flatMap((x) => x.snapshot.unitTypes.map((u) => u.name)))];
   const kindDecisions = decisions.filter((d) => d.decision.type === 'unit_type_kind' && (takingIds.size === 0 || takingIds.has(d.decision.subject.sourceId)));
-  const contexts = { unitTypes, open: kindDecisions.filter((d) => !d.resolvedWith), decided: kindDecisions.filter((d) => d.resolvedWith) };
+  const toCreate = new Map<string, string>();
+  const noteDeps = (deps: { kind: string; key: string; entityId?: string }[]) => {
+    for (const d of deps) if (d.kind === 'context_kind' && !toCreate.has(d.key) && !(m?.ld.contextKinds ?? []).includes(d.key)) toCreate.set(d.key, d.entityId ?? d.key);
+  };
+  const contexts = {
+    unitTypes,
+    open: kindDecisions.filter((d) => !d.resolvedWith),
+    decided: kindDecisions.filter((d) => d.resolvedWith),
+    toCreate: [] as { key: string; unitType: string }[],
+    canCreate: !!m && m.capabilities.contextKinds !== 'not_permitted' && m.capabilities.contextKinds !== 'unavailable',
+  };
 
   const segments = emptyTally('segment');
   const gates = emptyTally('gate');
@@ -153,11 +167,13 @@ export function computeGuide(input: GuideInput): GuideModel {
       for (const seg of snapshot.segments) {
         if (seg.archived) continue;
         const r = mapSegmentFor(snapshot, seg, target, m);
+        noteDeps(r.dependencies);
         const existing = ldSegments?.find((s) => s.key === r.segmentKey && ownsSegment({ key: s.key, tags: s.tags ?? [] }, snapshot.source.alias));
         const fp = existing ? parseFooter(existing.description)?.fp : undefined;
         add(segments, seg.uid, classify(r, { status: !existing ? 'absent' : fp === r.statsigFingerprint ? 'in_sync' : 'changed' }));
       }
-      const flagStanding = (r: { flagKey: string; statsigFingerprint: string; decisionSetHash: string; skipped?: string; unresolved: DecisionPoint[] }, id: string) => {
+      const flagStanding = (r: { flagKey: string; statsigFingerprint: string; decisionSetHash: string; skipped?: string; unresolved: DecisionPoint[]; dependencies: { kind: string; key: string; entityId?: string }[] }, id: string) => {
+        noteDeps(r.dependencies);
         const f = ldFlags.get(r.flagKey);
         const st = migrationStatus(f && ldFlagState(f), ldEnv, r, { id, source: snapshot.source.alias }).status;
         return classify(r, { status: st === 'in_sync' ? 'in_sync' : st === 'statsig_changed' || st === 'decisions_changed' ? 'changed' : 'absent' });
@@ -173,10 +189,11 @@ export function computeGuide(input: GuideInput): GuideModel {
     }
   }
 
+  contexts.toCreate = [...toCreate.entries()].map(([key, unitType]) => ({ key, unitType })).sort((a, b) => a.key.localeCompare(b.key));
   const done: Record<StepKey, boolean> = {
     connect: snapshots.length > 0 && connected,
     environment: ldEnvs.length > 0,
-    contexts: ldEnvs.length > 0 && contexts.open.length === 0,
+    contexts: ldEnvs.length > 0 && contexts.open.length === 0 && contexts.toCreate.length === 0,
     segments: ldEnvs.length > 0 && tallyDone(segments),
     flags: ldEnvs.length > 0 && tallyDone(gates) && tallyDone(configs),
     experiments: ldEnvs.length > 0 && tallyDone(autotunes),

@@ -44,6 +44,16 @@ function acceptAll(req: PlanRequest): PlanRequest {
 }
 
 describe('planMigration', () => {
+  it('plans context kinds on their own (the guide creates them before segments), skipping kinds LD has', () => {
+    const plan = planMigration(request([], { contextKinds: [{ key: 'plan', unitType: 'planKey' }, { key: 'user', unitType: 'userID' }, { key: 'company', unitType: 'companyID' }] }));
+    expect(plan.steps.map((s) => s.id).sort()).toEqual(['context_kind:company', 'context_kind:plan']);
+    expect(plan.steps.find((s) => s.id === 'context_kind:plan')).toMatchObject({ op: 'ensure_context_kind', key: 'plan', unitType: 'planKey', deps: [] });
+    expect(plan.items).toEqual([]);
+    expect(plan.ready).toBe(true);
+    // A kind the project already has needs no step.
+    expect(planMigration(request([], { contextKinds: [{ key: 'user', unitType: 'userID' }] })).steps).toEqual([]);
+  });
+
   it('blocks until decisions are made, then orders segments → shells → environments', () => {
     const blocked = planMigration(request(['new_checkout_flow']));
     expect(blocked.ready).toBe(false);

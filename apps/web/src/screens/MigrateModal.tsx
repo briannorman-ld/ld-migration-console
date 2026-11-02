@@ -27,6 +27,7 @@ import {
   undoRun,
   useActiveRun,
   useCancelling,
+  isProjectOnlySelection,
   type MigrationSelection,
 } from "../lib/migration.ts";
 import type { MigrationContext } from "../lib/useMigration.ts";
@@ -87,6 +88,8 @@ export function MigrateModal({
   // exactly which ones this run writes to. Only environments a source maps to can be chosen.
   const [ldEnvs, setLdEnvs] = useState<string[]>(initialLdEnvs);
   const envOptions = useMemo(() => envChoices(m, sources), [m, sources]);
+  // Context kinds are project-level: a run that creates only those needs no environment.
+  const needsEnv = !isProjectOnlySelection(selection);
   const activeRun = useActiveRun(workspaceId);
   const cancelling = useCancelling(workspaceId);
 
@@ -154,7 +157,7 @@ export function MigrateModal({
   const needsConfirm = plan?.confirmEnvs ?? [];
   const confirmed =
     needsConfirm.length === 0 || confirm.trim() === needsConfirm.join(", ");
-  const label = `${describeSelection(selection)} → ${ldEnvs.join(", ")}`;
+  const label = needsEnv ? `${describeSelection(selection)} → ${ldEnvs.join(", ")}` : `${describeSelection(selection)} (project)`;
   const seconds = Math.max(1, Math.round(((plan?.requests ?? 0) * 0.5) / 1));
   const ldBase = m.ld.projectKey
     ? `${LD_INSTANCES[m.ld.instance ?? "us"].origin}/${m.ld.projectKey}`
@@ -218,7 +221,7 @@ export function MigrateModal({
 
           {plan && (phase.kind === "plan" || phase.kind === "error") && (
             <>
-              <EnvChooser options={envOptions} chosen={ldEnvs} onChange={setLdEnvs} disabled={busy} />
+              {needsEnv && <EnvChooser options={envOptions} chosen={ldEnvs} onChange={setLdEnvs} disabled={busy} />}
               {plan.errors.map((e) => (
                 <Callout key={e} tone="red">
                   {e}
@@ -391,7 +394,7 @@ export function MigrateModal({
               <Button
                 variant="secondary"
                 className="ml-auto"
-                disabled={busy || plan.steps.length === 0 || ldEnvs.length === 0}
+                disabled={busy || plan.steps.length === 0 || (needsEnv && ldEnvs.length === 0)}
                 onClick={() => void run(true)}
               >
                 Dry run
@@ -400,7 +403,7 @@ export function MigrateModal({
                 disabled={
                   busy ||
                   plan.steps.length === 0 ||
-                  ldEnvs.length === 0 ||
+                  (needsEnv && ldEnvs.length === 0) ||
                   !confirmed ||
                   plan.errors.length > 0
                 }
