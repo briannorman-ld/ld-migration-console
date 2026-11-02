@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { CanonicalSnapshot, Condition, Config, Gate } from '@sslm/canonical';
-import { caseFoldedPattern, mapAutotune, mapConfig, mapGate, mapSegment, type MapArgs, type Resolution } from '../src/index.ts';
+import { caseFoldedPattern, createKindOption, isValidContextKindKey, mapAutotune, mapConfig, mapGate, mapSegment, optionLabel, type MapArgs, type Resolution } from '../src/index.ts';
 import { acmeSnapshot, CAPS, NOW, profileFor, server } from './fixtures.ts';
 
 beforeAll(() => server.listen({ onUnhandledFrame: 'error' }));
@@ -56,6 +56,27 @@ describe('operator pitfalls (CLAUDE.md, PLAN §10.3)', () => {
     expect(r.env.targets.map((t) => t.contextKind)).toEqual(['company', 'company']);
     expect(r.dependencies).toContainEqual({ kind: 'context_kind', key: 'company', entityId: 'companyID' });
     expect(types(r)).toContain('unit_type_kind');
+  });
+
+  it('a typed `create:<key>` answer creates a kind the user named; an invalid key falls back to the proposal', () => {
+    const first = mapGate(args('b2b_bulk_ordering'));
+    const d = first.unresolved.find((x) => x.type === 'unit_type_kind')!;
+    expect(d.options.map((o) => o.key)).toContain('create:company');
+    const answer = (optionKey: string) => new Map([[d.id, { id: d.id, type: d.type, optionKey, scope: 'resource' as const, fingerprint: d.fingerprint, decidedAt: NOW }]]);
+
+    const custom = mapGate(args('b2b_bulk_ordering', { resolutions: answer(createKindOption('account')) }));
+    expect(types(custom)).not.toContain('unit_type_kind');
+    expect(custom.applied.map((a) => a.optionKey)).toContain('create:account');
+    expect(custom.env.rules[0]!.clauses[0]!.contextKind).toBe('account');
+    expect(custom.dependencies).toContainEqual({ kind: 'context_kind', key: 'account', entityId: 'companyID' });
+    expect(custom.dependencies.find((x) => x.key === 'company')).toBeUndefined();
+    expect(optionLabel(d, createKindOption('account'))).toBe('Create context kind “account”');
+
+    const bad = mapGate(args('b2b_bulk_ordering', { resolutions: answer(createKindOption('not a key!')) }));
+    expect(bad.env.rules[0]!.clauses[0]!.contextKind).toBe('company');
+    expect(isValidContextKindKey('plan')).toBe(true);
+    expect(isValidContextKindKey('Plan_v2.x')).toBe(true);
+    for (const k of ['', 'kind', 'multi', 'plan key', 'plan/key']) expect(isValidContextKindKey(k)).toBe(false);
   });
 
   it('a configured unit type → kind mapping needs no decision', () => {

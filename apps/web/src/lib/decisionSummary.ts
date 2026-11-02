@@ -1,4 +1,4 @@
-import type { DecisionType, MappingProfile, Severity } from '@sslm/mapper';
+import { optionLabel, type DecisionType, type MappingProfile, type Severity } from '@sslm/mapper';
 import type { DecisionInstance } from './migration.ts';
 
 /**
@@ -40,7 +40,7 @@ export function summarizeDecisions(all: DecisionInstance[], policies: MappingPro
     }
     // Blocking outranks choice outranks acknowledge if a type ever mixes severities.
     if (SEVERITY_RANK[d.severity] < SEVERITY_RANK[row.severity]) row.severity = d.severity;
-    if (row.policy && !row.policyLabel) row.policyLabel = d.options.find((o) => o.key === row!.policy)?.label;
+    if (row.policy && !row.policyLabel) row.policyLabel = optionLabel(d, row!.policy);
     if (inst.resolvedWith) {
       row.decided++;
       continue;

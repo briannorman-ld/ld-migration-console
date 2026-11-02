@@ -12,7 +12,7 @@
  */
 import { normalizeCondition, toArray, type CanonicalSnapshot, type Condition, type Segment } from '@sslm/canonical';
 import { DROP_CONDITION, DROP_RULE, SKIP, type DecisionCollector } from './decisions.ts';
-import { attributeFor, kindFor, sanitizeKey } from './profile.ts';
+import { attributeFor, kindFor, sanitizeKey, kindFromChoice } from './profile.ts';
 import type { DecisionOption, DecisionSubject, Dependency, FidelityNote, IdListCoverages, IdLists, LdClause, LdOperator, MapperCapabilities, MappingProfile } from './types.ts';
 
 export type Dnf = LdClause[][];
@@ -125,7 +125,7 @@ export function resolveKind(ctx: ConditionContext, unitType: string): string {
       },
       options[0]!.key,
     );
-    kind = choice.split(':').slice(1).join(':') || proposed;
+    kind = kindFromChoice(choice, proposed);
   }
   ctx.kindCache.set(unitType.toLowerCase(), kind);
   if (kind !== 'user' && !ctx.capabilities.existingContextKinds.includes(kind)) ctx.deps.set(`context_kind:${kind}`, { kind: 'context_kind', key: kind, entityId: unitType });

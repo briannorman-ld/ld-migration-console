@@ -28,6 +28,7 @@ import {
   type NeutralSegmentMapResult,
   type Resolution,
   type SegmentMapResult,
+  optionLabel,
 } from "@sslm/mapper";
 import {
   planMigration,
@@ -626,10 +627,7 @@ export function decisionLogMarkdown(
   const resolved = items.filter((i) => i.resolvedWith);
   const open = items.filter((i) => !i.resolvedWith);
   const label = (i: DecisionInstance) =>
-    i.decision.options.find((o) => o.key === i.resolvedWith?.optionKey)
-      ?.label ??
-    i.resolvedWith?.optionKey ??
-    "";
+    i.resolvedWith ? optionLabel(i.decision, i.resolvedWith.optionKey) : "";
   const row = (i: DecisionInstance) => {
     const r = resolutions.get(i.decision.id);
     return `| ${i.decision.type} | ${i.decision.subject.id} | ${(i.decision.subject.location ?? "").replace(/\|/g, "/")} | ${i.envs.join(", ")} | ${label(i)} | ${i.resolvedWith?.via === "policy" ? "workspace policy" : (r?.decidedAt ?? "")} |`;

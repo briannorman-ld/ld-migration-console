@@ -1,4 +1,5 @@
 import { fingerprint } from '@sslm/canonical';
+import { isValidContextKindKey } from './profile.ts';
 import type { AppliedDecision, DecisionOption, DecisionPoint, DecisionSubject, DecisionType, MappingProfile, Resolution, Severity, StaleDecision } from './types.ts';
 
 export interface DecisionSpec {
@@ -32,15 +33,24 @@ export type Lookup = { status: 'resolved'; optionKey: string; via: AppliedDecisi
  * no longer matches is stale: the question is asked again, showing the old answer (PLAN §8.1).
  * A policy applies only if its option still exists for this decision.
  */
+/**
+ * Whether an answer is one this decision takes: a listed option, or, for `unit_type_kind`, a
+ * `create:<key>` the user typed for a kind under a valid LD key (the card's free-text answer).
+ */
+export function acceptsOption(dp: Pick<DecisionPoint, 'type' | 'options'>, optionKey: string): boolean {
+  if (dp.options.some((o) => o.key === optionKey)) return true;
+  return dp.type === 'unit_type_kind' && optionKey.startsWith('create:') && isValidContextKindKey(optionKey.slice('create:'.length));
+}
+
 export function lookupResolution(dp: DecisionPoint, resolutions: ReadonlyMap<string, Resolution>, profile: MappingProfile): Lookup {
   const r = resolutions.get(dp.id);
   let stale: Resolution | undefined;
   if (r && r.scope === 'resource') {
-    if (r.fingerprint === dp.fingerprint && dp.options.some((o) => o.key === r.optionKey)) return { status: 'resolved', optionKey: r.optionKey, via: 'resource' };
+    if (r.fingerprint === dp.fingerprint && acceptsOption(dp, r.optionKey)) return { status: 'resolved', optionKey: r.optionKey, via: 'resource' };
     stale = r;
   }
   const policy = profile.policies[dp.type];
-  if (policy && dp.options.some((o) => o.key === policy)) return { status: 'resolved', optionKey: policy, via: 'policy' };
+  if (policy && acceptsOption(dp, policy)) return { status: 'resolved', optionKey: policy, via: 'policy' };
   return stale ? { status: 'unresolved', stale } : { status: 'unresolved' };
 }
 
@@ -105,3 +115,14 @@ export class DecisionCollector {
 export const SKIP: DecisionOption = { key: 'skip', label: 'Skip this item', explanation: "Don't migrate it. It stays in StatSig only.", resultingFidelity: 'skipped' };
 export const DROP_RULE: DecisionOption = { key: 'drop_rule', label: 'Drop the rule', explanation: 'The LD flag will not have this rule. Users it matched fall through to the next rule.', resultingFidelity: 'partial' };
 export const DROP_CONDITION: DecisionOption = { key: 'drop_condition', label: 'Drop the condition', explanation: 'Keep the rule without this condition, so it matches more users than in StatSig.', resultingFidelity: 'partial' };
+
+/**
+ * Label for an answer, including answers that are not one of the listed options: a
+ * `unit_type_kind` decision also accepts `create:<key>` for a kind the user named.
+ */
+export function optionLabel(d: Pick<DecisionPoint, 'type' | 'options'>, optionKey: string): string {
+  const o = d.options.find((x) => x.key === optionKey);
+  if (o) return o.label;
+  if (d.type === 'unit_type_kind' && optionKey.startsWith('create:')) return `Create context kind “${optionKey.slice('create:'.length)}”`;
+  return optionKey;
+}

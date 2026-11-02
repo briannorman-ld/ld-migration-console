@@ -1,6 +1,6 @@
 import { Fragment, useMemo, useState } from 'react';
 import type { CanonicalSnapshot, NeutralFlag, NeutralSegment } from '@sslm/canonical';
-import type { DecisionType, NeutralFlagMapResult, NeutralSegmentMapResult } from '@sslm/mapper';
+import { optionLabel, type DecisionType, type NeutralFlagMapResult, type NeutralSegmentMapResult } from '@sslm/mapper';
 import { migrationStatus, ownsSegment, type MigrationStatus } from '@sslm/planner';
 import type { SourceRecord } from '@sslm/store';
 import { DecisionCard, FIDELITY_TONE } from '../components/DecisionCard.tsx';
@@ -328,7 +328,7 @@ function Detail({ row, m, readOnly, sourceEnv }: { row: Row; m: MigrationContext
       )}
       {r.applied.length > 0 && (
         <div className="text-xs text-fg-muted md:col-span-2">
-          Decided: {r.applied.map((a) => `${a.decision.type} → ${a.decision.options.find((o) => o.key === a.optionKey)?.label ?? a.optionKey}${a.via === 'policy' ? ' (policy)' : ''}`).join('; ')}
+          Decided: {r.applied.map((a) => `${a.decision.type} → ${optionLabel(a.decision, a.optionKey)}${a.via === 'policy' ? ' (policy)' : ''}`).join('; ')}
           {!readOnly && (
             <Button variant="ghost" className="ml-2 py-0.5 text-xs" onClick={() => void m.clear(r.applied.filter((a) => a.via === 'resource').map((a) => a.decision.id))}>
               Reconsider

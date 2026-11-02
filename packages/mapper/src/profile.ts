@@ -50,6 +50,27 @@ export function defaultKindFor(unitType: string): string {
   return k === 'kind' || k === 'multi' || k === '' ? `${k || 'unit'}-id` : k;
 }
 
+/** LD context kind keys: letters, digits, `.`, `_` and `-`; `kind` and `multi` are reserved words. */
+export const CONTEXT_KIND_KEY = /^[a-zA-Z0-9._-]+$/;
+
+export function isValidContextKindKey(key: string): boolean {
+  return CONTEXT_KIND_KEY.test(key) && key !== 'kind' && key !== 'multi';
+}
+
+/** The `unit_type_kind` option key that creates `key`; the card also accepts a key the user typed. */
+export function createKindOption(key: string): string {
+  return `create:${key}`;
+}
+
+/**
+ * The context kind a `unit_type_kind` answer names: `create:<key>` or `existing:<key>`. A key the
+ * user typed is accepted only when LD would accept it; anything else falls back to the proposal.
+ */
+export function kindFromChoice(choice: string, proposed: string): string {
+  const key = choice.split(':').slice(1).join(':');
+  return key && isValidContextKindKey(key) ? key : proposed;
+}
+
 export function kindFor(profile: MappingProfile, sourceId: string, unitType: string): string {
   const sp = profile.sources[sourceId];
   const exact = sp?.unitTypeKinds[unitType];

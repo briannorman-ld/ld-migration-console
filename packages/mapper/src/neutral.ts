@@ -25,7 +25,7 @@ import {
 import { LIST_SEGMENT_MAX, SkipItem, unique } from './conditions.ts';
 import { DecisionCollector, DROP_CONDITION, DROP_RULE, SKIP } from './decisions.ts';
 import { provenanceProperties, report, type MapArgs, type MapOutcome } from './gate.ts';
-import { sanitizeTag } from './profile.ts';
+import { sanitizeTag, kindFromChoice } from './profile.ts';
 import type { CustomProperty, DecisionOption, DecisionSubject, Dependency, DesiredFlagEnv, DesiredFlagShell, DesiredRule, DesiredSegment, DesiredSegmentRule, DesiredTarget, FidelityNote, LdClause, LdOperator, VariationOrRollout } from './types.ts';
 
 /** LD clause operators the console knows how to write (reference/launchdarkly/semantic-patch-flags.md). */
@@ -127,7 +127,7 @@ export function resolveSourceKind(ctx: Ctx, kindKey: string): string {
       },
       options[0]!.key,
     );
-    kind = choice.split(':').slice(1).join(':') || proposed;
+    kind = kindFromChoice(choice, proposed);
   }
   ctx.kindCache.set(kindKey, kind);
   if (kind !== 'user' && !caps.existingContextKinds.includes(kind)) ctx.deps.set(`context_kind:${kind}`, { kind: 'context_kind', key: kind, entityId: kindKey });

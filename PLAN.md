@@ -437,7 +437,7 @@ map(canonicalEntity, mappingProfile, resolutions, ldCapabilities, targetEnv)
 | `gate_reference` | `passes_gate`/`fails_gate` that can't be inlined exactly | **Inline the referenced gate's rules** (when exact) · flag-level prerequisite (approximate; Enterprise) · convert the referenced gate into an LD segment · drop the condition · skip the item |
 | `time_condition` | `time` / `current_time` | Already in the past → **resolve statically** · LD scheduled change at that time (Enterprise) · drop the rule · skip |
 | `derived_attribute` | `browser_name`, `os_name`, `country` (from IP), … | **Map to attribute `X`** (the app must send it; added to the context contract) · drop the rule · skip |
-| `unit_type_kind` | New unit type | **Create context kind `k`** · map to an existing kind · ask an admin to create it (no permission) |
+| `unit_type_kind` | New unit type | **Create context kind `k`** · create a kind under a key you type (`create:<key>`, validated against LD's key rules) · map to an existing kind · ask an admin to create it (no permission) |
 | `env_unmapped` | StatSig environment without an LD environment | **Map to an existing LD environment** · create the LD environment · don't migrate this environment |
 | `key_collision` | The LD key exists and wasn't created by this app | **Adopt (link and overwrite on sync, keeping a pre-image)** · rename with a suffix · skip |
 | `source_collision` | Same key from two consolidated sources (§12) | **Merge if identical** · separate keys with a source prefix · single flag with discriminator rules · pick a winning source |
