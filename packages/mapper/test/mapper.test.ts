@@ -99,6 +99,17 @@ describe('operator pitfalls (CLAUDE.md, PLAN §10.3)', () => {
     expect(optionLabel(d, attributeOption('companyID'))).toBe('Keep “companyID” as an attribute of the user context');
   });
 
+  it('1.13: the flag key is the StatSig ID and the flag name is the display name, which a renamed gate keeps apart', () => {
+    const renamed = mapGate(args('new_checkout_flow'));
+    expect(renamed.flagKey).toBe('new_checkout_flow');
+    expect(renamed.shell.name).toBe('New checkout flow - one page');
+    // A gate never renamed has the same display name and ID.
+    const plain = mapGate(args('checkout_express_pay'));
+    expect(plain.shell.name).toBe('checkout_express_pay');
+    const config = mapConfig({ ...args('checkout_config'), entity: web.configs.find((c) => c.id === 'checkout_config')! });
+    expect(config.shell.name).toBe('Checkout tunables');
+  });
+
   it('a configured unit type → kind mapping needs no decision', () => {
     const profile = profileFor(web, MAPPING);
     profile.sources[web.source.sourceId]!.unitTypeKinds.companyID = 'account';

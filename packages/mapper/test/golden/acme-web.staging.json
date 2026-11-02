@@ -3,6 +3,7 @@
     {
       "gate": "new_checkout_flow",
       "flagKey": "new_checkout_flow",
+      "name": "New checkout flow - one page",
       "fidelity": "partial",
       "notes": [
         "partial: Holdout “checkout_holdout” (5%) is not carried over: users it holds out in StatSig get the feature in LD. [holdout “checkout_holdout”]",
@@ -88,6 +89,7 @@
     {
       "gate": "checkout_express_pay",
       "flagKey": "checkout_express_pay",
+      "name": "checkout_express_pay",
       "fidelity": "partial",
       "notes": [
         "partial: Your app must send “country” (StatSig derived it from the IP address). [rule “New checkout in North America” › condition 2]"
@@ -139,6 +141,7 @@
     {
       "gate": "checkout_promo_banner",
       "flagKey": "checkout_promo_banner",
+      "name": "checkout_promo_banner",
       "fidelity": "full",
       "notes": [
         "full: Inlined “passes employees_only” (1 alternative). [rule “Staff”]"
@@ -180,6 +183,7 @@
     {
       "gate": "checkout_upsell_v2",
       "flagKey": "checkout_upsell_v2",
+      "name": "checkout_upsell_v2",
       "fidelity": "partial",
       "notes": [
         "partial: Rule requiring gate “new_checkout_flow” dropped. [rule “New checkout users”]"
@@ -222,6 +226,7 @@
     {
       "gate": "express_pay_fallback",
       "flagKey": "express_pay_fallback",
+      "name": "express_pay_fallback",
       "fidelity": "partial",
       "notes": [
         "partial: Rule requiring gate “new_checkout_flow” dropped. [rule “Old checkout”]"
@@ -247,6 +252,7 @@
     {
       "gate": "non_staff_survey",
       "flagKey": "non_staff_survey",
+      "name": "non_staff_survey",
       "fidelity": "full",
       "notes": [
         "full: Inlined “fails employees_only” (1 alternative). [rule “Not staff”]"
@@ -288,6 +294,7 @@
     {
       "gate": "consumer_pricing",
       "flagKey": "consumer_pricing",
+      "name": "consumer_pricing",
       "fidelity": "partial",
       "notes": [
         "partial: Rule requiring gate “b2b_bulk_ordering” dropped. [rule “Not bulk”]"
@@ -313,6 +320,7 @@
     {
       "gate": "free_returns",
       "flagKey": "free_returns",
+      "name": "free_returns",
       "fidelity": "full",
       "notes": [
         "full: Rule “Everyone” matches everyone; the 1 rule after it can never match and is dropped."
@@ -337,6 +345,7 @@
     {
       "gate": "launched_dark_mode_v1",
       "flagKey": "launched_dark_mode_v1",
+      "name": "launched_dark_mode_v1",
       "fidelity": "full",
       "notes": [
         "full: Launched in StatSig: everyone passes, so the flag is on in test and serves true to everyone."
@@ -361,6 +370,7 @@
     {
       "gate": "checkout_targeting_gate",
       "flagKey": "checkout_targeting_gate",
+      "name": "checkout_targeting_gate",
       "fidelity": "partial",
       "notes": [
         "partial: Your app must send “country” (StatSig derived it from the IP address). [rule “US” › condition 1]"
@@ -403,6 +413,7 @@
     {
       "gate": "kill_switch_payments",
       "flagKey": "kill_switch_payments",
+      "name": "kill_switch_payments",
       "fidelity": "full",
       "notes": [],
       "decisions": [
@@ -425,6 +436,7 @@
     {
       "gate": "maintenance_mode",
       "flagKey": "maintenance_mode",
+      "name": "maintenance_mode",
       "fidelity": "full",
       "notes": [],
       "decisions": [
@@ -464,6 +476,7 @@
     {
       "gate": "employees_only",
       "flagKey": "employees_only",
+      "name": "employees_only",
       "fidelity": "full",
       "notes": [],
       "decisions": [
@@ -503,6 +516,7 @@
     {
       "gate": "search_v2",
       "flagKey": "search_v2",
+      "name": "Search ranking rewrite",
       "fidelity": "full",
       "notes": [],
       "decisions": [
@@ -566,6 +580,7 @@
     {
       "gate": "search_autocomplete",
       "flagKey": "search_autocomplete",
+      "name": "search_autocomplete",
       "fidelity": "full",
       "notes": [],
       "decisions": [
@@ -605,6 +620,7 @@
     {
       "gate": "search_typo_tolerance",
       "flagKey": "search_typo_tolerance",
+      "name": "search_typo_tolerance",
       "fidelity": "partial",
       "notes": [
         "partial: Users without “email” no longer match (str_contains_none on a missing attribute). [rule “Real users outside JP/KR” › condition 1]",
@@ -671,6 +687,7 @@
     {
       "gate": "reviews_v2",
       "flagKey": "reviews_v2",
+      "name": "reviews_v2",
       "fidelity": "full",
       "notes": [],
       "decisions": [
@@ -710,6 +727,7 @@
     {
       "gate": "cross_sell_matrix",
       "flagKey": "cross_sell_matrix",
+      "name": "cross_sell_matrix",
       "fidelity": "full",
       "notes": [
         "full: not_array_contains_all expands into 4 LD rules (one per value). [rule “Incomplete wardrobe and home” › condition 1]",
@@ -736,6 +754,7 @@
     {
       "gate": "dark_mode",
       "flagKey": "dark_mode",
+      "name": "dark_mode",
       "fidelity": "partial",
       "notes": [
         "partial: Your app must send “browserName” (StatSig derived it from the user agent). [rule “Modern browsers” › condition 1]"
@@ -780,6 +799,7 @@
     {
       "gate": "legacy_browser_banner",
       "flagKey": "legacy_browser_banner",
+      "name": "legacy_browser_banner",
       "fidelity": "partial",
       "notes": [
         "partial: Your app must send “browserName” (StatSig derived it from the user agent). [rule “Old Safari” › condition 1]",
@@ -834,6 +854,7 @@
     {
       "gate": "windows_download_cta",
       "flagKey": "windows_download_cta",
+      "name": "windows_download_cta",
       "fidelity": "partial",
       "notes": [
         "partial: Your app must send “osName” (StatSig derived it from the user agent). [rule “Windows 10+” › condition 1]",
@@ -887,6 +908,7 @@
     {
       "gate": "pwa_offline_mode",
       "flagKey": "pwa_offline_mode",
+      "name": "pwa_offline_mode",
       "fidelity": "full",
       "notes": [
         "full: Version “1.2” → “1.2.0” for LD semver (StatSig pads missing parts with 0 and ignores leading zeros, so this is exact). [rule “Shell 1.2+” › condition 1]"
@@ -927,6 +949,7 @@
     {
       "gate": "pos_firmware_sync",
       "flagKey": "pos_firmware_sync",
+      "name": "pos_firmware_sync",
       "fidelity": "partial",
       "notes": [
         "partial: Version “2.1.0.450” → “2.1.0”: the app must send three-part versions; versions differing only after the third part compare equal. [rule “Firmware 2.1.0.450+” › condition 1]"
@@ -968,6 +991,7 @@
     {
       "gate": "eu_cookie_banner",
       "flagKey": "eu_cookie_banner",
+      "name": "eu_cookie_banner",
       "fidelity": "partial",
       "notes": [
         "full: Tag “★ Core” renamed to fit LD's tag format.",
@@ -1016,6 +1040,7 @@
     {
       "gate": "bot_detection_challenge",
       "flagKey": "bot_detection_challenge",
+      "name": "bot_detection_challenge",
       "fidelity": "partial",
       "notes": [
         "partial: Your app must send “userAgent” (StatSig derived it from the user agent). [rule “Bot UAs” › condition 1]"
@@ -1060,6 +1085,7 @@
     {
       "gate": "holiday_sale_2025",
       "flagKey": "holiday_sale_2025",
+      "name": "holiday_sale_2025",
       "fidelity": "full",
       "notes": [
         "full: Time condition (after 2025-11-20T00:00:00Z) is always true now; dropped. [rule “Sale window” › condition 1]",
@@ -1085,6 +1111,7 @@
     {
       "gate": "black_friday_2027",
       "flagKey": "black_friday_2027",
+      "name": "black_friday_2027",
       "fidelity": "partial",
       "notes": [
         "partial: Time condition resolved as of the sync (false); re-sync after 2027-11-26T05:00:00Z. [rule “From Black Friday” › condition 1]"
@@ -1110,6 +1137,7 @@
     {
       "gate": "staff_debug_tools",
       "flagKey": "staff_debug_tools",
+      "name": "staff_debug_tools",
       "fidelity": "full",
       "notes": [],
       "decisions": [
@@ -1132,6 +1160,7 @@
     {
       "gate": "qa_debug_panel",
       "flagKey": "qa_debug_panel",
+      "name": "qa_debug_panel",
       "fidelity": "full",
       "notes": [
         "full: Rule “QA everyone” doesn't apply in staging (not enabled here)."
@@ -1156,6 +1185,7 @@
     {
       "gate": "perf_monitoring_v2",
       "flagKey": "perf_monitoring_v2",
+      "name": "perf_monitoring_v2",
       "fidelity": "full",
       "notes": [
         "full: Rule “Prod 10%” doesn't apply in staging (not enabled here)."
@@ -1180,6 +1210,7 @@
     {
       "gate": "b2b_bulk_ordering",
       "flagKey": "b2b_bulk_ordering",
+      "name": "b2b_bulk_ordering",
       "fidelity": "full",
       "notes": [],
       "decisions": [
@@ -1232,6 +1263,7 @@
     {
       "gate": "enterprise_sso",
       "flagKey": "enterprise_sso",
+      "name": "enterprise_sso",
       "fidelity": "full",
       "notes": [],
       "decisions": [
@@ -1272,6 +1304,7 @@
     {
       "gate": "block_fraudulent_checkout",
       "flagKey": "block_fraudulent_checkout",
+      "name": "block_fraudulent_checkout",
       "fidelity": "full",
       "notes": [],
       "decisions": [
@@ -1295,6 +1328,7 @@
     {
       "gate": "anon_homepage_variant",
       "flagKey": "anon_homepage_variant",
+      "name": "anon_homepage_variant",
       "fidelity": "partial",
       "notes": [
         "partial: 50% rollout re-buckets users (StatSig and LD hash differently). [rule “Half of devices”]"
@@ -1335,6 +1369,7 @@
     {
       "gate": "winback_offer",
       "flagKey": "winback_offer",
+      "name": "winback_offer",
       "fidelity": "full",
       "notes": [],
       "decisions": [
@@ -1375,6 +1410,7 @@
     {
       "gate": "labs_menu",
       "flagKey": "labs_menu",
+      "name": "labs_menu",
       "fidelity": "full",
       "notes": [],
       "decisions": [
@@ -1415,6 +1451,7 @@
     {
       "gate": "early_adopter_badge",
       "flagKey": "early_adopter_badge",
+      "name": "early_adopter_badge",
       "fidelity": "full",
       "notes": [],
       "decisions": [
@@ -1455,6 +1492,7 @@
     {
       "gate": "referral_bonus",
       "flagKey": "referral_bonus",
+      "name": "referral_bonus",
       "fidelity": "full",
       "notes": [],
       "decisions": [
@@ -1478,6 +1516,7 @@
     {
       "gate": "vip_early_access",
       "flagKey": "vip_early_access",
+      "name": "vip_early_access",
       "fidelity": "full",
       "notes": [],
       "decisions": [
@@ -1518,6 +1557,7 @@
     {
       "gate": "wholesale_portal",
       "flagKey": "wholesale_portal",
+      "name": "wholesale_portal",
       "fidelity": "full",
       "notes": [],
       "decisions": [
@@ -1541,6 +1581,7 @@
     {
       "gate": "gift_card_upsell",
       "flagKey": "gift_card_upsell",
+      "name": "gift_card_upsell",
       "fidelity": "full",
       "notes": [
         "full: “gift_card_balance” must be sent as a number: StatSig's numeric operators coerced numeric strings, LD's don't.",
@@ -1615,6 +1656,7 @@
     {
       "gate": "loyalty_tier_perks",
       "flagKey": "loyalty_tier_perks",
+      "name": "loyalty_tier_perks",
       "fidelity": "full",
       "notes": [],
       "decisions": [
@@ -1657,6 +1699,7 @@
     {
       "gate": "legacy_partner_allowlist",
       "flagKey": "legacy_partner_allowlist",
+      "name": "legacy_partner_allowlist",
       "fidelity": "partial",
       "notes": [
         "partial: Owner jordan.former@acmeretail.example is not an LD member: no maintainer (kept in migration.owner). [flag settings]"
@@ -1683,6 +1726,7 @@
     {
       "gate": "new_customer_onboarding",
       "flagKey": "new_customer_onboarding",
+      "name": "new_customer_onboarding",
       "fidelity": "full",
       "notes": [],
       "decisions": [
@@ -1745,6 +1789,7 @@
     {
       "gate": "sku_preview",
       "flagKey": "sku_preview",
+      "name": "sku_preview",
       "fidelity": "partial",
       "notes": [
         "partial: Regex uses lookbehind; not portable to every SDK. [rule “Lookbehind regex” › condition 1]"
@@ -1801,6 +1846,7 @@
     {
       "gate": "missing_email_prompt",
       "flagKey": "missing_email_prompt",
+      "name": "missing_email_prompt",
       "fidelity": "full",
       "notes": [],
       "decisions": [
@@ -1824,6 +1870,7 @@
     {
       "gate": "sms_notifications",
       "flagKey": "sms_notifications",
+      "name": "sms_notifications",
       "fidelity": "partial",
       "notes": [
         "partial: “is set” approximated with matches \".*\" (strings only). [rule “Has phone” › condition 1]"
@@ -1865,6 +1912,7 @@
     {
       "gate": "wishlist_sharing",
       "flagKey": "wishlist_sharing",
+      "name": "wishlist_sharing",
       "fidelity": "full",
       "notes": [],
       "decisions": [
@@ -1913,6 +1961,7 @@
     {
       "gate": "bundle_recommendations",
       "flagKey": "bundle_recommendations",
+      "name": "bundle_recommendations",
       "fidelity": "full",
       "notes": [
         "full: not_array_contains_all expands into 3 LD rules (one per value). [rule “Not full-house” › condition 1]"
@@ -2007,6 +2056,7 @@
     {
       "gate": "clearance_category_badge",
       "flagKey": "clearance_category_badge",
+      "name": "clearance_category_badge",
       "fidelity": "full",
       "notes": [],
       "decisions": [
@@ -2047,6 +2097,7 @@
     {
       "gate": "storefront_url_banner",
       "flagKey": "storefront_url_banner",
+      "name": "storefront_url_banner",
       "fidelity": "full",
       "notes": [],
       "decisions": [
@@ -2070,6 +2121,7 @@
     {
       "gate": "storefront_app_only",
       "flagKey": "storefront_app_only",
+      "name": "storefront_app_only",
       "fidelity": "full",
       "notes": [],
       "decisions": [
@@ -2093,6 +2145,7 @@
     {
       "gate": "old_cart_drawer",
       "flagKey": "old_cart_drawer",
+      "name": "old_cart_drawer",
       "fidelity": "partial",
       "notes": [
         "partial: Owner jordan.former@acmeretail.example is not an LD member: no maintainer (kept in migration.owner). [flag settings]",
@@ -2119,6 +2172,7 @@
     {
       "gate": "legacy_wishlist",
       "flagKey": "legacy_wishlist",
+      "name": "legacy_wishlist",
       "skipped": "archived in StatSig",
       "fidelity": "skipped",
       "notes": [
@@ -2134,6 +2188,7 @@
     {
       "gate": "stale_promo_ribbon",
       "flagKey": "stale_promo_ribbon",
+      "name": "stale_promo_ribbon",
       "fidelity": "full",
       "notes": [
         "full: Launched in StatSig: everyone passes, so the flag is on in test and serves true to everyone (its 1 rule is not evaluated in StatSig and is not migrated).",
@@ -2159,6 +2214,7 @@
     {
       "gate": "payments_v3_scaffold",
       "flagKey": "payments_v3_scaffold",
+      "name": "payments_v3_scaffold",
       "fidelity": "full",
       "notes": [
         "full: StatSig marks this gate stale (STALE_NO_RULES). Consider hard-coding it instead of migrating."
@@ -2183,6 +2239,7 @@
     {
       "gate": "Holiday Banner 2026",
       "flagKey": "Holiday_Banner_2026",
+      "name": "Holiday Banner 2026",
       "fidelity": "full",
       "notes": [
         "full: Flag key “Holiday_Banner_2026” differs from the StatSig name “Holiday Banner 2026” (LD keys allow letters, digits, . _ -)."
@@ -2207,6 +2264,7 @@
     {
       "gate": "stale_reviews_widget",
       "flagKey": "stale_reviews_widget",
+      "name": "stale_reviews_widget",
       "fidelity": "partial",
       "notes": [
         "partial: Owner jordan.former@acmeretail.example is not an LD member: no maintainer (kept in migration.owner). [flag settings]",
@@ -2252,6 +2310,7 @@
     {
       "config": "checkout_config",
       "flagKey": "checkout_config",
+      "name": "Checkout tunables",
       "fidelity": "partial",
       "notes": [
         "partial: Your app must send “country” (StatSig derived it from the IP address). [rule “US” › condition 1]",
@@ -2346,6 +2405,7 @@
     {
       "config": "homepage_hero",
       "flagKey": "homepage_hero",
+      "name": "homepage_hero",
       "fidelity": "partial",
       "notes": [
         "partial: 100% rollout split Autumn 50% / Minimal 30% / Video 20% re-buckets users (StatSig and LD hash differently). [rule “Everyone (variants)”]"
@@ -2417,6 +2477,7 @@
     {
       "config": "shipping_thresholds",
       "flagKey": "shipping_thresholds",
+      "name": "shipping_thresholds",
       "fidelity": "partial",
       "notes": [
         "partial: Your app must send “country” (StatSig derived it from the IP address). [rule “UK” › condition 1]",
@@ -2500,6 +2561,7 @@
     {
       "config": "search_ranking_weights",
       "flagKey": "search_ranking_weights",
+      "name": "search_ranking_weights",
       "fidelity": "full",
       "notes": [],
       "decisions": [
@@ -2540,6 +2602,7 @@
     {
       "config": "b2b_order_limits",
       "flagKey": "b2b_order_limits",
+      "name": "b2b_order_limits",
       "fidelity": "full",
       "notes": [],
       "decisions": [
@@ -2596,6 +2659,7 @@
     {
       "config": "api_rate_limits",
       "flagKey": "api_rate_limits",
+      "name": "api_rate_limits",
       "fidelity": "partial",
       "notes": [
         "partial: 50% rollout re-buckets users (StatSig and LD hash differently). [rule “New limits (50%)”]"
@@ -2647,6 +2711,7 @@
     {
       "config": "maintenance_mode",
       "flagKey": "maintenance_mode",
+      "name": "maintenance_mode",
       "fidelity": "full",
       "notes": [],
       "decisions": [
@@ -2678,6 +2743,7 @@
     {
       "config": "loyalty_checkout_perks",
       "flagKey": "loyalty_checkout_perks",
+      "name": "loyalty_checkout_perks",
       "fidelity": "partial",
       "notes": [
         "partial: 25% rollout re-buckets users (StatSig and LD hash differently). [rule “Accounts older than 30 days”]",
@@ -2771,6 +2837,7 @@
     {
       "config": "legacy_pricing_rules",
       "flagKey": "legacy_pricing_rules",
+      "name": "legacy_pricing_rules",
       "fidelity": "partial",
       "notes": [
         "partial: Owner jordan.former@acmeretail.example is not an LD member: no maintainer (kept in migration.owner). [flag settings]",

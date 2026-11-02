@@ -120,6 +120,8 @@ export function permalink(ctx: BuildContext, kind: string, id: string): string {
 
 export interface GateSeed {
   id: string;
+  /** Display name. StatSig derives the ID from the name at creation and never changes it, so a renamed gate's name and ID differ. Defaults to the ID. */
+  name?: string;
   description: string;
   owner: Person;
   idType?: string;
@@ -144,7 +146,7 @@ export function gate(ctx: BuildContext, s: GateSeed): JsonObject {
   const archived = s.status === 'Archived';
   return {
     id: s.id,
-    name: s.id,
+    name: s.name ?? s.id,
     idType: s.idType ?? 'userID',
     description: s.description,
     ...audit(ctx, s.owner, s.createdDaysAgo ?? 120, s.modifiedDaysAgo ?? 10),
@@ -178,6 +180,8 @@ export function gate(ctx: BuildContext, s: GateSeed): JsonObject {
 
 export interface ConfigSeed {
   id: string;
+  /** Display name; defaults to the ID (see GateSeed.name). */
+  name?: string;
   description: string;
   owner: Person;
   idType?: string;
@@ -199,7 +203,7 @@ export interface ConfigSeed {
 export function dynamicConfig(ctx: BuildContext, s: ConfigSeed): JsonObject {
   return {
     id: s.id,
-    name: s.id,
+    name: s.name ?? s.id,
     idType: s.idType ?? 'userID',
     description: s.description,
     ...audit(ctx, s.owner, s.createdDaysAgo ?? 200, s.modifiedDaysAgo ?? 14),

@@ -3,6 +3,7 @@
     {
       "gate": "employees_only",
       "flagKey": "employees_only",
+      "name": "employees_only",
       "fidelity": "full",
       "notes": [],
       "decisions": [
@@ -42,6 +43,7 @@
     {
       "gate": "maintenance_mode",
       "flagKey": "maintenance_mode",
+      "name": "maintenance_mode",
       "fidelity": "full",
       "notes": [],
       "decisions": [
@@ -81,6 +83,7 @@
     {
       "gate": "kill_switch_payments",
       "flagKey": "kill_switch_payments",
+      "name": "kill_switch_payments",
       "fidelity": "full",
       "notes": [],
       "decisions": [
@@ -103,6 +106,7 @@
     {
       "gate": "new_checkout_flow",
       "flagKey": "new_checkout_flow",
+      "name": "new_checkout_flow",
       "fidelity": "partial",
       "notes": [
         "partial: 50% rollout re-buckets users (StatSig and LD hash differently). [rule “App 5.2+ (50%)”]"
@@ -180,6 +184,7 @@
     {
       "gate": "dark_mode",
       "flagKey": "dark_mode",
+      "name": "dark_mode",
       "fidelity": "partial",
       "notes": [
         "partial: Your app must send “osName” (StatSig derived it from the user agent). [rule “iOS 13+” › condition 1]",
@@ -264,6 +269,7 @@
     {
       "gate": "search_v2",
       "flagKey": "search_v2",
+      "name": "search_v2",
       "fidelity": "full",
       "notes": [],
       "decisions": [
@@ -286,6 +292,7 @@
     {
       "gate": "ios_rating_prompt",
       "flagKey": "ios_rating_prompt",
+      "name": "ios_rating_prompt",
       "fidelity": "partial",
       "notes": [
         "partial: Your app must send “osName” (StatSig derived it from the user agent). [rule “iOS 5.x” › condition 1]"
@@ -346,6 +353,7 @@
     {
       "gate": "force_upgrade_banner",
       "flagKey": "force_upgrade_banner",
+      "name": "force_upgrade_banner",
       "fidelity": "full",
       "notes": [],
       "decisions": [
@@ -384,6 +392,7 @@
     {
       "gate": "push_v2_pilot",
       "flagKey": "push_v2_pilot",
+      "name": "push_v2_pilot",
       "fidelity": "full",
       "notes": [],
       "decisions": [
@@ -422,6 +431,7 @@
     {
       "gate": "android_min_version",
       "flagKey": "android_min_version",
+      "name": "android_min_version",
       "fidelity": "partial",
       "notes": [
         "partial: Version “5.2.0.100” → “5.2.0”: the app must send three-part versions; versions differing only after the third part compare equal. [rule “Build 5.2.0.100+” › condition 1]"
@@ -463,6 +473,7 @@
     {
       "gate": "beta_channel_features",
       "flagKey": "beta_channel_features",
+      "name": "beta_channel_features",
       "fidelity": "partial",
       "notes": [
         "partial: Version “5.3.0-beta” → “5.3.0”: prerelease builds sort below the release in LD. [rule “Beta builds 5.3+” › condition 1]"
@@ -504,6 +515,7 @@
     {
       "gate": "tablet_layout",
       "flagKey": "tablet_layout",
+      "name": "tablet_layout",
       "fidelity": "partial",
       "notes": [
         "partial: Your app must send “deviceModel” (StatSig derived it from the user agent). [rule “Tablets” › condition 1]"
@@ -547,6 +559,7 @@
     {
       "gate": "device_beta_program",
       "flagKey": "device_beta_program",
+      "name": "device_beta_program",
       "fidelity": "full",
       "notes": [],
       "decisions": [
@@ -587,6 +600,7 @@
     {
       "gate": "beta_feature_flags",
       "flagKey": "beta_feature_flags",
+      "name": "beta_feature_flags",
       "fidelity": "full",
       "notes": [],
       "decisions": [
@@ -627,6 +641,7 @@
     {
       "gate": "webview_checkout_fallback",
       "flagKey": "webview_checkout_fallback",
+      "name": "webview_checkout_fallback",
       "fidelity": "full",
       "notes": [],
       "decisions": [
@@ -650,6 +665,7 @@
     {
       "gate": "onboarding_followup",
       "flagKey": "onboarding_followup",
+      "name": "onboarding_followup",
       "fidelity": "full",
       "notes": [],
       "decisions": [
@@ -675,6 +691,7 @@
     {
       "config": "app_theme",
       "flagKey": "app_theme",
+      "name": "app_theme",
       "fidelity": "partial",
       "notes": [
         "partial: Your app must send “osName” (StatSig derived it from the user agent). [rule “Android” › condition 1]"
@@ -733,6 +750,7 @@
     {
       "config": "onboarding_steps",
       "flagKey": "onboarding_steps",
+      "name": "onboarding_steps",
       "fidelity": "full",
       "notes": [
         "full: Rule “Dev short” doesn't apply in production (not enabled here)."
@@ -779,6 +797,7 @@
     {
       "config": "checkout_config",
       "flagKey": "checkout_config",
+      "name": "checkout_config",
       "fidelity": "full",
       "notes": [],
       "decisions": [
@@ -814,6 +833,7 @@
     {
       "config": "api_endpoints",
       "flagKey": "api_endpoints",
+      "name": "api_endpoints",
       "fidelity": "full",
       "notes": [
         "full: Rule “Staging” doesn't apply in production (not enabled here).",

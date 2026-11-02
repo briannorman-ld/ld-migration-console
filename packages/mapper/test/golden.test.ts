@@ -22,6 +22,7 @@ function golden(snap: CanonicalSnapshot, statsig: string, ld: string) {
     return {
       gate: g.id,
       flagKey: r.flagKey,
+      name: r.shell.name,
       ...(r.skipped ? { skipped: r.skipped } : {}),
       fidelity: r.fidelity.overall,
       notes: r.fidelity.notes.map((n) => `${n.fidelity}: ${n.message}${n.location ? ` [${n.location}]` : ''}`),
@@ -35,6 +36,7 @@ function golden(snap: CanonicalSnapshot, statsig: string, ld: string) {
     return {
       config: c.id,
       flagKey: r.flagKey,
+      name: r.shell.name,
       ...(r.skipped ? { skipped: r.skipped } : {}),
       fidelity: r.fidelity.overall,
       notes: r.fidelity.notes.map((n) => `${n.fidelity}: ${n.message}${n.location ? ` [${n.location}]` : ''}`),

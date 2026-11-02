@@ -58,6 +58,8 @@ export function acmeWeb(): ProjectSeed {
       // --- Checkout ---------------------------------------------------------------------------
       {
         id: 'new_checkout_flow',
+        // Renamed in StatSig after creation: the display name no longer matches the ID (edge case 1.13).
+        name: 'New checkout flow - one page',
         description: 'One-page checkout. Staff first, then beta testers, then a 20% public rollout.',
         owner: P.bob,
         tags: ['checkout'],
@@ -179,6 +181,7 @@ export function acmeWeb(): ProjectSeed {
       // --- Search ------------------------------------------------------------------------------
       {
         id: 'search_v2',
+        name: 'Search ranking rewrite',
         description: 'New search backend for paying plans. `any` is case-insensitive in StatSig.',
         owner: P.priya,
         tags: ['search'],
@@ -604,6 +607,7 @@ export function acmeWeb(): ProjectSeed {
     configs: [
       {
         id: 'checkout_config',
+        name: 'Checkout tunables',
         description: 'Checkout tunables, schema-validated.',
         owner: P.bob,
         tags: ['checkout'],
