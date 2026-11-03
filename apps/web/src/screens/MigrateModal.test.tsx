@@ -174,4 +174,24 @@ describe('run progress', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Show all .*steps$/ }));
     expect(rows().length).toBe(2301);
   });
+
+  it('counts failed steps and distinct errors in the header, and reports them once the run has finished', () => {
+    const run = bigRun();
+    run.steps[7] = { ...run.steps[7]!, error: 'LaunchDarkly 400 for /flags/p: At least two variations must be defined' };
+    run.steps[8] = { ...run.steps[8]!, status: 'failed', error: 'LaunchDarkly 400 for /flags/p: At least two variations must be defined' };
+    run.steps[9] = { ...run.steps[9]!, status: 'failed', error: 'Flag “k9” appeared since planning and wasn\'t created by this app. Re-plan to decide.' };
+    const { unmount } = render(<RunProgress run={run} title="Migrating" />);
+    expect(screen.getByText('3 failed · 2 distinct errors')).toBeTruthy();
+    // Still running: no report yet.
+    expect(screen.queryByLabelText('Errors')).toBeNull();
+    unmount();
+    render(<RunProgress run={{ ...run, status: 'failed', finishedAt: '2026-11-02T12:00:00Z' }} title="Operations" />);
+    const report = screen.getByLabelText('Errors');
+    expect(report.textContent).toContain('3 steps failed');
+    expect(report.textContent).toContain('2 distinct errors');
+    fireEvent.click(screen.getByText('LaunchDarkly 400 for /flags/p: At least two variations must be defined'));
+    expect(report.textContent).toContain('Context kind k7');
+    expect(report.textContent).toContain('Context kind k8');
+    expect(screen.getByRole('button', { name: 'Download report' })).toBeTruthy();
+  });
 });

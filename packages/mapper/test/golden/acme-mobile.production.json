@@ -799,7 +799,9 @@
       "flagKey": "checkout_config",
       "name": "checkout_config",
       "fidelity": "full",
-      "notes": [],
+      "notes": [
+        "full: Every rule returns the default value, and LaunchDarkly needs two variations: a second variation “Unused” was added that nothing serves."
+      ],
       "decisions": [
         "choice client_side_availability (flag settings) → both"
       ],
@@ -815,6 +817,10 @@
             ]
           },
           "name": "Default"
+        },
+        {
+          "value": {},
+          "name": "Unused"
         }
       ],
       "env": {

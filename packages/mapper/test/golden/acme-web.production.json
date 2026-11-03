@@ -2843,7 +2843,9 @@
       "flagKey": "maintenance_mode",
       "name": "maintenance_mode",
       "fidelity": "full",
-      "notes": [],
+      "notes": [
+        "full: Every rule returns the default value, and LaunchDarkly needs two variations: a second variation “Unused” was added that nothing serves."
+      ],
       "decisions": [
         "choice client_side_availability (flag settings) → both"
       ],
@@ -2855,6 +2857,10 @@
             "eta_minutes": 30
           },
           "name": "Default"
+        },
+        {
+          "value": {},
+          "name": "Unused"
         }
       ],
       "env": {
@@ -2970,6 +2976,7 @@
       "name": "legacy_pricing_rules",
       "fidelity": "partial",
       "notes": [
+        "full: Every rule returns the default value, and LaunchDarkly needs two variations: a second variation “Unused” was added that nothing serves.",
         "partial: Owner jordan.former@acmeretail.example is not a LaunchDarkly member: no maintainer (kept in migration.owner). [flag settings]",
         "full: Disabled in StatSig: the flag is off in production and serves the default value."
       ],
@@ -2986,6 +2993,10 @@
             "currency_display": "symbol"
           },
           "name": "Default"
+        },
+        {
+          "value": {},
+          "name": "Unused"
         }
       ],
       "env": {

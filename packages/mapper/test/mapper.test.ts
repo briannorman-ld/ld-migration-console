@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { CanonicalSnapshot, Condition, Config, Gate } from '@sslm/canonical';
-import { acceptsOption, attributeOption, caseFoldedPattern, createKindOption, isValidContextKindKey, mapAutotune, mapConfig, mapGate, mapPrompt, mapSegment, optionLabel, type MapArgs, type Resolution } from '../src/index.ts';
+import { acceptsOption, attributeOption, caseFoldedPattern, createKindOption, isValidContextKindKey, mapAutotune, mapConfig, mapGate, mapPrompt, mapSegment, optionLabel, placeholderVariationValue, type MapArgs, type Resolution } from '../src/index.ts';
 import { acmeSnapshot, CAPS, DIRECTORY, NOW, profileFor, server } from './fixtures.ts';
 
 beforeAll(() => server.listen({ onUnhandledFrame: 'error' }));
@@ -1025,7 +1025,8 @@ describe('dynamic configs → JSON flags (PLAN §10.1; edge cases 10.1–10.9)',
 
   it('10.2: a rule whose value equals the default adds no variation and serves the default', () => {
     const r = mapConfig(cargs('legacy_pricing_rules'));
-    expect(names(r)).toEqual(['Default']);
+    // Plus the unserved “Unused” placeholder LaunchDarkly's two-variation minimum needs (edge case 10.14).
+    expect(names(r)).toEqual(['Default', 'Unused']);
     expect(r.env.rules[0]).toMatchObject({ description: 'Same as default', variation: 0 });
     // 10.6: disabled → off, serving the default.
     expect(r.env.on).toBe(false);
@@ -1101,7 +1102,8 @@ describe('dynamic configs → JSON flags (PLAN §10.1; edge cases 10.1–10.9)',
 
   it('a config without rules serves the default everywhere; archived configs are skipped', () => {
     const r = mapConfig(cargs('maintenance_mode'));
-    expect(names(r)).toEqual(['Default']);
+    // Plus the unserved “Unused” placeholder LaunchDarkly's two-variation minimum needs (edge case 10.14).
+    expect(names(r)).toEqual(['Default', 'Unused']);
     expect(r.env).toMatchObject({ on: true, rules: [], fallthrough: { variation: 0 } });
     const archived = mapConfig(cargs('maintenance_mode', { entity: { ...web.configs.find((c) => c.id === 'maintenance_mode')!, archived: true } }));
     expect(archived.skipped).toBe('archived in StatSig');
@@ -1245,5 +1247,37 @@ describe('prompts → AI Configs (PLAN §6; edge case 1.12)', () => {
     expect(r.fidelity.notes.some((n) => /holdout/.test(n.message))).toBe(true);
     const renamed = mapPrompt({ ...base, entity: { ...p, description: 'changed' } });
     expect(renamed.statsigFingerprint).not.toBe(r.statsigFingerprint);
+  });
+});
+
+describe('configs with one value get a second, unserved variation (edge case 10.14)', () => {
+  const args = (entity: Config): MapArgs<Config> => ({ canonical: { snapshot: web }, entity, profile: profileFor(web, { development: null, staging: 'test', production: 'production', qa: null }), resolutions: new Map(), capabilities: CAPS, env: { statsig: 'production', ld: 'production' }, now: NOW, directory: DIRECTORY });
+
+  it('a config whose only rule returns the default gets an “Unused” placeholder that nothing serves', () => {
+    const r = mapConfig(args(web.configs.find((c) => c.id === 'legacy_pricing_rules')!));
+    expect(r.shell.variations.map((v) => v.name)).toEqual(['Default', 'Unused']);
+    expect(r.shell.variations[1]!.value).toEqual({});
+    expect(r.shell.defaults).toEqual({ onVariation: 0, offVariation: 0 });
+    expect(r.env.fallthrough).toEqual({ variation: 0 });
+    expect(r.env.rules.every((x) => x.variation === 0)).toBe(true);
+    expect(r.fidelity.notes.map((n) => n.message)).toContainEqual(expect.stringContaining('LaunchDarkly needs two variations'));
+  });
+
+  it('a config with rules of its own is left alone', () => {
+    const r = mapConfig(args(web.configs.find((c) => c.id === 'shipping_thresholds')!));
+    expect(r.shell.variations.map((v) => v.name)).not.toContain('Unused');
+  });
+
+  it('the placeholder follows the default\'s JSON type and never equals it', () => {
+    expect(placeholderVariationValue({ a: 1 })).toEqual({});
+    expect(placeholderVariationValue({})).toEqual({ unused: true });
+    expect(placeholderVariationValue([1])).toEqual([]);
+    expect(placeholderVariationValue([])).toEqual([null]);
+    expect(placeholderVariationValue('x')).toBe('');
+    expect(placeholderVariationValue('')).toBe('unused');
+    expect(placeholderVariationValue(5)).toBe(0);
+    expect(placeholderVariationValue(0)).toBe(1);
+    expect(placeholderVariationValue(true)).toBe(false);
+    expect(placeholderVariationValue(null)).toEqual({});
   });
 });

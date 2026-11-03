@@ -304,8 +304,30 @@ function overrideTargets(ctx: ConditionContext, overrides: Config['overrides'], 
   return splitOverrides(ctx, [...groups.values()]);
 }
 
+/**
+ * Edge case 10.14: LaunchDarkly refuses a flag with fewer than two variations ("At least two
+ * variations must be defined"), and a config whose rules all return the default has only one.
+ * A second variation that no rule, rollout or target serves is added so the flag can exist; the
+ * value is a placeholder of the default's JSON type, distinct from it (variation values must differ).
+ */
+export const UNUSED_VARIATION = 'Unused';
+
+export function placeholderVariationValue(defaultValue: unknown): unknown {
+  const same = (v: unknown) => stableStringify(v) === stableStringify(defaultValue);
+  if (Array.isArray(defaultValue)) return same([]) ? [null] : [];
+  if (defaultValue !== null && typeof defaultValue === 'object') return same({}) ? { unused: true } : {};
+  if (typeof defaultValue === 'string') return same('') ? 'unused' : '';
+  if (typeof defaultValue === 'number') return same(0) ? 1 : 0;
+  if (typeof defaultValue === 'boolean') return !defaultValue;
+  return {};
+}
+
 function flagShell(ctx: ConditionContext, config: Config, alias: string, key: string, vars: Variations): DesiredFlagShell {
   if (key !== config.id) ctx.fidelity.push({ fidelity: 'full', message: `Flag key “${key}” differs from the StatSig name “${config.id}” (LaunchDarkly keys allow letters, digits, . _ -).` });
+  if (vars.list.length === 1) {
+    vars.add(placeholderVariationValue(config.defaultValue), UNUSED_VARIATION);
+    ctx.fidelity.push({ fidelity: 'full', message: `Every rule returns the default value, and LaunchDarkly needs two variations: a second variation “${UNUSED_VARIATION}” was added that nothing serves.` });
+  }
   const tags = unique([TAG_MIGRATED, sourceTag(alias), ...config.tags.map(sanitizeTag)].filter(Boolean));
   const renamed = config.tags.filter((t) => sanitizeTag(t) !== t);
   if (renamed.length) ctx.fidelity.push({ fidelity: 'full', message: `Tag${renamed.length === 1 ? '' : 's'} ${renamed.map((t) => `“${t}”`).join(', ')} renamed to fit LaunchDarkly's tag format.` });

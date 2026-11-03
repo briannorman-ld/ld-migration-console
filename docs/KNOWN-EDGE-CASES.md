@@ -201,6 +201,7 @@ availability and provenance (`migration.type = config`) work exactly as for gate
 | 10.11 | Holdouts attached to a config | Held-out users get the default before the rules. | No holdout is created (PLAN §11). | 📝 partial note with the holdout's share; see 4.8 for the gate side. | — |
 | 10.12 | Numeric `custom_field` conditions | Coerces numeric strings. | Typed comparison. | 📝 as 6.2 (the gate handling applies). | `loyalty_checkout_perks` (`account_age_days gte 30`) |
 | 10.13 | Value size | Config values up to 100 KB. | String/JSON variations up to 32 KB each. | 🚧 Not checked before planning; LD rejects the flag at create time. | — |
+| 10.14 | Only one value | A config with no rules, or whose rules all return the default, has one value. | A flag needs at least two variations (`400 At least two variations must be defined`), with distinct values. | ⚙️ a second variation **Unused** is appended that no rule, rollout or target serves: a placeholder of the default's JSON type (`{}` for an object, `[]`, `""`, `0`, the other boolean), or the next distinct one when the default *is* that placeholder; 📝 full note. Before this fix the create failed for every such config. | `legacy_pricing_rules` |
 
 ## 11. Experiments, layers, holdouts, autotune (M6/M7; PLAN §11)
 

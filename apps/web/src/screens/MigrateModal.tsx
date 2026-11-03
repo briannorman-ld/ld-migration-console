@@ -21,6 +21,7 @@ import {
   buildPlan,
   cancelRun,
   describeSelection,
+  download,
   executePlan,
   fetchDeferredIdLists,
   snapshotRefs,
@@ -31,6 +32,7 @@ import {
   type MigrationSelection,
 } from "../lib/migration.ts";
 import { describeRemaining, formatDuration, runProgress } from "../lib/runProgress.ts";
+import { groupRunErrors, runErrorCounts, runErrorCsv, runErrorReport } from "../lib/runErrors.ts";
 import type { MigrationContext } from "../lib/useMigration.ts";
 
 const ITEM_TONE: Record<ItemStatus, "green" | "red" | "slate" | "amber"> = {
@@ -728,6 +730,7 @@ export function RunProgress({
   const p = runProgress(run, now);
   const done = p.finished;
   const remaining = describeRemaining(p);
+  const errors = runErrorCounts(run);
   return (
     <section>
       {/* Pinned while the step list scrolls: a 700-step run keeps its bar and estimate in view. */}
@@ -737,6 +740,11 @@ export function RunProgress({
         <span className="text-fg-muted">
           {done}/{run.steps.length} steps · {Math.round(p.fraction * 100)}%
         </span>
+        {errors.failed > 0 && (
+          <Badge tone="red" title={`${errors.failed.toLocaleString()} step${errors.failed === 1 ? "" : "s"} failed, with ${errors.distinct.toLocaleString()} distinct error${errors.distinct === 1 ? "" : "s"} (the same cause on different items counts once)`}>
+            {errors.failed.toLocaleString()} failed · {errors.distinct.toLocaleString()} distinct error{errors.distinct === 1 ? "" : "s"}
+          </Badge>
+        )}
         {inProgress && <Spinner />}
         {inProgress && cancelling && (
           <span className="text-fg-muted">
@@ -778,7 +786,64 @@ export function RunProgress({
         {!inProgress && run.finishedAt && <span>finished in {formatDuration(p.elapsedMs)}</span>}
       </div>
       </div>
+      {!inProgress && errors.failed > 0 && <RunErrors run={run} />}
       <StepList run={run} ldBase={ldBase} showAll={showAll} onShowAll={() => setShowAll(true)} />
+    </section>
+  );
+}
+
+/**
+ * The failures of a finished run, one entry per distinct error with the steps it hit, and the
+ * report to take away (Markdown for people, CSV for a spreadsheet). A run of thousands of steps
+ * with one bad mapping reads as one problem here rather than hundreds of red rows below.
+ */
+export function RunErrors({ run }: { run: RunRecord }) {
+  const groups = groupRunErrors(run);
+  const [open, setOpen] = useState<string>();
+  const failed = groups.reduce((n, g) => n + g.steps.length, 0);
+  const stamp = run.startedAt.slice(0, 19).replace(/[:T]/g, "-");
+  return (
+    <section aria-label="Errors" className="mb-3">
+      <Callout tone="red">
+        <div className="flex flex-wrap items-center gap-3">
+          <span>
+            <b>
+              {failed.toLocaleString()} step{failed === 1 ? "" : "s"} failed
+            </b>{" "}
+            with {groups.length.toLocaleString()} distinct error{groups.length === 1 ? "" : "s"}. Failed steps are retried on resume; fix the cause first where one is named.
+          </span>
+          <span className="ml-auto flex gap-2">
+            <Button variant="secondary" className="py-1 text-xs" onClick={() => download(`run-${run.id.slice(0, 8)}-${stamp}-errors.md`, runErrorReport(run), "text/markdown")}>
+              Download report
+            </Button>
+            <Button variant="secondary" className="py-1 text-xs" onClick={() => download(`run-${run.id.slice(0, 8)}-${stamp}-errors.csv`, runErrorCsv(run), "text/csv")}>
+              CSV
+            </Button>
+          </span>
+        </div>
+        <ul className="mt-2 space-y-1.5 text-xs">
+          {groups.map((g) => (
+            <li key={g.key}>
+              <button type="button" className="flex w-full items-start gap-2 text-left" onClick={() => setOpen(open === g.key ? undefined : g.key)} aria-expanded={open === g.key}>
+                <Badge tone="red">{g.steps.length.toLocaleString()}</Badge>
+                <span className="min-w-0 flex-1 break-words">{g.message}</span>
+                <span aria-hidden className="text-fg-muted">{open === g.key ? "▾" : "▸"}</span>
+              </button>
+              {open === g.key && (
+                <ul className="mt-1 ml-8 list-disc space-y-0.5 text-fg-muted">
+                  {g.steps.slice(0, 50).map((s) => (
+                    <li key={s.id}>
+                      {s.label}
+                      {s.error !== g.message && <span className="text-fg-subtle"> · {s.error}</span>}
+                    </li>
+                  ))}
+                  {g.steps.length > 50 && <li>and {(g.steps.length - 50).toLocaleString()} more (all of them are in the report).</li>}
+                </ul>
+              )}
+            </li>
+          ))}
+        </ul>
+      </Callout>
     </section>
   );
 }
