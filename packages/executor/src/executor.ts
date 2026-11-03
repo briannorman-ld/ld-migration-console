@@ -127,10 +127,19 @@ export interface Journal {
   save(run: RunRecord): Promise<void>;
 }
 
+/**
+ * A flag or segment as LaunchDarkly returned it from a write this run made, or `null` once the run
+ * deleted it (undo). The app merges these into its listings when the run ends, instead of
+ * re-listing the whole project.
+ */
+export type ResourceChange = { kind: 'flag'; key: string; flag: LdFlag | null } | { kind: 'segment'; ldEnv: string; key: string; segment: LdSegment | null };
+
 export interface ExecutorOptions {
   client: LdWriter;
   projectKey: string;
   journal: Journal;
+  /** Every flag and segment a write returned (never a dry run's), in order; the last report per key is the current state. */
+  onResource?: (change: ResourceChange) => void;
   /** Shown in LD audit-log comments, e.g. the member email from caller identity. */
   actor?: string;
   onProgress?: (run: RunRecord) => void;
@@ -377,6 +386,10 @@ export class Executor {
    * items that exist (their pre-image is what undo restores) and for a step resumed after a
    * crash, where the create may already have gone out.
    */
+  private report(change: ResourceChange): void {
+    this.opts.onResource?.(change);
+  }
+
   private mustRead(rec: StepRecord, s: { exists: boolean }): boolean {
     return s.exists || !!rec.created || rec.preImage !== undefined;
   }
@@ -640,10 +653,13 @@ export class Executor {
     try {
       const res = await this.c.patchSegmentJson(this.p, s.ldEnv, s.key, patch, { comment: this.comment(run, s), dryRun: run.dryRun, signal: this.signal });
       rec.ldVersion = res.version ?? undefined;
+      if (!run.dryRun) this.report({ kind: 'segment', ldEnv: s.ldEnv, key: s.key, segment: res });
     } catch (e) {
       if (!(e instanceof LdWriteError && e.status === 405)) throw e;
       rec.approvalRequired = true;
       if (run.dryRun) return `Would file an approval request for segment “${s.key}” in ${s.ldEnv} (the environment requires approvals): ${segmentSummary(d)}.`;
+      // The segment stands as read (or as just created); the targeting waits for the approval.
+      this.report({ kind: 'segment', ldEnv: s.ldEnv, key: s.key, segment: current });
       return this.segmentApproval(run, rec, s, current);
     }
     const requests = batched ? ` in ${1 + targets.length} requests (LaunchDarkly takes at most ${TARGET_BATCH.toLocaleString('en-US')} targets per request)` : '';
@@ -652,6 +668,7 @@ export class Executor {
       for (const instruction of targets) {
         const res = await this.c.patchSegmentSemantic(this.p, s.ldEnv, s.key, { comment: this.comment(run, s), instructions: [instruction] });
         rec.ldVersion = res.version ?? rec.ldVersion;
+        this.report({ kind: 'segment', ldEnv: s.ldEnv, key: s.key, segment: res });
       }
     }
     return `${rec.created ? 'Created' : 'Updated'} segment “${s.key}” in ${s.ldEnv}: ${segmentSummary(d)}${requests}.`;
@@ -671,6 +688,7 @@ export class Executor {
     ];
     const res = await this.c.patchSegmentJson(this.p, s.ldEnv, s.key, patch, { comment: this.comment(run, s), dryRun: run.dryRun });
     rec.ldVersion = res.version ?? undefined;
+    if (!run.dryRun) this.report({ kind: 'segment', ldEnv: s.ldEnv, key: s.key, segment: res });
     // An LD-source big segment (PLAN §20.3): the console cannot read its members, so nothing is imported.
     if (d.unbounded!.manual) return `${run.dryRun ? 'Would create' : rec.created ? 'Created' : 'Updated'} big segment “${s.key}” in ${s.ldEnv} without members: import the member list yourself.`;
     if (run.dryRun) return `Would import ${ids.length.toLocaleString('en-US')} ${d.unbounded!.contextKind} IDs into big segment “${s.key}” in ${s.ldEnv} (replace mode).`;
@@ -752,14 +770,21 @@ export class Executor {
       }
       if (rec.created) {
         this.flags.set(s.key, flag);
+        this.report({ kind: 'flag', key: s.key, flag });
         return `Created flag “${s.key}”.`;
       }
     }
     const ops = shellPatch(flag, d);
     this.flags.set(s.key, flag);
-    if (ops.length === 0) return `Flag “${s.key}” settings already up to date.`;
+    if (ops.length === 0) {
+      if (!run.dryRun) this.report({ kind: 'flag', key: s.key, flag });
+      return `Flag “${s.key}” settings already up to date.`;
+    }
     const res = await this.c.patchFlagJson(this.p, s.key, ops, { comment: this.comment(run, s), dryRun: run.dryRun, signal: this.signal });
-    if (!run.dryRun) this.flags.set(s.key, res);
+    if (!run.dryRun) {
+      this.flags.set(s.key, res);
+      this.report({ kind: 'flag', key: s.key, flag: res });
+    }
     return `${run.dryRun ? 'Would update' : 'Updated'} flag “${s.key}” settings (${ops.map((o) => o.path.split('/')[1]).filter((v, i, a) => a.indexOf(v) === i).join(', ')}).`;
   }
 
@@ -787,7 +812,10 @@ export class Executor {
     try {
       const res = await this.c.patchFlagSemantic(this.p, s.key, { environmentKey: s.ldEnv, comment, instructions }, { dryRun: run.dryRun, signal: this.signal });
       rec.ldVersion = res.environments?.[s.ldEnv]?.version ?? undefined;
-      if (!run.dryRun) this.flags.set(s.key, res);
+      if (!run.dryRun) {
+        this.flags.set(s.key, res);
+        this.report({ kind: 'flag', key: s.key, flag: res });
+      }
     } catch (e) {
       if (!(e instanceof LdWriteError && e.status === 405)) throw e;
       approval = true;
@@ -848,7 +876,10 @@ export class Executor {
     const prop = syncPropertyKey(s.ldEnv);
     const value = [s.provenance.statsigFingerprint, String(s.provenance.statsigVersion ?? ''), this.now().toISOString(), s.provenance.decisionSetHash, ...scheduledChangeIds.map((id) => `sc:${id}`)];
     const res = await this.c.patchFlagJson(this.p, s.key, [{ op: 'add', path: `/customProperties/${pointer(prop)}`, value: { name: `${SOURCE_KIND_LABEL[s.provenance.sourceKind ?? SOURCE_KIND]} sync (${s.ldEnv})`, value } }], { comment: this.comment(run, s), dryRun: run.dryRun, signal: this.signal });
-    if (!run.dryRun) this.flags.set(s.key, res);
+    if (!run.dryRun) {
+      this.flags.set(s.key, res);
+      this.report({ kind: 'flag', key: s.key, flag: res });
+    }
   }
 
   /** The semantic-patch instructions that make an environment match `state` (also used for scheduled changes and approvals). */
@@ -888,16 +919,21 @@ export class Executor {
         return;
       case 'upsert_segment': {
         for (const a of rec.approvals ?? []) if (a.status === 'pending') await this.c.deleteApprovalRequest(a.id).catch(ignore404);
-        if (rec.created) return this.c.deleteSegment(this.p, s.ldEnv, s.key, this.signal);
+        if (rec.created) {
+          await this.c.deleteSegment(this.p, s.ldEnv, s.key, this.signal);
+          this.report({ kind: 'segment', ldEnv: s.ldEnv, key: s.key, segment: null });
+          return;
+        }
         const pre = rec.preImage as LdSegment | undefined;
         if (!pre) return;
         if (pre.unbounded) {
           // Big-segment membership can't be read back in bulk, so only the metadata is restored.
-          await this.c.patchSegmentJson(this.p, s.ldEnv, s.key, [{ op: 'add', path: '/description', value: pre.description ?? '' }, { op: 'add', path: '/tags', value: pre.tags ?? [] }], { comment });
+          const restored = await this.c.patchSegmentJson(this.p, s.ldEnv, s.key, [{ op: 'add', path: '/description', value: pre.description ?? '' }, { op: 'add', path: '/tags', value: pre.tags ?? [] }], { comment });
+          this.report({ kind: 'segment', ldEnv: s.ldEnv, key: s.key, segment: restored });
           rec.error = 'Undo restored the description and tags; the members imported into the big segment stay (LaunchDarkly has no bulk read to restore the previous list).';
           return;
         }
-        await this.c.patchSegmentJson(
+        const restored = await this.c.patchSegmentJson(
           this.p,
           s.ldEnv,
           s.key,
@@ -911,13 +947,14 @@ export class Executor {
           ],
           { comment, signal: this.signal },
         );
+        this.report({ kind: 'segment', ldEnv: s.ldEnv, key: s.key, segment: restored });
         return;
       }
       case 'upsert_flag_shell': {
         if (rec.created) return this.deleteCreatedFlag(s.key, createdFlags);
         const pre = rec.preImage as LdFlag | undefined;
         if (!pre) return;
-        await this.c.patchFlagJson(
+        const restored = await this.c.patchFlagJson(
           this.p,
           s.key,
           [
@@ -930,6 +967,7 @@ export class Executor {
           ],
           { comment, signal: this.signal },
         );
+        this.report({ kind: 'flag', key: s.key, flag: restored });
         return;
       }
       case 'ensure_randomization_unit': {
@@ -992,7 +1030,8 @@ export class Executor {
         }
         const instructions = restoreInstructions(pre, env, current, current.environments?.[s.ldEnv], prereqs);
         try {
-          await this.c.patchFlagSemantic(this.p, s.key, { environmentKey: s.ldEnv, comment, instructions }, { signal: this.signal });
+          const restored = await this.c.patchFlagSemantic(this.p, s.key, { environmentKey: s.ldEnv, comment, instructions }, { signal: this.signal });
+          this.report({ kind: 'flag', key: s.key, flag: restored });
         } catch (e) {
           if (!(e instanceof LdWriteError && e.status === 405)) throw e;
           // The environment requires approvals: the restore is filed as one too.
@@ -1000,8 +1039,8 @@ export class Executor {
           (rec.approvals ??= []).push({ id: ar._id, kind: 'flag', purpose: 'undo', status: 'pending', createdAt: this.now().toISOString() });
         }
         const before = pre.customProperties?.[prop];
-        if (before) await this.c.patchFlagJson(this.p, s.key, [{ op: 'add', path: `/customProperties/${pointer(prop)}`, value: before }], { comment, signal: this.signal });
-        else if (current.customProperties?.[prop]) await this.c.patchFlagJson(this.p, s.key, [{ op: 'remove', path: `/customProperties/${pointer(prop)}` }], { comment, signal: this.signal });
+        if (before) this.report({ kind: 'flag', key: s.key, flag: await this.c.patchFlagJson(this.p, s.key, [{ op: 'add', path: `/customProperties/${pointer(prop)}`, value: before }], { comment, signal: this.signal }) });
+        else if (current.customProperties?.[prop]) this.report({ kind: 'flag', key: s.key, flag: await this.c.patchFlagJson(this.p, s.key, [{ op: 'remove', path: `/customProperties/${pointer(prop)}` }], { comment, signal: this.signal }) });
         return;
       }
     }
@@ -1015,6 +1054,7 @@ export class Executor {
       if (!(e instanceof LdWriteError && e.status === 404)) throw e;
     });
     this.deleted.add(key);
+    this.report({ kind: 'flag', key, flag: null });
   }
 }
 

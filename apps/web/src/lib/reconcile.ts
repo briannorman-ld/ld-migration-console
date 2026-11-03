@@ -10,8 +10,8 @@
  * moment the modal closes. In the common case the listing agrees and nothing is fetched.
  */
 import { readSync } from '@sslm/canonical';
-import type { RunRecord } from '@sslm/executor';
-import type { LdFlagSummary, LdSegment } from '@sslm/ld-client';
+import type { ResourceChange, RunRecord } from '@sslm/executor';
+import type { LdFlag, LdFlagSummary, LdSegment } from '@sslm/ld-client';
 
 export interface StaleAfterRun {
   /** Flags to re-read by key. */
@@ -65,3 +65,50 @@ export function mergeByKey<T extends { key: string }>(items: readonly T[], updat
   for (const u of byKey.values()) if (u) out.push(u);
   return out;
 }
+
+/**
+ * What a run reported (executor `onResource`), one entry per flag and per (environment, segment):
+ * the last report wins, since each is the resource as the write that made it returned it, and a
+ * `null` is a deletion. These go into the session through mergeLdFlags/mergeLdSegments.
+ */
+export function latestChanges(changes: readonly ResourceChange[]): { flags: { key: string; flag: LdFlag | null }[]; segments: { ldEnv: string; key: string; segment: LdSegment | null }[] } {
+  const flags = new Map<string, { key: string; flag: LdFlag | null }>();
+  const segments = new Map<string, { ldEnv: string; key: string; segment: LdSegment | null }>();
+  for (const c of changes) {
+    if (c.kind === 'flag') flags.set(c.key, { key: c.key, flag: c.flag });
+    else segments.set(`${c.ldEnv}/${c.key}`, { ldEnv: c.ldEnv, key: c.key, segment: c.segment });
+  }
+  return { flags: [...flags.values()], segments: [...segments.values()] };
+}
+
+/** The project and account listings a run may have changed and does not report item by item (ld.ts `refreshLdLists`). */
+export interface LdListNeeds {
+  contextKinds: boolean;
+  metrics: boolean;
+  /** LD environments whose experiments to re-read. */
+  experimentEnvs: string[];
+  aiConfigs: boolean;
+  /** Experimentation settings (randomization units). */
+  settings: boolean;
+}
+
+/**
+ * Which listings `run` touched, from the steps that ran (anything but pending and skipped: a
+ * failed step may have written before it failed). Flags and segments are not listed here; the
+ * run reports those itself.
+ */
+export function listsTouchedByRun(run: RunRecord): LdListNeeds {
+  const needs: LdListNeeds = { contextKinds: false, metrics: false, experimentEnvs: [], aiConfigs: false, settings: false };
+  for (const rec of run.steps) {
+    if (rec.status === 'pending' || rec.status === 'skipped') continue;
+    const s = rec.step;
+    if (s.op === 'ensure_context_kind') needs.contextKinds = true;
+    else if (s.op === 'upsert_metric') needs.metrics = true;
+    else if (s.op === 'create_bandit' && !needs.experimentEnvs.includes(s.ldEnv)) needs.experimentEnvs.push(s.ldEnv);
+    else if (s.op === 'upsert_ai_config') needs.aiConfigs = true;
+    else if (s.op === 'ensure_randomization_unit') needs.settings = true;
+  }
+  return needs;
+}
+
+export const needsNothing = (n: LdListNeeds): boolean => !n.contextKinds && !n.metrics && !n.experimentEnvs.length && !n.aiConfigs && !n.settings;

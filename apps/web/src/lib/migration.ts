@@ -5,7 +5,7 @@
  */
 import { useSyncExternalStore } from "react";
 import type { Autotune, CanonicalSnapshot, Config, Gate, NeutralFlag, NeutralSegment, Prompt, Segment } from "@sslm/canonical";
-import { Executor, newRun, type RunRecord } from "@sslm/executor";
+import { Executor, newRun, type ResourceChange, type RunRecord } from "@sslm/executor";
 import type { CapabilityMatrix, LdFlagSummary } from "@sslm/ld-client";
 import {
   mapAutotune,
@@ -43,8 +43,8 @@ import {
 import { STATSIG_CONSOLE_BASE_URL, StatsigConsoleClient } from "@sslm/statsig-client";
 import type { SourceRecord, RunJournalRecord } from "@sslm/store";
 import { demoKey, startDemoMock } from "./demo.ts";
-import { learnCapability, ldClient, ldSessionSnapshot, mergeLdFlags, mergeLdSegments, refreshLdState, type LdSession } from "./ld.ts";
-import { staleAfterRun } from "./reconcile.ts";
+import { learnCapability, ldClient, ldSessionSnapshot, mergeLdFlags, mergeLdSegments, refreshLdLists, type LdSession } from "./ld.ts";
+import { latestChanges, listsTouchedByRun, staleAfterRun } from "./reconcile.ts";
 import { secrets } from "./secrets.ts";
 import { store } from "./store.ts";
 
@@ -581,7 +581,8 @@ export const snapshotRefs = (snapshots: CanonicalSnapshot[]): RunSnapshotRefs =>
 function executor(
   workspaceId: string,
   ld: LdSession,
-  snapshots?: RunSnapshotRefs,
+  snapshots: RunSnapshotRefs | undefined,
+  changes: ResourceChange[],
 ): Executor {
   if (!ld.projectKey) throw new Error("Choose a LaunchDarkly project first.");
   return new Executor({
@@ -593,6 +594,8 @@ function executor(
           snapshots ? ({ ...r, snapshots } satisfies RunJournalRecord) : r,
         ),
     },
+    // What the run wrote, as LD returned it: merged into the session when the run ends (applyRunResults).
+    onResource: (c) => changes.push(c),
     ...(ld.identity?.tokenName ? { actor: ld.identity.tokenName } : {}),
     onProgress: (r) => {
       active.set(workspaceId, r);
@@ -605,14 +608,15 @@ function executor(
 
 /**
  * Re-read the approval requests a run is waiting on (PLAN §5.1). Steps whose request was applied
- * get their provenance written and complete; declined ones fail. Refreshes LD state afterwards so
- * the status strip reflects what approvers applied.
+ * get their provenance written and complete; declined ones fail. The flags those writes returned
+ * (with what approvers applied) go into the session, so the status strip follows.
  */
 export async function checkRunApprovals(workspaceId: string, ld: LdSession, run: RunRecord): Promise<RunRecord> {
   const before = run.steps.filter((s) => s.status === "pending_approval").length;
-  const r = await executor(workspaceId, ld, (run as RunJournalRecord).snapshots).checkApprovals(structuredClone(run));
+  const changes: ResourceChange[] = [];
+  const r = await executor(workspaceId, ld, (run as RunJournalRecord).snapshots, changes).checkApprovals(structuredClone(run));
   const after = r.steps.filter((s) => s.status === "pending_approval").length;
-  if (after !== before) await refreshLdState(workspaceId);
+  if (after !== before) await applyRunResults(workspaceId, r, changes);
   return r;
 }
 
@@ -662,12 +666,12 @@ export async function executePlan(
     steps: plan.steps,
     now: new Date(),
   });
+  const changes: ResourceChange[] = [];
   return finishRun(
     workspaceId,
-    ld,
-    (signal) => executor(workspaceId, ld, opts.snapshots).run(run, signal),
+    (signal) => executor(workspaceId, ld, opts.snapshots, changes).run(run, signal),
     !opts.dryRun,
-    plan,
+    changes,
   );
 }
 
@@ -676,15 +680,16 @@ export async function resumeRun(
   ld: LdSession,
   run: RunRecord,
 ): Promise<RunRecord> {
+  const changes: ResourceChange[] = [];
   return finishRun(
     workspaceId,
-    ld,
     (signal) =>
-      executor(workspaceId, ld, (run as RunJournalRecord).snapshots).run(
+      executor(workspaceId, ld, (run as RunJournalRecord).snapshots, changes).run(
         structuredClone(run),
         signal,
       ),
     true,
+    changes,
   );
 }
 
@@ -693,24 +698,24 @@ export async function undoRun(
   ld: LdSession,
   run: RunRecord,
 ): Promise<RunRecord> {
+  const changes: ResourceChange[] = [];
   return finishRun(
     workspaceId,
-    ld,
     (signal) =>
-      executor(workspaceId, ld, (run as RunJournalRecord).snapshots).undo(
+      executor(workspaceId, ld, (run as RunJournalRecord).snapshots, changes).undo(
         structuredClone(run),
         signal,
       ),
     true,
+    changes,
   );
 }
 
 async function finishRun(
   workspaceId: string,
-  ld: LdSession,
   fn: (signal: AbortSignal) => Promise<RunRecord>,
   refresh: boolean,
-  plan?: Plan,
+  changes: ResourceChange[],
 ): Promise<RunRecord> {
   if (controllers.has(workspaceId))
     throw new Error("A run is already in progress for this workspace.");
@@ -718,19 +723,7 @@ async function finishRun(
   controllers.set(workspaceId, ctrl);
   try {
     const r = await guarded(workspaceId, () => fn(ctrl.signal));
-    if (refresh) {
-      const envs = [
-        ...new Set(
-          [...(plan?.steps ?? []), ...r.steps.map((s) => s.step)].flatMap(
-            (s) => ("ldEnv" in s ? [s.ldEnv] : []),
-          ),
-        ),
-      ];
-      await refreshLdState(workspaceId, {
-        segmentEnvs: envs.length ? envs : Object.keys(ld.segments ?? {}),
-      });
-      await reconcileRun(workspaceId, r);
-    }
+    if (refresh) await applyRunResults(workspaceId, r, changes);
     return r;
   } finally {
     controllers.delete(workspaceId);
@@ -740,7 +733,23 @@ async function finishRun(
 }
 
 /**
- * Settle every disagreement between the refreshed listings and what the run wrote by reading those
+ * Bring the LD session up to date from the run itself (PLAN §9 "Migrate flow"): every flag and
+ * segment the run wrote, as LD returned it, goes into the listings; the project and account lists
+ * the run could have changed and does not report item by item (context kinds, metrics,
+ * experiments, AI Configs, randomization units) are re-read, and only those. Re-listing the whole
+ * project after each run read every flag page and every segment again. reconcileRun stays as the
+ * safety net for anything the run did not report.
+ */
+async function applyRunResults(workspaceId: string, run: RunRecord, changes: ResourceChange[]): Promise<void> {
+  const latest = latestChanges(changes);
+  mergeLdFlags(workspaceId, latest.flags);
+  mergeLdSegments(workspaceId, latest.segments);
+  await refreshLdLists(workspaceId, listsTouchedByRun(run)).catch(() => undefined);
+  await reconcileRun(workspaceId, run);
+}
+
+/**
+ * Settle every disagreement between the listings and what the run wrote by reading those
  * resources directly (reconcile.ts). Best effort: a read that fails leaves that entry as listed,
  * and never fails the run.
  */

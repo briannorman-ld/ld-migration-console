@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { LdAuthError, LdWriteError, type LdAiConfig, type LdExperiment, type LdFlag, type LdMetric } from '@sslm/ld-client';
 import type { PlanStep } from '@sslm/planner';
+import type { ResourceChange } from '../src/index.ts';
 import { Executor, footer, newRun, parseFooter, scheduledIdsFrom, segmentInstructions, withFooter, type LdWriter, type RunRecord } from '../src/index.ts';
 
 /** Minimal in-memory LD: enough state for the executor's control flow, not LD's semantics. */
@@ -941,5 +942,54 @@ describe('flag reads during a run', () => {
     expect(new Set(seen).size).toBe(seen.length);
     expect(seen.at(-1)!.steps[1]!.status).toBe('done');
     expect(seen.at(-1)!.steps[1]!.preImage).toBe(out.steps[1]!.preImage);
+  });
+});
+
+describe('what a run reports for the session (onResource)', () => {
+  const collect = (ld: ReturnType<typeof fakeLd>) => {
+    const changes: ResourceChange[] = [];
+    const ex = new Executor({ client: ld.client, projectKey: 'p', journal: { save: async () => undefined }, onResource: (c) => changes.push(c), now: () => new Date('2026-10-22T00:00:00Z') });
+    return { ex, changes };
+  };
+  const start = (steps: PlanStep[], dryRun = false) => newRun({ id: 'run-report', workspaceId: 'w', projectKey: 'p', label: 't', dryRun, steps, now: new Date('2026-10-22T00:00:00Z') });
+
+  it('reports the flag after each write, so the last report is its current state; undo reports the deletion', async () => {
+    const ld = fakeLd();
+    const { ex, changes } = collect(ld);
+    const done = await ex.run(start([shell('a'), env('a')]));
+    expect(done.status).toBe('done');
+    // create, targeting, provenance
+    expect(changes.map((c) => c.kind)).toEqual(['flag', 'flag', 'flag']);
+    expect(changes.every((c) => c.kind === 'flag' && c.key === 'a' && c.flag?.key === 'a')).toBe(true);
+    changes.length = 0;
+    const undone = await ex.undo(done);
+    expect(undone.status).toBe('undone');
+    expect(changes.at(-1)).toEqual({ kind: 'flag', key: 'a', flag: null });
+  });
+
+  it('reports nothing for a dry run', async () => {
+    const ld = fakeLd();
+    const { ex, changes } = collect(ld);
+    await ex.run(start([shell('a'), env('a')], true));
+    expect(changes).toEqual([]);
+  });
+
+  it('reports a segment as the write returned it, per environment', async () => {
+    const ld = fakeLd({ patchSegmentJson: async (_p: string, env: string, key: string) => ({ key, name: key, tags: ['migrated-from-statsig', 'migration-src-web'], included: ['u1'], _env: env }) });
+    const { ex, changes } = collect(ld);
+    const seg: PlanStep = {
+      id: 'segment:test:beta',
+      deps: [],
+      op: 'upsert_segment',
+      ldEnv: 'test',
+      key: 'beta',
+      exists: false,
+      adopt: false,
+      desired: { key: 'beta', ldEnv: 'test', statsigEnv: 'staging', name: 'Beta', description: '', tags: ['migrated-from-statsig', 'migration-src-web'], rules: [], included: ['u1'], includedContexts: [] },
+      provenance: { sourceKind: 'statsig', sourceAlias: 'web', statsigType: 'segment', statsigId: 'beta', statsigFingerprint: 'fp', decisionSetHash: 'dh' },
+    };
+    const out = await ex.run(start([seg]));
+    expect(out.status).toBe('done');
+    expect(changes).toEqual([{ kind: 'segment', ldEnv: 'test', key: 'beta', segment: expect.objectContaining({ key: 'beta', included: ['u1'] }) }]);
   });
 });

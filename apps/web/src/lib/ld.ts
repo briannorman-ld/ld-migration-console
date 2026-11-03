@@ -2,7 +2,7 @@ import { useSyncExternalStore } from 'react';
 import type { CapabilityUpdate } from '@sslm/executor';
 import { migratedFromTag } from '@sslm/canonical';
 import { LdAuthError, LdClient, LdWriteError, probeCapabilities, type CapabilityMatrix, type LdAiConfig, type LdCallerIdentity, type LdExperiment, type LdFlag, type LdFlagSummary, type LdInstanceId, type LdMember, type LdMetric, type LdProject, type LdSegment, type LdTeam } from '@sslm/ld-client';
-import { mergeByKey } from './reconcile.ts';
+import { mergeByKey, needsNothing, type LdListNeeds } from './reconcile.ts';
 import { secrets } from './secrets.ts';
 import { store } from './store.ts';
 
@@ -336,6 +336,49 @@ export async function refreshLdState(workspaceId: string, opts: { segmentEnvs?: 
   } catch (e) {
     set(workspaceId, { error: `Could not read the LaunchDarkly project: ${(e as Error).message}` });
   }
+}
+
+/**
+ * After a run: re-read only the listings it may have changed and does not report item by item
+ * (context kinds, metrics, experiments in the environments it wrote bandits to, AI Configs,
+ * randomization units). Flags and segments come from the run's own write responses
+ * (mergeLdFlags, mergeLdSegments). A run that touched only those reads nothing here.
+ */
+export async function refreshLdLists(workspaceId: string, needs: LdListNeeds): Promise<void> {
+  const s = sessions.get(workspaceId);
+  if (!s?.projectKey || needsNothing(needs)) return;
+  const c = client(workspaceId);
+  const p = s.projectKey;
+  const optional = async <T,>(fn: () => Promise<T>): Promise<T | undefined> => {
+    try {
+      return await fn();
+    } catch {
+      return undefined;
+    }
+  };
+  const [kinds, metrics, settings, aiConfigs, ...experimentLists] = await Promise.all([
+    needs.contextKinds ? optional(() => c.listContextKinds(p)) : undefined,
+    needs.metrics ? optional(() => c.listMetrics(p)) : undefined,
+    needs.settings ? optional(() => c.getExperimentationSettings(p)) : undefined,
+    needs.aiConfigs ? optional(() => c.listAiConfigs(p)) : undefined,
+    ...needs.experimentEnvs.map((env) => optional(() => c.listExperiments(p, env))),
+  ]);
+  const experiments = { ...(sessions.get(workspaceId)?.experiments ?? {}) };
+  needs.experimentEnvs.forEach((env, i) => {
+    const list = experimentLists[i];
+    if (list) experiments[env] = list;
+  });
+  const defaultUnit = settings?.randomizationUnits?.find((u) => u.default)?.randomizationUnit;
+  appliedSeq = ++refreshSeq;
+  set(workspaceId, {
+    ...(kinds ? { contextKinds: kinds.items.filter((k) => !k.archived).map((k) => k.key) } : {}),
+    ...(metrics ? { metrics } : {}),
+    ...(settings ? { randomizationUnits: (settings.randomizationUnits ?? []).map((u) => u.randomizationUnit) } : {}),
+    ...(defaultUnit ? { defaultRandomizationUnit: defaultUnit } : {}),
+    ...(aiConfigs ? { aiConfigs } : {}),
+    ...(needs.experimentEnvs.length ? { experiments } : {}),
+  });
+  void persistLdState(workspaceId);
 }
 
 // ---------------------------------------------------------------------------------------------

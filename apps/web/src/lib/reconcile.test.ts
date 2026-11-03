@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { syncPropertyKey } from '@sslm/canonical';
-import type { RunRecord, StepRecord } from '@sslm/executor';
+import type { ResourceChange, RunRecord, StepRecord } from '@sslm/executor';
 import type { LdFlagSummary, LdSegment } from '@sslm/ld-client';
 import type { PlanStep } from '@sslm/planner';
-import { mergeByKey, staleAfterRun } from './reconcile.ts';
+import { latestChanges, listsTouchedByRun, mergeByKey, needsNothing, staleAfterRun } from './reconcile.ts';
 
 const RUN_START = '2026-11-02T10:00:00.000Z';
 const BEFORE = '2026-10-01T00:00:00.000Z';
@@ -74,5 +74,53 @@ describe('mergeByKey', () => {
     const out = mergeByKey(items, []);
     expect(out).toEqual(items);
     expect(out).not.toBe(items);
+  });
+});
+
+describe('what a run reported, ready to merge', () => {
+  it('keeps the last report per flag and per (environment, segment); a null is a deletion', () => {
+    const f = (v: number) => ({ key: 'a', version: v }) as never;
+    const changes: ResourceChange[] = [
+      { kind: 'flag', key: 'a', flag: f(1) },
+      { kind: 'segment', ldEnv: 'test', key: 's', segment: { key: 's', name: 's' } as never },
+      { kind: 'flag', key: 'a', flag: f(2) },
+      { kind: 'segment', ldEnv: 'production', key: 's', segment: { key: 's', name: 's2' } as never },
+      { kind: 'flag', key: 'b', flag: f(9) },
+      { kind: 'flag', key: 'b', flag: null },
+      { kind: 'segment', ldEnv: 'test', key: 's', segment: null },
+    ];
+    expect(latestChanges(changes)).toEqual({
+      flags: [
+        { key: 'a', flag: f(2) },
+        { key: 'b', flag: null },
+      ],
+      segments: [
+        { ldEnv: 'test', key: 's', segment: null },
+        { ldEnv: 'production', key: 's', segment: { key: 's', name: 's2' } },
+      ],
+    });
+    expect(latestChanges([])).toEqual({ flags: [], segments: [] });
+  });
+
+  it('names only the listings the steps that ran could have changed', () => {
+    const rec = (step: PlanStep, status: StepRecord['status']): StepRecord => ({ id: step.id, label: step.id, status, step });
+    const kind: PlanStep = { id: 'context_kind:k', deps: [], op: 'ensure_context_kind', key: 'k', name: 'k', unitType: 'kKey' };
+    const unit: PlanStep = { id: 'randomization_unit:k', deps: [], op: 'ensure_randomization_unit', key: 'k' };
+    const bandit = (env: string): PlanStep => ({ id: `bandit:${env}:x`, deps: [], op: 'create_bandit', key: 'x', ldEnv: env, statsigEnv: env, flagKey: 'x', exists: false, adopt: false, desired: {} as never, provenance: {} as never });
+    const metric: PlanStep = { id: 'metric:m', deps: [], op: 'upsert_metric', key: 'm', exists: false, adopt: false, desired: {} as never, provenance: {} as never };
+    const ai: PlanStep = { id: 'ai_config:p', deps: [], op: 'upsert_ai_config', key: 'p', exists: false, adopt: false, desired: {} as never, provenance: {} as never };
+    const run = (steps: StepRecord[]): RunRecord => ({ id: 'r', workspaceId: 'w', projectKey: 'p', label: 'l', dryRun: false, startedAt: RUN_START, status: 'done', steps });
+
+    // Flags and segments only: nothing to list.
+    expect(needsNothing(listsTouchedByRun(run([rec(shell('a'), 'done')])))).toBe(true);
+    // A pending or skipped step wrote nothing; a failed one may have.
+    expect(needsNothing(listsTouchedByRun(run([rec(kind, 'pending'), rec(metric, 'skipped')])))).toBe(true);
+    expect(listsTouchedByRun(run([rec(kind, 'failed'), rec(bandit('test'), 'done'), rec(bandit('test'), 'done'), rec(bandit('production'), 'undone'), rec(metric, 'done'), rec(ai, 'pending_approval'), rec(unit, 'done')]))).toEqual({
+      contextKinds: true,
+      metrics: true,
+      experimentEnvs: ['test', 'production'],
+      aiConfigs: true,
+      settings: true,
+    });
   });
 });
