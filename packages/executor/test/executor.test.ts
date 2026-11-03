@@ -176,6 +176,23 @@ describe('Executor', () => {
     expect(learned).toContainEqual(expect.objectContaining({ key: 'context_kinds', status: 'available' }));
   });
 
+  it('a 400 for the flag size limit names the cause and the remedy instead of echoing LaunchDarkly (KNOWN-EDGE-CASES 15.22)', async () => {
+    const ld = fakeLd({
+      patchFlagSemantic: async () => {
+        throw new LdWriteError(400, '/flags/p/a', { code: 'invalid_request', message: 'flag size validation failed: This flag could not be saved because it is 904447 bytes, which exceeds the 400000 byte limit. Remove some targets, rules, or variations to reduce its size, then try again.' });
+      },
+    });
+    const { ex, run } = setup(ld.client, [shell('a'), env('a')]);
+    const out = await ex.run(run);
+    expect(out.status).toBe('failed');
+    expect(out.steps.map((s) => s.status)).toEqual(['done', 'failed']);
+    const error = out.steps[1]!.error!;
+    expect(error).toMatch(/refused the targeting in test of flag “a”: the flag would be 904,447 bytes, over LaunchDarkly's 400,000-byte limit/);
+    expect(error).toMatch(/Cause: a rule or override list too long to live in the flag itself/);
+    expect(error).toMatch(/Remedy: re-plan this flag.*then resume the run; the failed step retries/);
+    expect(error).not.toMatch(/Remove some targets/);
+  });
+
   it('creates, sets targeting, then records provenance in a separate patch', async () => {
     const ld = fakeLd();
     const { ex, run } = setup(ld.client, [shell('a'), env('a')]);

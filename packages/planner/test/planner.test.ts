@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { CanonicalSnapshot } from '@sslm/canonical';
-import { mapGate, mapSegment, type Resolution } from '@sslm/mapper';
+import { envBudget, estimateEnvBytes, mapGate, mapSegment, type Resolution } from '@sslm/mapper';
 import { flagOwner, IN_SYNC_REASON, migrationStatus, ownsSegment, planMigration, recommendedResolutions, syncPropertyKey, type LdProjectState, type Plan, type PlanRequest, type PlanStep } from '../src/index.ts';
 import { acmeSnapshot, CAPS, DIRECTORY, NOW, profileFor, server } from './fixtures.ts';
 
@@ -54,6 +54,25 @@ describe('planMigration', () => {
     expect(ids.indexOf('segment:test:vip_customers')).toBeLessThan(ids.indexOf('segment:test:beta_or_vip'));
     expect(plan.steps.find((s) => s.id === 'segment:test:beta_or_vip')!.deps).toEqual(expect.arrayContaining(['segment:test:beta_testers', 'segment:test:vip_customers']));
     expect(plan.items.filter((i) => i.dependency).map((i) => i.entityId).sort()).toEqual(['beta_testers', 'vip_customers']);
+  });
+
+  it('writes a segment split off an oversized flag before the flag, after its context kind (KNOWN-EDGE-CASES 15.22)', () => {
+    const plan = planMigration(acceptAll(request(['partner_api_allowlist'], { ldEnvs: ['production'] })));
+    const seg = 'segment:production:partner_api_allowlist.allow-listed-accounts-key';
+    expect(plan.ready).toBe(true);
+    expect(plan.steps.map((s) => s.id)).toEqual(['context_kind:company', 'shell:partner_api_allowlist', seg, 'env:production:partner_api_allowlist']);
+    const segStep = plan.steps.find((s) => s.id === seg)!;
+    expect(segStep).toMatchObject({ op: 'upsert_segment', deps: ['context_kind:company'], exists: false, provenance: { statsigType: 'segment', statsigId: 'partner_api_allowlist' } });
+    if (segStep.op !== 'upsert_segment') throw new Error('segment step');
+    expect(segStep.desired.includedContexts).toEqual([{ contextKind: 'company', values: expect.any(Array) }]);
+    expect(segStep.desired.includedContexts[0]!.values).toHaveLength(12_000);
+    const envStep = plan.steps.find((s) => s.id === 'env:production:partner_api_allowlist')!;
+    if (envStep.op !== 'update_flag_env') throw new Error('env step');
+    expect(envStep.deps).toContain(seg);
+    const shell = plan.steps.find((s) => s.op === 'upsert_flag_shell')!;
+    if (shell.op !== 'upsert_flag_shell') throw new Error('shell step');
+    expect(estimateEnvBytes(envStep.desired)).toBeLessThan(envBudget(shell.desired, 2));
+    expect(plan.items.find((i) => i.kind === 'segment')).toMatchObject({ dependency: true, status: 'ready', ldKey: 'partner_api_allowlist.allow-listed-accounts-key', requiredBy: [uid('partner_api_allowlist')] });
   });
 
   it('plans context kinds on their own (the guide creates them before segments), skipping kinds LaunchDarkly has', () => {

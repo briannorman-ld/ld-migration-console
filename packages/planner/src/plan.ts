@@ -377,6 +377,45 @@ export function planMigration(req: PlanRequest): Plan {
     return { ok: true, stepId };
   };
 
+  /**
+   * A segment the mapper split off a flag's targeting so the flag stays under LaunchDarkly's size
+   * limit (mapper size.ts; KNOWN-EDGE-CASES 15.22). It has no StatSig entity of its own: its item
+   * hangs off the flag's uid, its provenance names the flag, and it is written before the flag's
+   * targeting, after the context kinds the flag needs.
+   */
+  const planSplitSegment = (snapshot: CanonicalSnapshot, desired: DesiredSegment, owner: { uid: string; id: string; kind: 'gate' | 'config'; sourceId: string; version?: number }, statsigEnv: string, ldEnv: string, r: { statsigFingerprint: string; decisionSetHash: string }, kindSteps: string[]): { stepId?: string; ok: boolean; reason?: string } => {
+    const uid = `${owner.uid}/list/${desired.key}`;
+    const itemKey = `${uid}|${ldEnv}`;
+    const existing = items.get(itemKey);
+    if (existing) {
+      existing.requiredBy.push(owner.uid);
+      return existing.status === 'ready' ? { ok: true, stepId: `segment:${ldEnv}:${existing.ldKey}` } : { ok: false, reason: `segment “${desired.key}” is ${existing.status}` };
+    }
+    const ldSeg = req.ld.segments[ldEnv]?.get(desired.key);
+    const item: PlanItem = { uid, kind: 'segment', entityId: desired.key, sourceId: owner.sourceId, ldKey: desired.key, ldEnv, statsigEnv, status: 'ready', dependency: true, requiredBy: [owner.uid], fidelity: { overall: 'full', notes: [{ fidelity: 'full', message: desired.description }] }, decisions: [], exists: !!ldSeg };
+    items.set(itemKey, item);
+    let adopt = false;
+    if (ldSeg && !ownsSegment(ldSeg, snapshot.source.alias)) {
+      const c = collision(item, { sourceId: owner.sourceId, kind: owner.kind, uid: owner.uid, id: owner.id, location: `segment “${desired.key}”` }, desired.key, 'segment', ldEnv);
+      if (c === 'skip') return finishItem(item, 'skipped', `LaunchDarkly segment “${desired.key}” exists and was not adopted`);
+      if (c === 'open') return finishItem(item, 'blocked', `LaunchDarkly segment “${desired.key}” already exists`);
+      adopt = true;
+    }
+    const stepId = `segment:${ldEnv}:${desired.key}`;
+    steps.set(stepId, {
+      id: stepId,
+      deps: kindSteps,
+      op: 'upsert_segment',
+      ldEnv,
+      key: desired.key,
+      exists: !!ldSeg,
+      adopt,
+      desired,
+      provenance: { sourceKind: 'statsig', sourceAlias: snapshot.source.alias, statsigType: 'segment', statsigId: owner.id, ...(owner.version !== undefined ? { statsigVersion: owner.version } : {}), statsigFingerprint: r.statsigFingerprint, decisionSetHash: r.decisionSetHash },
+    });
+    return { ok: true, stepId };
+  };
+
   const finishItem = (item: PlanItem, status: ItemStatus, reason: string) => {
     item.status = status;
     item.reason = reason;
@@ -434,10 +473,12 @@ export function planMigration(req: PlanRequest): Plan {
 
     // Dependencies in the same environment.
     const depSteps: string[] = ensureKinds(r.dependencies);
+    const kindSteps = [...depSteps];
     const depProblems: string[] = [];
     for (const d of r.dependencies) {
       if (d.kind === 'segment') {
-        const s = planSegment(snapshot, d.entityId ?? d.key, statsigEnv, ldEnv, gate.uid);
+        const split = r.segments.find((x) => x.key === d.key);
+        const s = split ? planSplitSegment(snapshot, split, { uid: gate.uid, id: gate.id, kind: 'gate', sourceId: gate.source.sourceId, ...(gate.version !== undefined ? { version: gate.version } : {}) }, statsigEnv, ldEnv, r, kindSteps) : planSegment(snapshot, d.entityId ?? d.key, statsigEnv, ldEnv, gate.uid);
         if (s.ok && s.stepId) depSteps.push(s.stepId);
         else depProblems.push(s.reason ?? `segment ${d.key}`);
       } else if (d.kind === 'flag') {
@@ -553,10 +594,12 @@ export function planMigration(req: PlanRequest): Plan {
 
     // Dependencies in the same environment.
     const depSteps: string[] = ensureKinds(r.dependencies);
+    const kindSteps = [...depSteps];
     const depProblems: string[] = [];
     for (const d of r.dependencies) {
       if (d.kind === 'segment') {
-        const s = planSegment(snapshot, d.entityId ?? d.key, statsigEnv, ldEnv, config.uid);
+        const split = r.segments.find((x) => x.key === d.key);
+        const s = split ? planSplitSegment(snapshot, split, { uid: config.uid, id: config.id, kind: 'config', sourceId: config.source.sourceId, ...(config.version !== undefined ? { version: config.version } : {}) }, statsigEnv, ldEnv, r, kindSteps) : planSegment(snapshot, d.entityId ?? d.key, statsigEnv, ldEnv, config.uid);
         if (s.ok && s.stepId) depSteps.push(s.stepId);
         else depProblems.push(s.reason ?? `segment ${d.key}`);
       } else if (d.kind === 'flag') {

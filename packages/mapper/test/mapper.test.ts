@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { CanonicalSnapshot, Condition, Config, Gate } from '@sslm/canonical';
-import { acceptsOption, attributeOption, caseFoldedPattern, readableName, createKindOption, isValidContextKindKey, mapAutotune, mapConfig, mapGate, mapPrompt, mapSegment, optionLabel, placeholderVariationValue, type MapArgs, type Resolution } from '../src/index.ts';
+import { acceptsOption, attributeOption, caseFoldedPattern, readableName, createKindOption, envBudget, estimateEnvBytes, FLAG_SIZE_BUDGET, isValidContextKindKey, mapAutotune, mapConfig, mapGate, mapPrompt, mapSegment, optionLabel, placeholderVariationValue, type MapArgs, type Resolution } from '../src/index.ts';
 import { acmeSnapshot, CAPS, DIRECTORY, NOW, profileFor, server } from './fixtures.ts';
 
 beforeAll(() => server.listen({ onUnhandledFrame: 'error' }));
@@ -1300,5 +1300,111 @@ describe('configs with one value get a second, unserved variation (edge case 10.
     expect(placeholderVariationValue(0)).toBe(1);
     expect(placeholderVariationValue(true)).toBe(false);
     expect(placeholderVariationValue(null)).toEqual({});
+  });
+});
+
+describe('flag size limit (KNOWN-EDGE-CASES 15.22; packages/mapper/src/size.ts)', () => {
+  const SEGMENT = 'partner_api_allowlist.allow-listed-accounts-key';
+  /** `partner_api_allowlist` with its 12,000-ID rule replaced by one `unit_id` condition on `ids`. */
+  const withIds = (ids: string[], operator = 'any'): Gate => {
+    const g = web.gates.find((x) => x.id === 'partner_api_allowlist')!;
+    const c = g.rules[0]!.conditions[0]!;
+    return { ...g, rules: [{ ...g.rules[0]!, conditions: [{ ...c, operator, targetValue: ids, raw: { ...(c.raw as object), operator, targetValue: ids } }] }] };
+  };
+  /** 13-digit IDs, like the demo gate's: 12,000 of them make a 190 KB clause, above one environment's share of the budget. */
+  const digits = (n: number, from = 3_000_000_000_000) => Array.from({ length: n }, (_, i) => String(from + i));
+  /** Two environments are mapped, so each gets half of the budget left after the shell. */
+  const budget = (r: ReturnType<typeof mapGate>) => envBudget(r.shell, 2);
+
+  it('the demo gate: 12,000 companyIDs in one rule move into a list segment the flag targets, and the flag fits', () => {
+    const r = mapGate(args('partner_api_allowlist'));
+    expect(r.fidelity.overall).toBe('full');
+    expect(r.env.rules).toEqual([{ description: 'Allow-listed accounts', clauses: [{ contextKind: 'user', attribute: 'segmentMatch', op: 'segmentMatch', values: [SEGMENT], negate: false }], variation: 0 }]);
+    expect(r.segments.map((s) => [s.key, s.ldEnv, s.includedContexts.map((c) => `${c.contextKind}:${c.values.length}`), s.rules.length, s.included.length])).toEqual([[SEGMENT, 'production', ['company:12000'], 0, 0]]);
+    expect(r.segments[0]!.tags).toEqual(r.shell.tags);
+    expect(r.dependencies).toContainEqual({ kind: 'segment', key: SEGMENT });
+    expect(estimateEnvBytes(r.env)).toBeLessThan(budget(r));
+    expect(budget(r)).toBeLessThan(FLAG_SIZE_BUDGET / 2);
+    expect(r.fidelity.notes.map((n) => n.message).join(' ')).toMatch(/400,000-byte flag size limit.*12,000 values moved into segment/);
+    expect(types(r)).not.toContain('flag_size');
+  });
+
+  it('a list that fits stays in the flag', () => {
+    const r = mapGate(args('b2b_bulk_ordering'));
+    expect(r.segments).toEqual([]);
+    expect(r.env.rules[0]!.clauses[0]!.values).toHaveLength(3);
+  });
+
+  it('is deterministic', () => {
+    expect(mapGate(args('partner_api_allowlist'))).toEqual(mapGate(args('partner_api_allowlist')));
+  });
+
+  it('a list matched case-insensitively (regex) moves into a rule-based segment holding the clause', () => {
+    const r = mapGate(args('partner_api_allowlist', { entity: withIds(digits(12_000).map((d) => `acct_${d}`)) }));
+    expect(types(r)).toContain('case_insensitive_match');
+    const seg = r.segments[0]!;
+    expect(seg.includedContexts).toEqual([]);
+    expect(seg.rules).toHaveLength(1);
+    expect(seg.rules[0]!.clauses[0]).toMatchObject({ contextKind: 'company', attribute: 'key', op: 'matches', negate: false });
+    expect(seg.rules[0]!.clauses[0]!.values).toHaveLength(12_000);
+    expect(r.env.rules[0]!.clauses[0]).toMatchObject({ op: 'segmentMatch', values: [seg.key] });
+    expect(estimateEnvBytes(r.env)).toBeLessThan(budget(r));
+  });
+
+  it('individual targets from overrides move into a list segment matched by a rule placed before every other rule', () => {
+    const g = web.gates.find((x) => x.id === 'new_checkout_flow')!;
+    const ids = Array.from({ length: 9_000 }, (_, i) => `user-${String(i).padStart(6, '0')}`);
+    const entity: Gate = { ...g, overrides: [...g.overrides, { unitType: 'userID', ids, value: { kind: 'gate', pass: true }, environment: null }] };
+    const r = mapGate(args('new_checkout_flow', { entity }));
+    const key = 'new_checkout_flow.pass-overrides-user';
+    expect(r.env.targets.flatMap((t) => t.values)).not.toContain('user-000001');
+    expect(r.env.rules[0]).toEqual({ description: 'Pass overrides (user)', clauses: [{ contextKind: 'user', attribute: 'segmentMatch', op: 'segmentMatch', values: [key], negate: false }], variation: 0 });
+    const seg = r.segments.find((s) => s.key === key)!;
+    expect(seg.included).toHaveLength(ids.length + 2); // the two demo QA users share the Pass variation
+    expect(seg.includedContexts).toEqual([]);
+    expect(estimateEnvBytes(r.env)).toBeLessThan(budget(r));
+  });
+
+  it('above 15,000 keys the list needs a big segment: a big_segment choice on the gate, recommending the import', () => {
+    const r = mapGate(args('partner_api_allowlist', { entity: withIds(digits(16_000)) }));
+    const d = r.unresolved.find((x) => x.type === 'big_segment')!;
+    expect(d.severity).toBe('choice');
+    expect(d.recommended).toBe('import');
+    expect(d.subject.uid).toBe(r.uid);
+    expect(d.options.map((o) => o.key)).toEqual(['import', 'drop_rule', 'skip']);
+    expect(r.segments[0]!.unbounded).toEqual({ contextKind: 'company', ids: digits(16_000) });
+    expect(r.env.rules[0]!.clauses[0]).toMatchObject({ op: 'segmentMatch', values: [SEGMENT] });
+
+    const blocked = mapGate(args('partner_api_allowlist', { entity: withIds(digits(16_000)), capabilities: { ...CAPS, bigSegments: 'unavailable' } }));
+    const b = blocked.unresolved.find((x) => x.type === 'big_segment')!;
+    expect(b.severity).toBe('blocking');
+    expect(b.options.map((o) => o.key)).toEqual(['drop_rule', 'skip']);
+    expect(blocked.env.rules).toEqual([]);
+    expect(blocked.segments).toEqual([]);
+
+    const res: Resolution = { id: d.id, type: d.type, optionKey: 'skip', scope: 'resource', fingerprint: d.fingerprint, decidedAt: NOW };
+    expect(mapGate(args('partner_api_allowlist', { entity: withIds(digits(16_000)), resolutions: new Map([[res.id, res]]) })).skipped).toMatch(/exceed LaunchDarkly's flag size and list segment limits/);
+  });
+
+  it('a negated list changes how contexts without the attribute evaluate, so moving it is a flag_size acknowledgement', () => {
+    const r = mapGate(args('partner_api_allowlist', { entity: withIds(digits(12_000), 'none') }));
+    const d = r.unresolved.find((x) => x.type === 'flag_size')!;
+    expect(d.severity).toBe('acknowledge');
+    expect(d.recommended).toBe('acknowledge');
+    expect(d.explanation).toMatch(/never matches, even negated/);
+    expect(r.env.rules[0]!.clauses[0]).toMatchObject({ op: 'segmentMatch', values: [SEGMENT], negate: true });
+    expect(r.fidelity.overall).toBe('partial');
+    expect(r.fidelity.notes.some((n) => n.fidelity === 'partial' && /now match the rule/.test(n.message))).toBe(true);
+  });
+
+  it('dynamic configs are kept under the limit the same way', () => {
+    const c = web.configs.find((x) => x.rules.length > 0)!;
+    const rule = c.rules[0]!;
+    const cond = { type: 'unit_id', customID: 'companyID', operator: 'any', targetValue: digits(12_000), raw: {} } as unknown as Condition;
+    const entity: Config = { ...c, rules: [{ ...rule, conditions: [cond] }] };
+    const r = mapConfig({ ...args('b2b_bulk_ordering'), entity } as unknown as MapArgs<Config>);
+    expect(r.segments).toHaveLength(1);
+    expect(r.segments[0]!.includedContexts[0]!.values).toHaveLength(12_000);
+    expect(r.env.rules.some((x) => x.clauses.some((cl) => cl.op === 'segmentMatch' && cl.values[0] === r.segments[0]!.key))).toBe(true);
   });
 });

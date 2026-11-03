@@ -1261,6 +1261,51 @@
       }
     },
     {
+      "gate": "partner_api_allowlist",
+      "flagKey": "partner_api_allowlist",
+      "name": "partner_api_allowlist",
+      "fidelity": "full",
+      "notes": [
+        "full: Targeting in test estimated at 192,739 bytes, above this environment's 149,111-byte share of LaunchDarkly's 400,000-byte flag size limit: rule “Allow-listed accounts”: 12,000 values moved into segment “partner_api_allowlist.allow-listed-accounts-key”. The segment is written before the flag and synced with it; the flag now estimates at 805 bytes."
+      ],
+      "decisions": [
+        "choice client_side_availability (flag settings) → both",
+        "choice unit_type_kind (companyID) → create:company"
+      ],
+      "dependencies": [
+        "context_kind:company",
+        "segment:partner_api_allowlist.allow-listed-accounts-key"
+      ],
+      "env": {
+        "ldEnv": "test",
+        "statsigEnv": "staging",
+        "on": true,
+        "offVariation": 1,
+        "fallthrough": {
+          "variation": 1
+        },
+        "rules": [
+          {
+            "description": "Allow-listed accounts",
+            "clauses": [
+              {
+                "contextKind": "user",
+                "attribute": "segmentMatch",
+                "op": "segmentMatch",
+                "values": [
+                  "partner_api_allowlist.allow-listed-accounts-key"
+                ],
+                "negate": false
+              }
+            ],
+            "variation": 0
+          }
+        ],
+        "targets": [],
+        "prerequisites": []
+      }
+    },
+    {
       "gate": "enterprise_sso",
       "flagKey": "enterprise_sso",
       "name": "enterprise_sso",

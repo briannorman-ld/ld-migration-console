@@ -237,6 +237,8 @@ export type DecisionType =
   | 'key_collision'
   | 'source_collision'
   | 'big_segment'
+  /** A negated list moved out of a flag that would exceed LaunchDarkly's 400 KB size limit (KNOWN-EDGE-CASES 15.22): contexts without the attribute now match. */
+  | 'flag_size'
   | 'hashed_id_list'
   | 'id_list_unavailable'
   | 'missing_reference'

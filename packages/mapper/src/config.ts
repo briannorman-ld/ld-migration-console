@@ -15,12 +15,12 @@
 import { fingerprint, overridesForEnvironment, resolveRulesForEnvironment, stableStringify, targetingFingerprint, type Config, type Rule } from '@sslm/canonical';
 import { flagName, dedupeRuleDescriptions, andDnf, resolveKind, SkipItem, translateCondition, unique, type ConditionContext, resolveUnit, rolloutFor, splitOverrides, type OverrideGroup } from './conditions.ts';
 import { DecisionCollector } from './decisions.ts';
-import { chooseClientSideAvailability, commonPassesGate, expansion, gateReference, PASS, provenanceProperties, report, sourceTag, TAG_MIGRATED, type MapArgs, type MapOutcome } from './gate.ts';
+import { chooseClientSideAvailability, commonPassesGate, expansion, fitToSizeLimit, gateReference, PASS, provenanceProperties, report, sourceTag, TAG_MIGRATED, type MapArgs, type MapOutcome } from './gate.ts';
 import { chooseMaintainer } from './maintainer.ts';
 import { sanitizeKey, sanitizeTag } from './profile.ts';
 import type { InlineState } from './refs.ts';
 import { scheduledChanges } from './schedule.ts';
-import type { Dependency, DesiredFlagEnv, DesiredFlagShell, DesiredRule, DesiredTarget, FidelityNote, VariationOrRollout } from './types.ts';
+import type { Dependency, DesiredFlagEnv, DesiredFlagShell, DesiredRule, DesiredSegment, DesiredTarget, FidelityNote, VariationOrRollout } from './types.ts';
 
 /** Variation index of the config's `defaultValue`: fallthrough and off variation of every migrated config. */
 export const DEFAULT = 0;
@@ -30,6 +30,8 @@ export interface ConfigMapResult extends MapOutcome {
   shell: DesiredFlagShell;
   /** The desired targeting; a preview (recommended options applied) while decisions are open. */
   env: DesiredFlagEnv;
+  /** Segments split off the targeting to keep the flag under LaunchDarkly's size limit (see GateMapResult.segments). */
+  segments: DesiredSegment[];
 }
 
 /** The flag's variations: distinct JSON values (stable key order), first come first indexed. */
@@ -90,13 +92,14 @@ export function mapConfig(args: MapArgs<Config>): ConfigMapResult {
   const offEnv: DesiredFlagEnv = { ldEnv: env.ld, statsigEnv: env.statsig, on: false, offVariation: DEFAULT, fallthrough: { variation: DEFAULT }, rules: [], targets: [], prerequisites: [] };
   const inline: InlineState = { env, stack: [], inlined: new Map(), cache: new Map() };
 
-  const finish = (desired: DesiredFlagEnv, skipped?: string): ConfigMapResult => ({
+  const finish = (desired: DesiredFlagEnv, skipped?: string, segments: DesiredSegment[] = []): ConfigMapResult => ({
     uid: config.uid,
     entityId: config.id,
     sourceId,
     flagKey,
     shell,
     env: desired,
+    segments,
     fidelity: report(fidelity, skipped),
     unresolved: decisions.unresolved,
     applied: decisions.applied,
@@ -160,8 +163,7 @@ export function mapConfig(args: MapArgs<Config>): ConfigMapResult {
   };
 
   try {
-    const desired = translate(ctx, inline);
-    const scheduled = scheduledChanges(ctx, inline, translate);
+    const { desired, scheduled, segments } = fitToSizeLimit(ctx, { flagKey, shell, env, sourceId }, translate(ctx, inline), scheduledChanges(ctx, inline, translate));
     if (!config.enabled) fidelity.push({ fidelity: 'full', message: `Disabled in StatSig: the flag is off in ${env.ld} and serves the default value.` });
     if (config.lifecycle?.type === 'STALE') fidelity.push({ fidelity: 'full', message: `StatSig marks this config stale (${config.lifecycle.typeReason ?? 'STALE'}). Consider hard-coding its value instead of migrating.` });
     if (config.schema) fidelity.push({ fidelity: 'full', message: 'The StatSig JSON schema is not carried over: LaunchDarkly JSON variations are not schema-validated.' });
@@ -170,7 +172,7 @@ export function mapConfig(args: MapArgs<Config>): ConfigMapResult {
       const share = holdout ? `${holdout.passPercentage}% of users are` : 'Some users are';
       fidelity.push({ fidelity: 'partial', message: `${share} held out by “${h}” in StatSig and get the default value; LaunchDarkly holdouts aren't created yet, so they get the rules' values in LaunchDarkly.` });
     }
-    return finish(scheduled.length ? { ...desired, scheduledChanges: scheduled } : desired);
+    return finish(scheduled.length ? { ...desired, scheduledChanges: scheduled } : desired, undefined, segments);
   } catch (e) {
     if (e instanceof SkipItem) return finish(offEnv, e.reason);
     throw e;

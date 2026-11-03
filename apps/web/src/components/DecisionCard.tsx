@@ -19,6 +19,7 @@ export const TYPE_LABEL: Record<string, string> = {
   key_collision: 'LaunchDarkly key already exists',
   source_collision: 'Same key in two sources',
   big_segment: 'Big ID list',
+  flag_size: 'Flag over LaunchDarkly’s size limit',
   hashed_id_list: 'Hashed ID list',
   id_list_unavailable: 'ID list not loaded',
   missing_reference: 'Missing reference',

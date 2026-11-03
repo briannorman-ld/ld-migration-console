@@ -369,6 +369,15 @@ export function acmeWeb(): ProjectSeed {
         rules: [{ name: 'Pilot accounts', conditions: [{ type: 'unit_id', customID: 'companyID', operator: 'any', targetValue: ['acct_1001', 'acct_1002', 'acct_1003'] }] }],
       },
       {
+        id: 'partner_api_allowlist',
+        description:
+          'Partner API access for allow-listed B2B accounts. One rule lists 12,000 companyIDs inline: in LaunchDarkly that list would put the flag past its 400 KB flag size limit (KNOWN-EDGE-CASES 15.22), so the console keeps it in a list segment the flag targets.',
+        owner: P.bob,
+        idType: 'companyID',
+        tags: ['platform'],
+        rules: [{ name: 'Allow-listed accounts', conditions: [{ type: 'unit_id', customID: 'companyID', operator: 'any', targetValue: Array.from({ length: 12_000 }, (_, i) => String(3_000_000_000_000 + i)) }] }],
+      },
+      {
         id: 'enterprise_sso',
         description: 'SSO login for enterprise accounts (companyID segment).',
         owner: P.alice,

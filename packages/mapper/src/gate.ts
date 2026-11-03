@@ -9,6 +9,7 @@ import { chooseMaintainer } from './maintainer.ts';
 import { sanitizeKey, sanitizeTag } from './profile.ts';
 import { inlineGate, type InlineState } from './refs.ts';
 import { scheduledChanges } from './schedule.ts';
+import { envBudget, fitFlagEnv, migratedEnvCount } from './size.ts';
 import type {
   AppliedDecision,
   ClientSideAvailability,
@@ -18,6 +19,8 @@ import type {
   DesiredFlagEnv,
   DesiredFlagShell,
   DesiredRule,
+  DesiredScheduledChange,
+  DesiredSegment,
   DesiredTarget,
   EnvTarget,
   Fidelity,
@@ -169,6 +172,12 @@ export interface GateMapResult extends MapOutcome {
   shell: DesiredFlagShell;
   /** The desired targeting; a preview (recommended options applied) while decisions are open. */
   env: DesiredFlagEnv;
+  /**
+   * Segments split off this flag's targeting in this environment because the flag would exceed
+   * LaunchDarkly's flag size limit (size.ts; KNOWN-EDGE-CASES 15.22). `env` references them with
+   * `segmentMatch` clauses and `dependencies` lists them, so the planner writes them first.
+   */
+  segments: DesiredSegment[];
 }
 
 export function mapGate(args: MapArgs<Gate>): GateMapResult {
@@ -205,13 +214,14 @@ export function mapGate(args: MapArgs<Gate>): GateMapResult {
   const holdouts = attachedHoldouts(snapshot, gate);
   const holdoutFingerprint = holdouts.map((h) => ({ id: h.id, passPercentage: h.passPercentage, enabled: h.enabled, archived: h.archived }));
 
-  const finish = (desired: DesiredFlagEnv, skipped?: string): GateMapResult => ({
+  const finish = (desired: DesiredFlagEnv, skipped?: string, segments: DesiredSegment[] = []): GateMapResult => ({
     uid: gate.uid,
     entityId: gate.id,
     sourceId,
     flagKey,
     shell,
     env: desired,
+    segments,
     fidelity: report(fidelity, skipped),
     unresolved: decisions.unresolved,
     applied: decisions.applied,
@@ -296,15 +306,28 @@ export function mapGate(args: MapArgs<Gate>): GateMapResult {
 
   try {
     holdoutsAttached(ctx, gate, holdouts);
-    const desired = translate(ctx, inline);
-    const scheduled = scheduledChanges(ctx, inline, translate);
+    const { desired, scheduled, segments } = fitToSizeLimit(ctx, { flagKey, shell, env, sourceId }, translate(ctx, inline), scheduledChanges(ctx, inline, translate));
     if (!enabled) fidelity.push({ fidelity: 'full', message: `Disabled in StatSig: the flag is off in ${env.ld} and serves false.` });
     if (gate.lifecycle?.type === 'STALE') fidelity.push({ fidelity: 'full', message: `StatSig marks this gate stale (${gate.lifecycle.typeReason ?? 'STALE'}). Consider hard-coding it instead of migrating.` });
-    return finish(scheduled.length ? { ...desired, scheduledChanges: scheduled } : desired);
+    return finish(scheduled.length ? { ...desired, scheduledChanges: scheduled } : desired, undefined, segments);
   } catch (e) {
     if (e instanceof SkipItem) return finish(offEnv, e.reason);
     throw e;
   }
+}
+
+/**
+ * KNOWN-EDGE-CASES 15.22: keeps the environment's targeting (and each scheduled state) within its
+ * share of LaunchDarkly's flag size limit by moving oversized lists into segments, which become
+ * dependencies of the flag. Shared by the gate and config mappers.
+ */
+export function fitToSizeLimit<S extends DesiredScheduledChange>(ctx: ConditionContext, o: { flagKey: string; shell: DesiredFlagShell; env: EnvTarget; sourceId: string }, desired: DesiredFlagEnv, scheduled: S[]): { desired: DesiredFlagEnv; scheduled: S[]; segments: DesiredSegment[] } {
+  const segments = new Map<string, DesiredSegment>();
+  const fit = { flagKey: o.flagKey, flagName: o.shell.name, shell: o.shell, env: o.env, budget: envBudget(o.shell, migratedEnvCount(ctx.profile, o.sourceId)), segments };
+  const fitted = fitFlagEnv(ctx, desired, fit);
+  const fittedScheduled = scheduled.map((sc) => ({ ...sc, state: fitFlagEnv(ctx, sc.state, fit) }));
+  for (const key of [...segments.keys()].sort()) ctx.deps.set(`segment:${key}`, { kind: 'segment', key });
+  return { desired: fitted, scheduled: fittedScheduled, segments: [...segments.values()].sort((a, b) => a.key.localeCompare(b.key)) };
 }
 
 function serveFor(ctx: ConditionContext, gate: Gate, ruleId: string, ruleName: string, pass: number, idType: string): VariationOrRollout {

@@ -14,7 +14,7 @@
 import { footer as provenanceFooter, parseFooter as parseProvenanceFooter, PROP, readSync, SOURCE_KIND_LABEL, stableStringify, withFooter as withProvenanceFooter, type FooterInput } from '@sslm/canonical';
 import { LdAuthError, LdWriteError, type JsonPatchOp, type LdAiConfig, type LdClient, type LdExperiment, type LdExperimentationSettings, type LdFlag, type LdFlagConfig, type LdMetric, type LdSegment, type SemanticPatch } from '@sslm/ld-client';
 import { flagOwner, ownsSegment, syncPropertyKey, type PlanStep } from '@sslm/planner';
-import { SOURCE_KIND, type DesiredBandit, type DesiredFlagEnv, type DesiredRule, type DesiredSegment, type VariationOrRollout } from '@sslm/mapper';
+import { FLAG_SIZE_BUDGET, FLAG_SIZE_LIMIT, SOURCE_KIND, type DesiredBandit, type DesiredFlagEnv, type DesiredRule, type DesiredSegment, type VariationOrRollout } from '@sslm/mapper';
 import type { MigrationSourceKind } from '@sslm/canonical';
 
 export type LdWriter = Pick<
@@ -911,6 +911,8 @@ export class Executor {
         flag = await this.c.createFlag(this.p, body, this.signal);
         rec.created = true;
       } catch (e) {
+        const size = flagSizeError(e);
+        if (size) throw new Error(flagSizeMessage(s.key, 'settings', size, false));
         if (!(e instanceof LdWriteError && e.status === 409)) throw e;
         flag = await this.c.getFlag(this.p, s.key, this.signal);
         if (!flag) throw e;
@@ -929,7 +931,14 @@ export class Executor {
       if (!run.dryRun) this.report({ kind: 'flag', key: s.key, flag });
       return `Flag “${s.key}” settings already up to date.`;
     }
-    const res = await this.c.patchFlagJson(this.p, s.key, ops, { comment: this.comment(run, s), dryRun: run.dryRun, signal: this.signal });
+    let res: LdFlag;
+    try {
+      res = await this.c.patchFlagJson(this.p, s.key, ops, { comment: this.comment(run, s), dryRun: run.dryRun, signal: this.signal });
+    } catch (e) {
+      const size = flagSizeError(e);
+      if (size) throw new Error(flagSizeMessage(s.key, 'settings', size, false));
+      throw e;
+    }
     if (!run.dryRun) {
       this.flags.set(s.key, res);
       this.report({ kind: 'flag', key: s.key, flag: res });
@@ -980,6 +989,8 @@ export class Executor {
         this.report({ kind: 'flag', key: s.key, flag: res });
       }
     } catch (e) {
+      const size = flagSizeError(e);
+      if (size) throw new Error(flagSizeMessage(s.key, `targeting in ${s.ldEnv}`, size, s.deps.some((d) => d.startsWith(`segment:${s.ldEnv}:${s.key}.`))));
       if (!(e instanceof LdWriteError && e.status === 405)) throw e;
       approval = true;
       rec.approvalRequired = true;
@@ -1382,6 +1393,37 @@ function ignore404(e: unknown): void {
 
 function unique<T>(xs: T[]): T[] {
   return [...new Set(xs)];
+}
+
+/**
+ * LaunchDarkly's 400 for a flag past its size limit (KNOWN-EDGE-CASES 15.22): `flag size validation
+ * failed: This flag could not be saved because it is 904447 bytes, which exceeds the 400000 byte
+ * limit. Remove some targets, rules, or variations to reduce its size, then try again.`
+ */
+export function flagSizeError(e: unknown): { bytes: number | null; limit: number } | null {
+  if (!(e instanceof LdWriteError) || e.status !== 400) return null;
+  const msg = e.body && typeof e.body === 'object' && 'message' in e.body ? String((e.body as { message: unknown }).message) : e.message;
+  if (!/flag size validation failed|exceeds the \d+ byte limit/i.test(msg)) return null;
+  const m = /is (\d+) bytes, which exceeds the (\d+) byte limit/i.exec(msg);
+  return { bytes: m ? Number(m[1]) : null, limit: m ? Number(m[2]) : FLAG_SIZE_LIMIT };
+}
+
+/**
+ * Names the cause (a list too long to live in the flag) and the remedy (re-plan, so the mapper
+ * splits the list into a segment, then resume: the failed step retries) instead of echoing
+ * LaunchDarkly's text alone. `split` says whether this plan already carries split-off segments.
+ */
+export function flagSizeMessage(key: string, what: string, size: { bytes: number | null; limit: number }, split: boolean): string {
+  const n = (x: number) => x.toLocaleString('en-US');
+  const measured = size.bytes !== null ? `the flag would be ${n(size.bytes)} bytes, ` : '';
+  const limit = `${measured}over LaunchDarkly's ${n(size.limit)}-byte limit on a flag's total size (the rules, individual targets and variations of every environment)`;
+  const cause = split
+    ? `Cause: the flag's lists are already kept in segments, so the console's size estimate (budget ${n(FLAG_SIZE_BUDGET)} bytes for the whole flag) fell short of LaunchDarkly's count.`
+    : `Cause: a rule or override list too long to live in the flag itself; this plan was made before the console checked flag sizes.`;
+  const remedy = split
+    ? `Remedy: shorten the lists or split the gate in StatSig, then re-plan and resume; the failed step retries.`
+    : `Remedy: re-plan this flag, which moves such lists into segments written before the flag (budget ${n(FLAG_SIZE_BUDGET)} bytes for the whole flag), then resume the run; the failed step retries.`;
+  return `LaunchDarkly refused the ${what} of flag “${key}”: ${limit}. ${cause} ${remedy}`;
 }
 
 /** LD caps target operations at 1,500 per request ("Patch segment": "Total number of operations on targets must not exceed batch limit of 1500"). */
