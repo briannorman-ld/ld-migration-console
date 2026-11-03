@@ -49,6 +49,7 @@ import type { LdSourceResource } from "./LdSourceSideBySide.tsx";
 import { unitTypeUsage, unsettledUnitTypes } from "../lib/unitTypes.ts";
 import { SelectionBar, viewFor } from "../components/SelectionBar.tsx";
 import { loadSelection, saveSelection, toSelection } from "../lib/selection.ts";
+import { loadEnv, saveEnv } from "../lib/envChoice.ts";
 import type { GuideInput } from "../lib/guide.ts";
 import { lazyNamed, ModalFallback, ScreenFallback } from "./lazy.tsx";
 
@@ -150,7 +151,9 @@ export function WorkspaceScreen({
     )
     .join("; ");
   const [view, setView] = useState<View>({ kind: "guide" });
-  const [env, setEnv] = useState<string>("");
+  // The environment shown; remembered per workspace (lib/envChoice.ts) so a reload does not fall back to production.
+  const [env, setEnv] = useState<string>(() => loadEnv(workspaceId) ?? "");
+  useEffect(() => saveEnv(workspaceId, env), [workspaceId, env]);
   /** Set while the environment select is being changed with the pointer, so the change handler can blur it. */
   const pointerPick = useRef(false);
   const [sync, setSync] = useState<Record<string, SyncState>>({});
