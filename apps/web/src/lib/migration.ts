@@ -43,6 +43,7 @@ import {
 import { STATSIG_CONSOLE_BASE_URL, StatsigConsoleClient } from "@sslm/statsig-client";
 import type { SourceRecord, RunJournalRecord } from "@sslm/store";
 import { demoKey, startDemoMock } from "./demo.ts";
+import { coalescedJournal } from "./journal.ts";
 import { learnCapability, ldClient, ldSessionSnapshot, mergeLdFlags, mergeLdSegments, refreshLdLists, type LdSession } from "./ld.ts";
 import { latestChanges, listsTouchedByRun, staleAfterRun } from "./reconcile.ts";
 import { secrets } from "./secrets.ts";
@@ -588,12 +589,7 @@ function executor(
   return new Executor({
     client: ldClient(workspaceId),
     projectKey: ld.projectKey,
-    journal: {
-      save: (r) =>
-        store.saveRun(
-          snapshots ? ({ ...r, snapshots } satisfies RunJournalRecord) : r,
-        ),
-    },
+    journal: coalescedJournal((r) => store.saveRun(snapshots ? ({ ...r, snapshots } satisfies RunJournalRecord) : r)),
     // What the run wrote, as LD returned it: merged into the session when the run ends (applyRunResults).
     onResource: (c) => changes.push(c),
     ...(ld.identity?.tokenName ? { actor: ld.identity.tokenName } : {}),

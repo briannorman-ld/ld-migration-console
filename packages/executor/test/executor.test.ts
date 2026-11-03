@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { LdAuthError, LdWriteError, type LdAiConfig, type LdExperiment, type LdFlag, type LdMetric } from '@sslm/ld-client';
 import type { PlanStep } from '@sslm/planner';
 import type { ResourceChange } from '../src/index.ts';
-import { Executor, footer, newRun, parseFooter, scheduledIdsFrom, segmentInstructions, withFooter, type LdWriter, type RunRecord } from '../src/index.ts';
+import { Executor, type ExecutorOptions, footer, newRun, parseFooter, scheduledIdsFrom, segmentInstructions, withFooter, type LdWriter, type RunRecord } from '../src/index.ts';
 
 /** Minimal in-memory LD: enough state for the executor's control flow, not LD's semantics. */
 function fakeLd(over: Partial<Record<keyof LdWriter, (...a: never[]) => unknown>> = {}) {
@@ -149,9 +149,9 @@ const env = (key: string, deps: string[] = [`shell:${key}`]): PlanStep => ({
   provenance: { sourceKind: 'statsig', sourceAlias: 'web', statsigType: 'gate', statsigId: key, statsigVersion: 3, statsigFingerprint: 'fp', decisionSetHash: 'dh' },
 });
 
-function setup(client: LdWriter, steps: PlanStep[]) {
+function setup(client: LdWriter, steps: PlanStep[], over: Partial<ExecutorOptions> = {}) {
   const saved: RunRecord[] = [];
-  const ex = new Executor({ client, projectKey: 'p', journal: { save: async (r) => void saved.push(structuredClone(r)) }, actor: 'me@example.com', now: () => new Date('2026-10-22T00:00:00Z') });
+  const ex = new Executor({ client, projectKey: 'p', journal: { save: async (r) => void saved.push(structuredClone(r)) }, actor: 'me@example.com', now: () => new Date('2026-10-22T00:00:00Z'), ...over });
   const run = newRun({ id: 'run-12345678', workspaceId: 'w', projectKey: 'p', label: 't', dryRun: false, steps, now: new Date('2026-10-22T00:00:00Z') });
   return { ex, run, saved };
 }
@@ -324,7 +324,7 @@ describe('Executor', () => {
         ctrl.abort(aborted());
         return f;
       };
-      const { ex, run, saved } = setup(ld.client, [shell('a'), env('a'), shell('b')]);
+      const { ex, run, saved } = setup(ld.client, [shell('a'), env('a'), shell('b')], { concurrency: 1 });
       const out = await ex.run(run, ctrl.signal);
       expect(out.status).toBe('stopped');
       expect(out.steps.map((s) => s.status)).toEqual(['done', 'pending', 'pending']);
@@ -334,7 +334,7 @@ describe('Executor', () => {
       expect(ld.calls.filter((c) => !c.startsWith('get'))).toEqual(['create a']);
 
       // Resume (RunsView): a fresh executor on the journaled record, no signal this time.
-      const { ex: again } = setup(ld.client, []);
+      const { ex: again } = setup(ld.client, [], { concurrency: 1 });
       const resumed = await again.run(structuredClone(out));
       expect(resumed.status).toBe('done');
       expect(resumed.stopReason).toBeUndefined();
@@ -351,7 +351,7 @@ describe('Executor', () => {
           throw aborted();
         },
       });
-      const { ex, run } = setup(ld.client, [shell('a'), env('a'), shell('b')]);
+      const { ex, run } = setup(ld.client, [shell('a'), env('a'), shell('b')], { concurrency: 1 });
       const out = await ex.run(run, ctrl.signal);
       expect(out.status).toBe('stopped');
       expect(out.steps.map((s) => s.status)).toEqual(['done', 'pending', 'pending']);
@@ -713,7 +713,8 @@ describe('segment provenance footer', () => {
         variations: [{ copy: 'A' }, { copy: 'B' }],
         desired: { ...desiredEnv, on: false, offVariation: 0, fallthrough: { rollout: { contextKind: 'user', variations: [{ variation: 0, weight: 50_000 }, { variation: 1, weight: 50_000 }] } } },
       };
-      const { ex, run } = setup(ld.client, [unit, metric, { ...(jsonShell('promo') as Extract<PlanStep, { op: 'upsert_flag_shell' }>), exists: true }, jsonEnv, bandit('promo')]);
+      // One at a time here: the assertion below is on the exact order of the writes.
+      const { ex, run } = setup(ld.client, [unit, metric, { ...(jsonShell('promo') as Extract<PlanStep, { op: 'upsert_flag_shell' }>), exists: true }, jsonEnv, bandit('promo')], { concurrency: 1 });
       const out = await ex.run(run);
       expect(out.steps.map((s) => s.error ?? '')).toEqual(['', '', '', '', '']);
       expect(out.status).toBe('done');
@@ -991,5 +992,82 @@ describe('what a run reports for the session (onResource)', () => {
     const out = await ex.run(start([seg]));
     expect(out.status).toBe('done');
     expect(changes).toEqual([{ kind: 'segment', ldEnv: 'test', key: 'beta', segment: expect.objectContaining({ key: 'beta', included: ['u1'] }) }]);
+  });
+});
+
+describe('parallel steps', () => {
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const seg = (key: string, ldEnv = 'test'): PlanStep => ({
+    id: `segment:${ldEnv}:${key}`,
+    deps: [],
+    op: 'upsert_segment',
+    ldEnv,
+    key,
+    exists: false,
+    adopt: false,
+    desired: { key, ldEnv, statsigEnv: 'staging', name: key, description: '', tags: ['migrated-from-statsig', 'migration-src-web'], rules: [], included: [], includedContexts: [] },
+    provenance: { sourceKind: 'statsig', sourceAlias: 'web', statsigType: 'segment', statsigId: key, statsigFingerprint: 'fp', decisionSetHash: 'dh' },
+  });
+  const gauge = () => {
+    let active = 0;
+    let peak = 0;
+    const enter = async () => {
+      active++;
+      peak = Math.max(peak, active);
+      await sleep(5);
+      active--;
+    };
+    return { enter, peak: () => peak };
+  };
+
+  it('independent steps overlap up to the concurrency, in plan order', async () => {
+    const g = gauge();
+    const order: string[] = [];
+    const ld = fakeLd({
+      createSegment: async (_p: string, _e: string, b: Record<string, unknown>) => {
+        order.push(b.key as string);
+        await g.enter();
+        return { key: b.key, name: b.name, tags: b.tags };
+      },
+      patchSegmentJson: async (_p: string, _e: string, key: string) => ({ key, name: key }),
+    });
+    const { ex, run } = setup(ld.client, ['a', 'b', 'c', 'd', 'e', 'f'].map((k) => seg(k)), { concurrency: 4 });
+    const out = await ex.run(run);
+    expect(out.status).toBe('done');
+    expect(out.steps.every((s) => s.status === 'done')).toBe(true);
+    expect(g.peak()).toBe(4);
+    expect(order).toEqual(['a', 'b', 'c', 'd', 'e', 'f']);
+  });
+
+  it('steps on the same resource never overlap, and a step waits for its dependencies', async () => {
+    const g = gauge();
+    const envs: string[] = [];
+    const ld = fakeLd({
+      patchFlagSemantic: async (_p: string, key: string, patch: { environmentKey?: string }) => {
+        envs.push(patch.environmentKey ?? '');
+        await g.enter();
+        return ld.flags.get(key)!;
+      },
+    });
+    const prod = (key: string): PlanStep => ({ ...(env(key) as Extract<PlanStep, { op: 'update_flag_env' }>), id: `env:production:${key}`, ldEnv: 'production', desired: { ...desiredEnv, ldEnv: 'production', statsigEnv: 'production' } });
+    const { ex, run } = setup(ld.client, [shell('a'), env('a'), prod('a'), shell('b'), env('b'), prod('b')], { concurrency: 4 });
+    const out = await ex.run(run);
+    expect(out.status).toBe('done');
+    // Four environment writes across two flags: two lanes, so at most two at once, and never two on one flag.
+    expect(g.peak()).toBe(2);
+    expect(envs.filter((e) => e === 'test')).toHaveLength(2);
+    // Every environment step started after its flag's settings step finished.
+    const at = (id: string) => out.steps.find((s) => s.id === id)!;
+    for (const k of ['a', 'b']) for (const id of [`env:test:${k}`, `env:production:${k}`]) expect(at(id).startedAt! >= at(`shell:${k}`).finishedAt!).toBe(true);
+  });
+
+  it('a systemic error stops the run; steps that hit it while in flight go back to pending', async () => {
+    const ld = fakeLd({ createFlag: async () => Promise.reject(new LdWriteError(429, '/flags/p', { message: 'Rate limit exceeded' })) });
+    const { ex, run } = setup(ld.client, [shell('a'), shell('b'), shell('c'), shell('d')], { concurrency: 4 });
+    const out = await ex.run(run);
+    expect(out.status).toBe('stopped');
+    expect(out.stopReason).toMatch(/systemic error/);
+    expect(out.steps.map((s) => s.status)).toEqual(['failed', 'pending', 'pending', 'pending']);
+    expect(out.steps[1]!.message).toMatch(/Stopped with the run/);
   });
 });

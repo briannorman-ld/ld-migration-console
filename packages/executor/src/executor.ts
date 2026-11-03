@@ -150,6 +150,39 @@ export interface ExecutorOptions {
   sleep?: (ms: number) => Promise<void>;
   /** Membership checks after an import before giving up on confirmation (default 6, 5 s apart). */
   importChecks?: number;
+  /**
+   * Steps in flight at once (default 4). Only independent steps overlap: a step waits for its
+   * dependencies, and steps on the same LaunchDarkly resource run one at a time in plan order
+   * (`resourceLane`). The transport's limiter caps the requests this produces.
+   */
+  concurrency?: number;
+}
+
+export const DEFAULT_CONCURRENCY = 4;
+
+/**
+ * Steps that write the same resource share a lane and never overlap: the run's flag cache assumes
+ * one writer per flag, concurrent PUTs of the experimentation settings would race, and
+ * LaunchDarkly's per-resource limits punish rapid writes to one item.
+ */
+export function resourceLane(s: PlanStep): string {
+  switch (s.op) {
+    case 'upsert_flag_shell':
+    case 'update_flag_env':
+      return `flag:${s.key}`;
+    case 'create_bandit':
+      return `flag:${s.flagKey}`;
+    case 'upsert_segment':
+      return `segment:${s.ldEnv}:${s.key}`;
+    case 'upsert_metric':
+      return `metric:${s.key}`;
+    case 'upsert_ai_config':
+      return `ai_config:${s.key}`;
+    case 'ensure_context_kind':
+      return `context_kind:${s.key}`;
+    case 'ensure_randomization_unit':
+      return 'experimentation_settings';
+  }
 }
 
 /**
@@ -215,57 +248,113 @@ export class Executor {
 
   /**
    * Runs (or resumes) every pending step. A dry run writes nothing (LD `dryRun=true`).
-   * Aborting `signal` stops the run after the step in flight: that step goes back to `pending`
-   * (the write may or may not have reached LD; resuming re-checks it idempotently), later steps
-   * stay `pending`, and the run is `stopped` with `stopReason`, never `failed`.
+   *
+   * Up to `concurrency` independent steps run at once, each started in plan order as soon as its
+   * dependencies have finished and no other step is writing the same resource (`resourceLane`).
+   * A run of a thousand segments is then paced by LaunchDarkly's latency divided by the
+   * concurrency rather than by it alone.
+   *
+   * Aborting `signal` stops the run: nothing more starts, the steps in flight finish (one that
+   * throws goes back to `pending`; the write may or may not have reached LD, and resuming
+   * re-checks it idempotently), the next step not started is marked cancelled, later steps stay
+   * `pending`, and the run is `stopped` with `stopReason`, never `failed`. A systemic error
+   * (auth, 403, 429 that survived the retries) stops it the same way.
    */
   async run(run: RunRecord, signal?: AbortSignal): Promise<RunRecord> {
     this.signal = signal;
     run.status = 'running';
     delete run.stopReason;
     await this.save(run);
+    const concurrency = Math.max(1, Math.floor(this.opts.concurrency ?? DEFAULT_CONCURRENCY));
+    const byId = new Map(run.steps.map((s) => [s.id, s]));
+    /** Failed or skipped in this run: their dependents are skipped. */
     const failed = new Set<string>();
-    for (const rec of run.steps) {
-      if (rec.status === 'done' || rec.status === 'skipped' || rec.status === 'pending_approval') continue;
-      if (signal?.aborted) {
-        this.cancel(run, rec);
-        break;
-      }
-      const blockedBy = rec.step.deps.find((d) => failed.has(d));
-      if (blockedBy) {
-        rec.status = 'skipped';
-        rec.message = `Skipped: depends on ${run.steps.find((s) => s.id === blockedBy)?.label ?? blockedBy}, which failed.`;
-        failed.add(rec.id);
+    /** Started (or skipped) in this run, so a resumed `failed` step is retried once. */
+    const started = new Set<string>();
+    const inFlight = new Map<string, Promise<void>>();
+    const lanes = new Set<string>();
+    let halt = false;
+    const resumable = (s: StepRecord) => s.status === 'pending' || s.status === 'running' || s.status === 'failed';
+    const settled = (id: string) => {
+      const s = byId.get(id);
+      return !s || s.status === 'done' || s.status === 'pending_approval' || s.status === 'skipped';
+    };
+    const start = (rec: StepRecord) => {
+      const lane = resourceLane(rec.step);
+      lanes.add(lane);
+      started.add(rec.id);
+      const work = (async () => {
+        rec.status = 'running';
+        rec.startedAt = this.now().toISOString();
+        delete rec.error;
         await this.save(run);
-        continue;
-      }
-      rec.status = 'running';
-      rec.startedAt = this.now().toISOString();
-      delete rec.error;
-      await this.save(run);
-      try {
-        rec.message = await this.execute(run, rec);
-        rec.status = rec.approvals?.some((a) => a.status === 'pending') ? 'pending_approval' : 'done';
-      } catch (e) {
-        if (signal?.aborted) {
-          this.cancel(run, rec, true);
-          await this.save(run);
-          break;
+        try {
+          rec.message = await this.execute(run, rec);
+          rec.status = rec.approvals?.some((a) => a.status === 'pending') ? 'pending_approval' : 'done';
+        } catch (e) {
+          if (signal?.aborted) {
+            this.cancel(run, rec, true);
+            halt = true;
+            await this.save(run);
+            return;
+          }
+          if (isSystemic(e) && halt) {
+            // The run is already stopping on a systemic error; this step met the same wall. It goes
+            // back to pending (not failed), so the resume retries it rather than skipping its dependents.
+            rec.status = 'pending';
+            delete rec.startedAt;
+            delete rec.error;
+            rec.message = `Stopped with the run (${(e as Error).message}); resuming retries it.`;
+            await this.save(run);
+            return;
+          }
+          rec.status = 'failed';
+          rec.error = (e as Error).message;
+          if (e instanceof LdWriteError && e.status === 405) rec.approvalRequired = true;
+          failed.add(rec.id);
+          if (isSystemic(e)) {
+            rec.finishedAt = this.now().toISOString();
+            run.status = 'stopped';
+            run.stopReason = `Stopped on a systemic error: ${rec.error} Fix it (or give LaunchDarkly a minute), then resume from Runs.`;
+            halt = true;
+            await this.save(run);
+            return;
+          }
         }
-        rec.status = 'failed';
-        rec.error = (e as Error).message;
-        if (e instanceof LdWriteError && e.status === 405) rec.approvalRequired = true;
-        failed.add(rec.id);
-        if (isSystemic(e)) {
-          rec.finishedAt = this.now().toISOString();
-          run.status = 'stopped';
-          run.stopReason = `Stopped on a systemic error: ${rec.error} Fix it (or give LaunchDarkly a minute), then resume from Runs.`;
-          await this.save(run);
-          break;
+        rec.finishedAt = this.now().toISOString();
+        await this.save(run);
+      })().finally(() => {
+        inFlight.delete(rec.id);
+        lanes.delete(lane);
+      });
+      inFlight.set(rec.id, work);
+    };
+    for (;;) {
+      if (signal?.aborted) halt = true;
+      if (!halt) {
+        for (const rec of run.steps) {
+          if (inFlight.size >= concurrency) break;
+          if (!resumable(rec) || started.has(rec.id)) continue;
+          const blockedBy = rec.step.deps.find((d) => failed.has(d));
+          if (blockedBy) {
+            rec.status = 'skipped';
+            rec.message = `Skipped: depends on ${byId.get(blockedBy)?.label ?? blockedBy}, which failed.`;
+            failed.add(rec.id);
+            started.add(rec.id);
+            await this.save(run);
+            continue;
+          }
+          if (!rec.step.deps.every(settled)) continue;
+          if (lanes.has(resourceLane(rec.step))) continue;
+          start(rec);
         }
       }
-      rec.finishedAt = this.now().toISOString();
-      await this.save(run);
+      if (inFlight.size === 0) break;
+      await Promise.race(inFlight.values());
+    }
+    if (run.status === 'running' && signal?.aborted) {
+      const next = run.steps.find((s) => resumable(s) && !started.has(s.id));
+      if (next) this.cancel(run, next);
     }
     if (run.status === 'running') run.status = run.steps.some((s) => s.status === 'failed') ? 'failed' : 'done';
     run.finishedAt = this.now().toISOString();
