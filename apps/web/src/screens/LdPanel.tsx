@@ -1,13 +1,16 @@
-import { useState } from 'react';
+import { Suspense, useState } from 'react';
 import { LD_INSTANCES, type CapabilityStatus, type LdInstanceId } from '@sslm/ld-client';
 import type { WorkspaceRecord } from '@sslm/store';
 import { RememberKeysCard } from '../components/DeviceVault.tsx';
 import { SearchSelect } from '../components/SearchSelect.tsx';
 import { Badge, Button, Callout, Card, cx, Input, Label, Modal, Spinner } from '../components/ui.tsx';
 import { chooseProject, connectLd, disconnectLd, reprobe, useLdSession } from '../lib/ld.ts';
-import { ProjectResetModal } from './ProjectResetModal.tsx';
 import { DEMO_LD_PROJECT } from '../lib/demo.ts';
 import { store } from '../lib/store.ts';
+import { lazyNamed, ModalFallback } from './lazy.tsx';
+
+// Reached only behind the danger button; its chunk is fetched when the button is pressed.
+const ProjectResetModal = lazyNamed(() => import('./ProjectResetModal.tsx'), 'ProjectResetModal');
 
 const STATUS_TONE: Record<CapabilityStatus, 'green' | 'amber' | 'red' | 'slate' | 'violet'> = {
   available: 'green',
@@ -147,7 +150,11 @@ export function LdPanel({ workspaceId, workspace }: { workspaceId: string; works
           )}
         </Card>
       )}
-      {resetting && <ProjectResetModal workspaceId={workspaceId} ld={ld} onClose={() => setResetting(false)} />}
+      {resetting && (
+        <Suspense fallback={<ModalFallback />}>
+          <ProjectResetModal workspaceId={workspaceId} ld={ld} onClose={() => setResetting(false)} />
+        </Suspense>
+      )}
 
       {ld.matrix && (
         <Card className="overflow-hidden">

@@ -1,5 +1,5 @@
 import { useLiveQuery } from "dexie-react-hooks";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import {
   countsByKind,
   ENTITY_KINDS,
@@ -42,27 +42,34 @@ import { store } from "../lib/store.ts";
 import { syncSource } from "../lib/sync.ts";
 import { useMigration } from "../lib/useMigration.ts";
 import { AddSource } from "./AddSource.tsx";
-import { AutotunesSideBySide } from "./AutotunesSideBySide.tsx";
 import { ConnectionsView } from "./ConnectionsView.tsx";
-import { CoverageView } from "./CoverageView.tsx";
-import { DecisionsView } from "./DecisionsView.tsx";
 import { EntityList } from "./EntityList.tsx";
-import { FlagSideBySide } from "./GatesSideBySide.tsx";
 import { LdPanel } from "./LdPanel.tsx";
-import { LdSourceSideBySide, type LdSourceResource } from "./LdSourceSideBySide.tsx";
-import { MappingView } from "./MappingView.tsx";
-import { UnitTypesView } from "./UnitTypesView.tsx";
+import type { LdSourceResource } from "./LdSourceSideBySide.tsx";
 import { unitTypeUsage, unsettledUnitTypes } from "../lib/unitTypes.ts";
 import { SelectionBar, viewFor } from "../components/SelectionBar.tsx";
 import { loadSelection, saveSelection, toSelection } from "../lib/selection.ts";
 import type { GuideInput } from "../lib/guide.ts";
-import { GuideView } from "./GuideView.tsx";
-import { MigrateModal } from "./MigrateModal.tsx";
-import { MonitoringView } from "./MonitoringView.tsx";
-import { RunsView } from "./RunsView.tsx";
-import { SegmentsSideBySide } from "./SegmentsSideBySide.tsx";
-import { SnapshotsView } from "./SnapshotsView.tsx";
-import { WarningsView } from "./WarningsView.tsx";
+import { lazyNamed, ModalFallback, ScreenFallback } from "./lazy.tsx";
+
+// Everything below the shell loads on first use (see lazy.tsx). The guide is the landing view,
+// so its fetch starts with the shell instead of on first render.
+const loadGuide = () => import("./GuideView.tsx");
+void loadGuide();
+const GuideView = lazyNamed(loadGuide, "GuideView");
+const FlagSideBySide = lazyNamed(() => import("./GatesSideBySide.tsx"), "FlagSideBySide");
+const SegmentsSideBySide = lazyNamed(() => import("./SegmentsSideBySide.tsx"), "SegmentsSideBySide");
+const AutotunesSideBySide = lazyNamed(() => import("./AutotunesSideBySide.tsx"), "AutotunesSideBySide");
+const LdSourceSideBySide = lazyNamed(() => import("./LdSourceSideBySide.tsx"), "LdSourceSideBySide");
+const DecisionsView = lazyNamed(() => import("./DecisionsView.tsx"), "DecisionsView");
+const MappingView = lazyNamed(() => import("./MappingView.tsx"), "MappingView");
+const UnitTypesView = lazyNamed(() => import("./UnitTypesView.tsx"), "UnitTypesView");
+const RunsView = lazyNamed(() => import("./RunsView.tsx"), "RunsView");
+const MonitoringView = lazyNamed(() => import("./MonitoringView.tsx"), "MonitoringView");
+const SnapshotsView = lazyNamed(() => import("./SnapshotsView.tsx"), "SnapshotsView");
+const CoverageView = lazyNamed(() => import("./CoverageView.tsx"), "CoverageView");
+const WarningsView = lazyNamed(() => import("./WarningsView.tsx"), "WarningsView");
+const MigrateModal = lazyNamed(() => import("./MigrateModal.tsx"), "MigrateModal");
 
 export type View =
   | { kind: "guide" }
@@ -746,6 +753,7 @@ export function WorkspaceScreen({
         </nav>
 
         <main className="min-w-0 flex-1 overflow-y-auto p-5">
+          <Suspense fallback={<ScreenFallback />}>
           {!viewingPast && m && (
             <SelectionBar
               selected={selected}
@@ -1052,9 +1060,11 @@ export function WorkspaceScreen({
               }
             />
           )}
+          </Suspense>
         </main>
       </div>
       {migrate && m && (
+        <Suspense fallback={<ModalFallback />}>
         <MigrateModal
           workspaceId={workspaceId}
           selection={migrate.selection}
@@ -1064,6 +1074,7 @@ export function WorkspaceScreen({
           m={m}
           onClose={() => setMigrate(undefined)}
         />
+        </Suspense>
       )}
     </div>
   );

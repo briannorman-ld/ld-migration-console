@@ -3,16 +3,11 @@ import type { CanonicalSnapshot, EntityKind } from '@sslm/canonical';
 import { AREAS, COVERAGE, countByStatus, STATUS_DESCRIPTION, STATUS_LABEL, summarizeInventory, type CoverageArea, type CoverageEntry, type CoverageStatus } from '@sslm/coverage';
 import type { SourceRecord } from '@sslm/store';
 import { TYPE_LABEL } from '../components/DecisionCard.tsx';
-import { Badge, Button, Callout, Card, cx, Input, PageTitle, Select, type Tone } from '../components/ui.tsx';
+import { Badge, Button, Callout, Card, cx, Input, PageTitle, Select } from '../components/ui.tsx';
 import { KIND_LABEL } from '../lib/kinds.ts';
+import { COVERAGE_TONE } from './coverageTone.ts';
 
-export const COVERAGE_TONE: Record<CoverageStatus, Tone> = {
-  migrates: 'green',
-  decisions: 'blue',
-  guided: 'violet',
-  planned: 'amber',
-  none: 'red',
-};
+export { COVERAGE_TONE };
 
 const ORDER: CoverageStatus[] = ['migrates', 'decisions', 'guided', 'planned', 'none'];
 

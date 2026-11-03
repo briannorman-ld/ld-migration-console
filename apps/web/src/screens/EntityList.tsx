@@ -4,7 +4,7 @@ import { coverageFor, guidanceFor, STATUS_LABEL, type CoverageStatus } from '@ss
 import type { SourceRecord } from '@sslm/store';
 import { PagerBar, usePager } from '../components/Pager.tsx';
 import { Badge, Callout, Card, Input, Select } from '../components/ui.tsx';
-import { COVERAGE_TONE } from './CoverageView.tsx';
+import { COVERAGE_TONE } from './coverageTone.ts';
 
 /**
  * Inventory for resource kinds without a side-by-side explorer yet. Every item carries a verdict
