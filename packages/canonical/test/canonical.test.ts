@@ -112,3 +112,23 @@ describe('matchAcrossSources (N-source)', () => {
     ]);
   });
 });
+
+describe('segmentReferences (who uses a segment)', () => {
+  it('lists the gates, configs and segments whose rules pass or fail a segment, once each, and describes them', async () => {
+    const { segmentReferences, describeSegmentUsers } = await import('../src/inventory.ts');
+    const snap = emptySnapshot({ sourceId: 'web', sourceKind: 'console_api', alias: 'web' }, '2026-01-01T00:00:00Z');
+    const seg = (type: 'passes_segment' | 'fails_segment', target: unknown): Condition => ({ type, operator: null, targetValue: target, raw: {} });
+    const rule = (name: string, conditions: Condition[]): Rule => ({ id: name, name, passPercentage: 100, conditions, environments: null, idType: 'userID' });
+    snap.gates.push(gate('checkout', 'web', [rule('beta', [seg('passes_segment', 'beta_testers')]), rule('beta again', [seg('passes_segment', ['beta_testers', 'vip'])])]));
+    snap.gates.push({ ...gate('old_gate', 'web', [rule('x', [seg('fails_segment', 'fraud')])]), archived: true });
+    snap.configs.push({ kind: 'config', uid: 'web/config/banner', id: 'banner', name: 'banner', source: snap.source, completeness: { missing: [] }, tags: [], targetApps: [], archived: false, defaultValue: {}, rules: [rule('vip', [seg('passes_segment', 'vip')])], overrides: [] } as never);
+    snap.segments.push({ kind: 'segment', uid: 'web/segment/staff_or_beta', id: 'staff_or_beta', name: 'staff_or_beta', source: snap.source, completeness: { missing: [] }, tags: [], targetApps: [], archived: false, segmentType: 'rule_based', enabled: true, idType: 'userID', rules: [rule('beta', [seg('passes_segment', 'beta_testers')])] } as never);
+    const refs = segmentReferences(snap);
+    expect([...refs.keys()].sort()).toEqual(['beta_testers', 'fraud', 'vip']);
+    expect(refs.get('beta_testers')!.map((r) => `${r.kind}:${r.id}`)).toEqual(['gate:checkout', 'segment:staff_or_beta']);
+    expect(describeSegmentUsers(refs.get('beta_testers'))).toBe('used by 1 gate, 1 segment');
+    expect(describeSegmentUsers(refs.get('vip'))).toBe('used by 1 gate, 1 config');
+    expect(describeSegmentUsers(refs.get('fraud'))).toBe('not used (1 archived user)');
+    expect(describeSegmentUsers(refs.get('nobody'))).toBe('not used');
+  });
+});

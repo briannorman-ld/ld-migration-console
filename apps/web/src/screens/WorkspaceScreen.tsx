@@ -60,6 +60,7 @@ import { GuideView } from "./GuideView.tsx";
 import { MigrateModal } from "./MigrateModal.tsx";
 import { MonitoringView } from "./MonitoringView.tsx";
 import { RunsView } from "./RunsView.tsx";
+import { SegmentsSideBySide } from "./SegmentsSideBySide.tsx";
 import { SnapshotsView } from "./SnapshotsView.tsx";
 import { WarningsView } from "./WarningsView.tsx";
 
@@ -770,7 +771,14 @@ export function WorkspaceScreen({
                 })
               }
               onClear={() => setSelected(new Set())}
-              onOpen={(k) => setView(viewFor(k))}
+              // A StatSig segment and an LD-source segment share the uid shape; the ticked ones decide which list opens.
+              onOpen={(k) =>
+                setView(
+                  k === "segment" && [...selected].some((uid) => visibleSnaps.some((sn) => sn.segments.some((seg) => seg.uid === uid)))
+                    ? { kind: "resource", resource: "segment" }
+                    : viewFor(k),
+                )
+              }
             />
           )}
           {interrupted.length > 0 && view.kind !== "runs" && (
@@ -845,6 +853,23 @@ export function WorkspaceScreen({
                           : { gates: uids, autotunes: [] },
                       ldEnvs,
                     })
+                  }
+                  onOpenMapping={() => setView({ kind: "mapping" })}
+                  nav={explorerNav}
+                  selected={selected}
+                  setSelected={setSelected}
+                />
+              )
+            ) : view.resource === "segment" ? (
+              m && (
+                <SegmentsSideBySide
+                  sources={visible}
+                  snapshots={snapshots ?? {}}
+                  env={env}
+                  m={m}
+                  readOnly={viewingPast}
+                  onMigrate={(uids, ldEnvs) =>
+                    setMigrate({ selection: { gates: [], autotunes: [], segments: uids }, ldEnvs })
                   }
                   onOpenMapping={() => setView({ kind: "mapping" })}
                   nav={explorerNav}

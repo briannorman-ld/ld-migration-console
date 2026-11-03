@@ -862,7 +862,7 @@ function Items({ g, tallies, noun, nav, onMigrate, toSelection }: { g: GuideMode
     <>
       <p className="text-fg-muted">
         {noun === 'segment'
-          ? 'Segments go first: flags reference them, so a flag migrated later finds its segments already in place. Big ID lists import as big segments where the plan allows.'
+          ? 'Segments go first: flags reference them, so a flag migrated later finds its segments already in place. Big ID lists import as big segments where the plan allows. Not every segment has to come: open Segments (View) to see which gates and configs use each one, tick the ones to bring, and set aside the rest; a migrated flag still brings the segments it needs.'
           : 'Gates become boolean flags and dynamic configs become JSON flags, with rules, rollouts and overrides translated. A gate used as a prerequisite migrates before the flags that depend on it. StatSig prompts become AI Configs: the shell only, because the Console API does not expose prompt versions.'}
       </p>
       {noun === 'flag' && !g.aiConfigsAvailable && g.prompts.total > 0 && <Callout tone="amber">{g.prompts.total} StatSig prompt{g.prompts.total === 1 ? '' : 's'} cannot be written: AI Configs are not available to this LaunchDarkly project or token. Recreate them in LaunchDarkly by hand.</Callout>}
