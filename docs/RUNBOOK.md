@@ -97,7 +97,7 @@ Flags reference segments, so segments go first.
 3. Spot-check the condition-level translation on a handful of rows: a percentage rollout, a negated gate reference, a rule with `environment_tier`, a dynamic config with several return values. The drawer shows StatSig rules on the left and the generated LaunchDarkly targeting on the right, with fidelity notes.
 4. **Migrate N flags to <env>…** The plan pulls in dependencies (segments, context kinds, prerequisite gates) and orders prerequisites first. Check **Configure targeting in**: only the ticked environments get rules; the others stay off.
 5. **Dry run**, read the failures, fix (usually a permission or a decision), dry run again until clean.
-6. **Migrate.** Production asks you to type the environment name. Watch the progress window; a run stops itself on systemic errors (auth, rate limit exhaustion) and **Runs** shows each failed step with its distinct error and a downloadable report.
+6. **Migrate.** Production asks you to type the environment name. Watch the progress window. A rate limit that outlives the client's retries, or a write that times out, pauses the run (a minute, then two, then four) and retries the step; a run stops itself on systemic errors (auth, a limit or outage that holds through every pause) and **Runs** shows each failed step with its distinct error and a downloadable report. Resuming retries the failed steps first.
 7. Open LaunchDarkly and check three flags: targeting matches the drawer, the tags and `migration.*` properties are present, the maintainer is set.
 
 ### 3.5 Experiments and bandits

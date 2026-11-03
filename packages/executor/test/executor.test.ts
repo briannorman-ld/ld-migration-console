@@ -268,6 +268,37 @@ describe('Executor', () => {
     expect(slept).toEqual([60_000]);
   });
 
+  it('a write that times out pauses the run and retries the step; one that stays unreachable through every pause stops it, naming the cause', async () => {
+    let failures = 1;
+    const base = fakeLd();
+    const create = base.client.createFlag;
+    const ld = fakeLd({
+      createFlag: async (p: string, body: Parameters<typeof create>[1]) => {
+        if (failures-- > 0) throw new LdWriteError('unreachable', '/flags/p', null);
+        return create(p, body);
+      },
+    });
+    const slept: number[] = [];
+    const { ex, run, saved } = setup(ld.client, [shell('a'), shell('b')], { sleep: async (ms) => void slept.push(ms) });
+    const out = await ex.run(run);
+    expect(out.status).toBe('done');
+    expect(out.steps.map((s) => s.status)).toEqual(['done', 'done']);
+    expect(slept).toEqual([60_000]);
+    const paused = saved.filter((r) => r.pause);
+    expect(paused[0]!.pause!.reason).toMatch(/^A write to LaunchDarkly timed out or the connection dropped\. Pause 1 of 3: waiting 60 s/);
+    expect(paused[0]!.steps[0]!.message).toMatch(/LaunchDarkly unreachable \(\/flags\/p timed out or the connection dropped\); the run pauses, then retries this step/);
+
+    const down = fakeLd({ createFlag: async () => Promise.reject(new LdWriteError('unreachable', '/flags/p', null)) });
+    const second = setup(down.client, [shell('a'), shell('b'), shell('c')], { concurrency: 4, sleep: async () => undefined });
+    const stopped = await second.ex.run(second.run);
+    expect(stopped.status).toBe('stopped');
+    expect(stopped.stopReason).toMatch(/^Stopped because LaunchDarkly stayed unreachable through 3 pauses: LaunchDarkly unreachable for \/flags\/p\. Check your connection/);
+    expect(stopped.steps.filter((s) => s.status === 'failed')).toHaveLength(1);
+    expect(stopped.steps.filter((s) => s.status === 'pending')).toHaveLength(2);
+    // Concurrency halves with each pause, so after the last one only the stopping step was retried; the others keep the pause message.
+    expect(stopped.steps.find((s) => s.status === 'pending')!.message).toMatch(/the run pauses, then retries this step/);
+  });
+
   it('stops the whole run on a 401', async () => {
     const ld = fakeLd({ createFlag: async () => Promise.reject(new LdAuthError(401, '/flags/p')) });
     const { ex, run } = setup(ld.client, [shell('a'), shell('b')]);

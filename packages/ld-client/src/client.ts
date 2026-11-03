@@ -120,8 +120,13 @@ export class LdClient {
     // exposed to JS (PLAN §3.1), so the AIMD limiter adapts to 429s.
     // Writes to one flag in quick succession hit LD's per-resource limits, so back off longer than
     // the transport default before giving up (the run can still be resumed after that).
+    // A request that fails without a status is therefore a timeout or a dropped connection, never
+    // a hidden 429: a read is retried a couple of times (the transport never repeats a POST or
+    // PATCH that may have landed), and the executor pauses the run when a write meets one.
     this.transport =
-      opts.transport instanceof Transport ? opts.transport : new Transport({ ...opts.transport, retry: { retryOpaqueFailures: false, maxAttempts: 8, baseDelayMs: 1000, maxDelayMs: 30_000, ...opts.transport?.retry } });
+      opts.transport instanceof Transport
+        ? opts.transport
+        : new Transport({ ...opts.transport, retry: { retryOpaqueFailures: true, maxOpaqueAttempts: 3, maxAttempts: 8, baseDelayMs: 1000, maxDelayMs: 30_000, ...opts.transport?.retry } });
     this.onSchemaIssue = opts.onSchemaIssue ?? (() => undefined);
   }
 

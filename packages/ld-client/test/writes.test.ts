@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { LdClient } from '../src/index.ts';
+import { LdClient, LdWriteError } from '../src/index.ts';
 
 const TOKEN = 'api-00000000-test-token-never-logged';
 
@@ -67,5 +67,16 @@ describe('LdClient writes and AbortSignal', () => {
     const err: unknown = await req.catch((e) => e);
     expect(err).toBeInstanceOf(DOMException);
     expect((err as DOMException).name).toBe('AbortError');
+  });
+
+  it('a read that fails without a status (timeout, dropped connection) is retried up to three times; a write is not, and surfaces as an unreachable LdWriteError', async () => {
+    const { c, calls } = client(() => Promise.reject(new TypeError('Failed to fetch')));
+    await expect(c.getSegment('p', 'e', 's')).rejects.toThrow(/Unreachable after 3 attempts/);
+    expect(calls.filter((x) => x.method === 'GET')).toHaveLength(3);
+    const err = await c.patchSegmentJson('p', 'e', 's', []).catch((e) => e);
+    expect(err).toBeInstanceOf(LdWriteError);
+    expect(err.status).toBe('unreachable');
+    expect(err.message).toBe('LaunchDarkly unreachable for /segments/p/e/s.');
+    expect(calls.filter((x) => x.method === 'PATCH')).toHaveLength(1);
   });
 });

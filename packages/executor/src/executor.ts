@@ -190,19 +190,24 @@ export function resourceLane(s: PlanStep): string {
 /**
  * Systemic failures stop the whole run instead of failing every remaining step (PLAN §9 step 6).
  * A 429 that survived the transport's retries means LD is still throttling us: pressing on would
- * burn a minute of backoff per step against the same limit, so stop and let the user resume.
+ * burn a minute of backoff per step against the same limit, so stop and let the user resume. An
+ * unreachable LD (a timed-out write, a dropped connection) is the same wall for every step.
  */
 function isSystemic(e: unknown): boolean {
   return e instanceof LdAuthError || (e instanceof LdWriteError && (e.status === 403 || e.status === 429 || e.status === 'unreachable'));
 }
 
 const isRateLimit = (e: unknown): boolean => e instanceof LdWriteError && e.status === 429;
+const isUnreachable = (e: unknown): boolean => e instanceof LdWriteError && e.status === 'unreachable';
+/** A failure that usually clears by itself: the run pauses and retries before it gives up. */
+const isTransient = (e: unknown): boolean => isRateLimit(e) || isUnreachable(e);
 
 /**
- * A 429 that outlived the transport's retries pauses the whole run rather than stopping it: every
- * step in flight settles, the run waits (a minute, then two, then four) with half the concurrency,
- * and the step is retried. A long run then rides out LaunchDarkly's limit by itself; only a limit
- * that holds through every pause stops the run for the user to resume later.
+ * A 429 that outlived the transport's retries, or a write that timed out, pauses the whole run
+ * rather than stopping it: every step in flight settles, the run waits (a minute, then two, then
+ * four) with half the concurrency, and the step is retried. A long run then rides out
+ * LaunchDarkly's limit or a slow minute by itself; only a failure that holds through every pause
+ * stops the run for the user to resume later.
  */
 export const RATE_LIMIT_PAUSE_MS = 60_000;
 export const MAX_RATE_LIMIT_PAUSES = 3;
@@ -284,7 +289,7 @@ export class Executor {
    * throws goes back to `pending`; the write may or may not have reached LD, and resuming
    * re-checks it idempotently), the next step not started is marked cancelled, later steps stay
    * `pending`, and the run is `stopped` with `stopReason`, never `failed`. A systemic error
-   * (auth, 403, 429 that survived the retries) stops it the same way.
+   * (auth, 403, a 429 or an unreachable LD that survived the retries and the pauses) stops it the same way.
    */
   async run(run: RunRecord, signal?: AbortSignal): Promise<RunRecord> {
     this.signal = signal;
@@ -300,9 +305,10 @@ export class Executor {
     const inFlight = new Map<string, Promise<void>>();
     const lanes = new Set<string>();
     let halt = false;
-    /** A 429 outlived the retries: nothing new starts, and once the steps in flight settle the run waits. */
+    /** A 429 outlived the retries, or a write timed out: nothing new starts, and once the steps in flight settle the run waits. */
     let pausing = false;
     let pauses = 0;
+    let pauseCause: 'rate_limit' | 'unreachable' = 'rate_limit';
     const resumable = (s: StepRecord) => s.status === 'pending' || s.status === 'running' || s.status === 'failed';
     const settled = (id: string) => {
       const s = byId.get(id);
@@ -327,18 +333,22 @@ export class Executor {
             await this.save(run);
             return;
           }
-          if (isRateLimit(e) && !halt && (pausing || pauses < MAX_RATE_LIMIT_PAUSES)) {
-            // LaunchDarkly is still throttling after the client's own retries. The step goes back to
-            // pending and is retried once the run has waited; the loop below pauses when nothing is in flight.
+          if (isTransient(e) && !halt && (pausing || pauses < MAX_RATE_LIMIT_PAUSES)) {
+            // LaunchDarkly is still throttling after the client's own retries, or a write timed out.
+            // The step goes back to pending and is retried once the run has waited; the loop below
+            // pauses when nothing is in flight.
             if (!pausing) {
               pausing = true;
               pauses++;
+              pauseCause = isRateLimit(e) ? 'rate_limit' : 'unreachable';
             }
             rec.status = 'pending';
             delete rec.startedAt;
             delete rec.error;
             started.delete(rec.id);
-            rec.message = `LaunchDarkly rate limit (429) after the client's retries; the run pauses, then retries this step.`;
+            rec.message = isRateLimit(e)
+              ? `LaunchDarkly rate limit (429) after the client's retries; the run pauses, then retries this step.`
+              : `LaunchDarkly unreachable (${(e as LdWriteError).path} timed out or the connection dropped); the run pauses, then retries this step.`;
             await this.save(run);
             return;
           }
@@ -359,9 +369,12 @@ export class Executor {
           if (isSystemic(e)) {
             rec.finishedAt = this.now().toISOString();
             run.status = 'stopped';
+            const pauseCount = `${pauses} pause${pauses === 1 ? '' : 's'}`;
             run.stopReason = isRateLimit(e)
-              ? `Stopped on LaunchDarkly's rate limit after ${pauses} pause${pauses === 1 ? '' : 's'}: ${rec.error} Resume from Runs in a few minutes; failed steps are retried.`
-              : `Stopped on a systemic error: ${rec.error} Fix it (or give LaunchDarkly a minute), then resume from Runs.`;
+              ? `Stopped on LaunchDarkly's rate limit after ${pauseCount}: ${rec.error} Resume from Runs in a few minutes; failed steps are retried.`
+              : isUnreachable(e)
+                ? `Stopped because LaunchDarkly stayed unreachable through ${pauseCount}: ${rec.error} Check your connection and LaunchDarkly's status, then resume from Runs; failed steps are retried.`
+                : `Stopped on a systemic error: ${rec.error} Fix it, then resume from Runs.`;
             halt = true;
             await this.save(run);
             return;
@@ -382,7 +395,7 @@ export class Executor {
         concurrency = Math.max(1, Math.floor(concurrency / 2));
         run.pause = {
           until: new Date(this.now().getTime() + ms).toISOString(),
-          reason: `LaunchDarkly's API rate limit held through the client's retries. Pause ${pauses} of ${MAX_RATE_LIMIT_PAUSES}: waiting ${Math.round(ms / 1000)} s, then going on with ${concurrency} step${concurrency === 1 ? '' : 's'} at a time.`,
+          reason: `${pauseCause === 'rate_limit' ? "LaunchDarkly's API rate limit held through the client's retries" : 'A write to LaunchDarkly timed out or the connection dropped'}. Pause ${pauses} of ${MAX_RATE_LIMIT_PAUSES}: waiting ${Math.round(ms / 1000)} s, then going on with ${concurrency} step${concurrency === 1 ? '' : 's'} at a time.`,
         };
         await this.save(run);
         await this.pause(ms, signal);

@@ -19,6 +19,13 @@ export interface RetryPolicy {
    * it as possibly rate-limited: shrink the window and back off.
    */
   retryOpaqueFailures: boolean;
+  /**
+   * Attempts (including the first) for a request that keeps failing opaquely, when
+   * `retryOpaqueFailures` is on. Defaults to `maxAttempts`. A host whose errors are readable
+   * (LaunchDarkly) fails opaquely only on a timeout or a dropped connection, and each timed-out
+   * attempt already costs `timeoutMs`, so it gives up sooner than on a 429.
+   */
+  maxOpaqueAttempts?: number;
 }
 
 export const DEFAULT_RETRY: RetryPolicy = {
@@ -112,7 +119,7 @@ export class UnreachableError extends Error {
     readonly attempts: number,
     readonly lastCause: string,
   ) {
-    super(`Unreachable after ${attempts} attempts: ${redactUrl(url)} (${lastCause})`);
+    super(`Unreachable after ${attempts} attempt${attempts === 1 ? '' : 's'}: ${redactUrl(url)} (${lastCause})`);
     this.name = 'UnreachableError';
   }
 }
@@ -197,7 +204,10 @@ export class Transport {
         // No status to read: assume we may have been throttled.
         this.limiter.onThrottle();
         this.onEvent({ type: 'throttled', url: req.url, newLimit: this.limiter.limit });
-        if (attempt === this.retry.maxAttempts) break;
+        if (attempt >= Math.min(this.retry.maxAttempts, this.retry.maxOpaqueAttempts ?? this.retry.maxAttempts)) {
+          this.onEvent({ type: 'gave-up', method: req.method, url: req.url, attempts: attempt, reason: lastCause });
+          throw new UnreachableError(req.url, attempt, lastCause);
+        }
       }
 
       // Prefer the server's own hint when the browser is allowed to see it (LD exposes no

@@ -108,6 +108,33 @@ describe('Transport', () => {
     expect(t.stats.opaqueFailures).toBe(4);
   });
 
+  it('maxOpaqueAttempts gives up on opaque failures sooner than on readable ones, and says so in the singular', async () => {
+    const { clock } = instantClock();
+    let calls = 0;
+    const events: TransportEvent[] = [];
+    const t = new Transport({
+      clock,
+      retry: { maxAttempts: 8, maxOpaqueAttempts: 3, baseDelayMs: 1 },
+      onEvent: (e) => events.push(e),
+      fetch: async () => {
+        calls++;
+        throw new TypeError('Failed to fetch');
+      },
+    });
+    const err = await t.request({ method: 'GET', url: 'https://x.test/a' }).catch((e) => e);
+    expect(err).toBeInstanceOf(UnreachableError);
+    expect(err.message).toBe('Unreachable after 3 attempts: https://x.test/a (network error (no readable status; possibly CORS-blocked 401/429))');
+    expect(calls).toBe(3);
+    expect(events.filter((e) => e.type === 'gave-up')).toHaveLength(1);
+    // Readable statuses still get the full count.
+    let calls2 = 0;
+    const t2 = new Transport({ clock, retry: { maxAttempts: 4, maxOpaqueAttempts: 2, baseDelayMs: 1 }, fetch: async () => (calls2++, jsonResponse(503)) });
+    await expect(t2.request({ method: 'GET', url: 'https://x.test/a' })).rejects.toBeInstanceOf(HttpError);
+    expect(calls2).toBe(4);
+    const t3 = new Transport({ clock, retry: { maxOpaqueAttempts: 1 }, fetch: async () => Promise.reject(new TypeError('Failed to fetch')) });
+    await expect(t3.request({ method: 'GET', url: 'https://x.test/a' })).rejects.toThrow(/^Unreachable after 1 attempt:/);
+  });
+
   it('never puts headers in events', async () => {
     const events: TransportEvent[] = [];
     const t = new Transport({ clock: instantClock().clock, fetch: async () => jsonResponse(200), onEvent: (e) => events.push(e) });
