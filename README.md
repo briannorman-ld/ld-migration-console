@@ -3,7 +3,7 @@
 A browser-only app (static Vite SPA, no backend) that reads feature-flag projects from another
 provider and compares them with one LaunchDarkly project. Sources today: a StatSig project (Console
 API key or uploaded config spec) and another LaunchDarkly project (PLAN §20, read through a
-provider-neutral model that further sources will use); the name, the repository and the provenance
+provider-neutral model that further sources will use; GrowthBook is next, PLAN §21); the name, the repository and the provenance
 written into LD are source-neutral (see the note at the top of PLAN.md). The spec is [PLAN.md](PLAN.md); project rules are in
 [CLAUDE.md](CLAUDE.md). Status: **M0 + M1** (foundations, source adapters, canonical model, demo
 dataset, LD connect + capability probe) **+ M3 for gates and dynamic configs** (mapper with

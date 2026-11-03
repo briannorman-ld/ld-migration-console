@@ -21,7 +21,15 @@ Research inputs for the build. Collected 2026-10-07. See `../PLAN.md` §1 for wh
 - `docs/`: LD docs pages on roles, context kinds, approvals, scheduled changes, Federal, OAuth and warehouse native. Used for the capability matrix (PLAN §5.2).
 - `docs-llms.txt`: index of the LD docs.
 
+## growthbook/ (collected 2026-11-03, for PLAN §21)
+Pinned to `growthbook/growthbook` @ the commit in `SOURCE_COMMIT` (`fff4ec3`).
+- `openapi.yaml`: GrowthBook REST API spec (5.2.0), from `packages/back-end/generated/spec.yaml`. **The source of truth for GrowthBook field names.** Use the `/v2/features` routes (`/v1/features` is deprecated; v2 has a flat `rules` array with per-rule `allEnvironments` / `environments` scope and a compiled `definition` per environment).
+- `sdk-test-cases.json`: the GrowthBook SDK spec test cases (spec 0.12.0; `packages/sdk-js/test/cases.json`, MIT). `evalCondition` (583 cases) is the fixture for the condition translator; `feature` (61) and `run` (88) show payload rules and bucketing.
+- `sdk-types.ts`, `sdk-mongrule.ts`: the JS SDK's payload types (`FeatureDefinition`, `FeatureRule`, `SavedGroupsValues`) and condition evaluator, i.e. the exact semantics of every `$operator`.
+- `docs-llms.txt`: index of the GrowthBook docs (`docs.growthbook.io/llms.txt`).
+
 ## tools/
+- `python3 -I tools/growthbook_schema_dump.py FeatureV2 SavedGroup Attribute` prints resolved GrowthBook schemas; `--paths [prefix]` lists GET routes with their query parameters; `--tags` prints the tag descriptions. Needs PyYAML (`python3 -m venv .venv && .venv/bin/pip install pyyaml`).
 - `python3 tools/statsig_schema_dump.py '/console/v1/gates/{id}'` prints a resolved response schema from the StatSig spec.
 - `python3 tools/ld_schema_dump.py FeatureFlagBody MetricPost` prints LD schema properties.
 
@@ -31,6 +39,7 @@ Research inputs for the build. Collected 2026-10-07. See `../PLAN.md` §1 for wh
 - `node-js-server-sdk`, `python-sdk`, `statsig-server-core`: StatSig SDKs. The **evaluator source** defines the exact DCS semantics (`node-js-server-sdk/src/Evaluator.ts`, `statsig-server-core/statsig-rust/src/evaluation/evaluator.rs`) and the hashing used by ID lists (`src/utils/Hashing.ts`).
 
 ## Facts checked live (2026-10-07), not from docs
+- **GrowthBook CORS (read from source 2026-11-03, not yet with a key):** `packages/back-end/src/app.ts` mounts `/api` with `cors({ origin: "*", credentials: false })` and header auth, so `/api/v1` and `/api/v2` REST routes are callable from a browser. Whether `api.growthbook.io` exposes any rate-limit headers is the G0 spike (PLAN §21.6).
 - **LD API CORS:** `Access-Control-Allow-Origin: *` on every route we need, including PATCH/PUT/DELETE. **No `Access-Control-Expose-Headers`**, so JS can't read `X-Ratelimit-*` or `Retry-After`.
 - **StatSig CORS:** the preflight succeeds, but 401 responses from `statsigapi.net` and `api.statsigcdn.com` carry **no** `Access-Control-Allow-Origin`. Whether 200 responses do is **unverified**: this is M0 spike #1 and needs a real key.
 - **LD semantic patch (checked 2026-10-22, M3):** custom-property instructions can't be combined with environment instructions in one flag PATCH (400 "must not be in a patch for flag configuration instructions"). Several writes to one flag within a second or two return 429; backing off for several seconds succeeds.

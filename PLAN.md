@@ -738,6 +738,7 @@ There's no email or Slack, since that would need a server (§3.6).
 | M7 | Experiments / layers / holdouts / autotune | Draft creation, concluded → shipped flag, results archive |
 | M8 | Consolidation UI | Multi-source matching, auto-merge, `source_collision` options including discriminator rules (the data model has been ready since M0) |
 | M9 | Polish | Parity tester, code snippets, enrichment CSV, release pipelines guidance |
+| M10 | GrowthBook source (§21) | G0 spike with a real Cloud key, adapter (API + SDK payload upload), MongoDB-style condition translator, rule coverage and experiment-rule decisions, saved groups → segments, attribute schema → context kinds; then StatSig onto the neutral model (§20.1 step 2) |
 
 **Demo readiness.** After each milestone, the demo scenario is extended so the new features can be shown (§19.5). The first useful demo comes after **M3**: the explorer, decisions, and migrating gates per environment into a real LD project.
 
@@ -862,7 +863,7 @@ The canonical model (§4, `packages/canonical/src/model.ts`) is StatSig's: `COND
 - `NeutralClause`: context kind, attribute, operator (LD's operator names), values, negate. `NeutralRollout`: context kind, optional bucketBy, weighted variations in thousandths of a percent.
 - Environments and context kinds of the source project.
 
-**How it plugs in.** `CanonicalSnapshot` gains an optional `neutral` block (flags, segments, context kinds) next to the StatSig collections, and `SourceKind` gains `launchdarkly`. An LD-source snapshot has empty StatSig collections and a populated `neutral` block, so every piece of plumbing that moves snapshots around (store, snapshots view, pruning, run journal, workspace file) is unchanged. The planner accepts neutral flags and segments in a plan next to gates and configs; the executor is unchanged except that provenance carries the source kind. Step 2, when the third source arrives: the StatSig adapters emit `neutral` too, the StatSig mapper becomes a translator *into* the neutral model (its per-condition decisions move with it), and the one neutral → LD mapper writes everything. At that point the StatSig collections go away and `neutral.*` is hoisted to the top of the snapshot.
+**How it plugs in.** `CanonicalSnapshot` gains an optional `neutral` block (flags, segments, context kinds) next to the StatSig collections, and `SourceKind` gains `launchdarkly`. An LD-source snapshot has empty StatSig collections and a populated `neutral` block, so every piece of plumbing that moves snapshots around (store, snapshots view, pruning, run journal, workspace file) is unchanged. The planner accepts neutral flags and segments in a plan next to gates and configs; the executor is unchanged except that provenance carries the source kind. Step 2, when the third source arrives: the StatSig adapters emit `neutral` too, the StatSig mapper becomes a translator *into* the neutral model (its per-condition decisions move with it), and the one neutral → LD mapper writes everything. At that point the StatSig collections go away and `neutral.*` is hoisted to the top of the snapshot. (Decided 2026-11-03, §21.1: GrowthBook is the third source and goes onto the neutral model first; the StatSig move follows it, because GrowthBook's additions to the model are the ones StatSig needs too.)
 
 **Trade-offs accepted.** Two vocabularies live in one snapshot container until step 2; the UI branches on `snapshot.neutral` for inventory (a dedicated LD-source explorer rather than the gate/config grid); field names that say `statsig` (`statsigEnv`, `statsigFingerprint`, `statsigType`) now mean "source" and are documented as such rather than renamed across the executor, monitoring and journal in the same change.
 
@@ -894,3 +895,111 @@ The mapper is `packages/mapper/src/neutral.ts` (`mapNeutralFlag`, `mapNeutralSeg
 
 ### 20.4 Out of scope for the first step
 Experiments, metrics, holdouts and release pipelines (they end in the source and start new in the target, §11); flag links; approval settings; copying member and team assignments; reading big-segment membership; consolidation of an LD source with a StatSig source into one key (the data model allows it, the `source_collision` UI is M8).
+
+## 21. Third source: GrowthBook
+
+**Why.** GrowthBook is the most common open-source flag platform in the pipeline and the first source whose vocabulary is neither StatSig's nor LD's: MongoDB-style conditions, feature *values* with rule types instead of variations, saved groups instead of segments, and one flat attribute bag with identifier attributes instead of context kinds. It is the third source, which is where §20.1 said the neutral model would be put to the test. Spec and fixtures are in `reference/growthbook/` (REST API 5.2.0, SDK spec 0.12.0; see `reference/README.md`). Sized on 2026-11-03 at roughly one and a half times the LD-source step (§20): the plumbing is shared, the adapter and the condition translator are new.
+
+### 21.1 Decisions
+
+| Question | Decision |
+|---|---|
+| Onto which model? | The neutral model (`packages/canonical/src/neutral.ts`), as §20.1 intends for every new source. GrowthBook adds two fields to it (21.4); nothing is removed. |
+| Move StatSig onto the neutral model first (§20.1 "step 2")? | **No, after.** GrowthBook's additions to the neutral model (rule coverage, experiment rules) are exactly what StatSig's pass percentages and experiment-attached gates need too, so the StatSig move is cheaper once GrowthBook has shipped. Step 2 stays the step after this one. |
+| What is a source? | One GrowthBook **organization**, read with one API key, optionally filtered to one GrowthBook **project** (`projectId` on the list routes; rules and saved groups carry `projects` scopes). A customer with several GrowthBook projects going into one LD project adds one source per project; consolidation is the existing N-source model (§12). |
+| Two input modes, like StatSig | **REST API** (a read-only secret key; `Authorization: Bearer secret_…`) and an **uploaded SDK payload** (the JSON from `GET {apiHost}/api/features/{clientKey}` or `GET /api/v1/sdk-payload/{key}`), the counterpart of the config spec. A payload is compiled for *one environment* (an SDK connection has one `environment`), has no names, descriptions, tags or owners, and already has constants and configs resolved and disabled or out-of-schedule rules removed. Several payloads, one per environment, make one source. |
+| Browser access | GrowthBook's API server mounts `/api` with CORS `origin: "*"` and header auth (verified in `packages/back-end/src/app.ts` at the pinned commit, not yet with a real key), so **GrowthBook Cloud needs no relay**. `https://api.growthbook.io` and `https://cdn.growthbook.io` join `CONNECT_HOSTS` in `apps/web/csp.ts`. |
+| Self-hosted GrowthBook | A self-hosted API host cannot be in a static CSP. The hosted console therefore supports **Cloud by API and self-hosted by payload upload**; a self-hosted customer who wants the API path builds the console themselves with their host in `CONNECT_HOSTS` (a build-time setting, `VITE_EXTRA_CONNECT_HOSTS`). The CSP stays strict; nothing is proxied. |
+| Effective targeting vs authored rules | `GET /v2/features/{id}` returns both: the authored `rules` (flat array, each rule scoped by `allEnvironments` / `environments`, with `enabled`, schedules, ramps, prerequisites and saved-group targeting) and, per environment, `environments[env].definition`, the compiled SDK `FeatureDefinition` the SDKs evaluate (constants and configs resolved, `sparse` values merged, disabled rules gone). **The adapter reads targeting from `definition`** (it is what evaluates, exactly as the config spec is for StatSig) **and metadata and decision triggers from `rules`**, matched by rule `id`. The payload source has only the former. |
+
+### 21.2 The GrowthBook adapter (`packages/adapters/src/growthbook`)
+
+- **Input:** API host (Cloud, or a self-hosted origin when the build allows it), secret key, optional project id. The key lives in memory like the other tokens (`secrets` kind `gb_source`, keyed by source id). GrowthBook API keys have roles; the console asks for a read-only one and never writes.
+- **Reads:** `GET /api/v1/projects`, `/api/v1/environments` (org-wide; each has `projects` and an optional `parent`), `/api/v1/attributes?projectId` (`property`, `datatype`, `hashAttribute`, `format`, `enum`, `archived`), `/api/v2/features?projectId&limit=100&offset` then `GET /api/v2/features/{id}` only when the list omits `definition` (verify in the spike), `/api/v1/saved-groups?limit=100&offset` (`type` condition / list / remote, `attributeKey`, `values`, `condition`, `projects`, `archived`), `/api/v1/members` (owner ids → emails for the People step), and, for notes only, `/api/v1/experiments?projectId`, `/api/v1/holdouts`, `/api/v1/ramp-schedules?featureId`, `/api/v1/namespaces`. Pagination is `limit` (max 100) + `offset`. Lenient Zod schemas (`schemas.ts`) with field names from `reference/growthbook/openapi.yaml`; mismatches become snapshot warnings.
+- **Payload upload (`payload.ts`):** `features` (`FeatureDefinition`: `defaultValue`, `rules[]` with `condition`, `parentConditions`, `force`, `variations`, `weights`, `coverage`, `hashAttribute`, `namespace`, `range(s)`, `seed`, `hashVersion`, `key`, `meta`, `filters`), `savedGroups` (either `{type: 'list', attributeKey, values}` / `{type: 'condition', condition}` or the older bare member arrays), `experiments` and `contextualBandits` (noted, not migrated). Encrypted payloads (`encryptedFeatures`) are rejected with instructions to download with a connection that has `encryptPayload: false`.
+- **Condition translator (`conditions.ts`, pure, tested against `reference/growthbook/sdk-test-cases.json` `evalCondition`):** a GrowthBook condition is a MongoDB-style document; the translator emits a *disjunction of clause lists*, each list an LD rule (AND of `NeutralClause`s). Attribute paths with dots become LD attribute references. Operators:
+
+| GrowthBook | Neutral / LD | Note |
+|---|---|---|
+| `{attr: v}`, `$eq`, `$ne` | `in` with one value, negated for `$ne` | |
+| `$in`, `$nin` | `in`, negated for `$nin` | On array attributes GrowthBook matches any element; LD does the same |
+| `$gt`, `$gte`, `$lt`, `$lte` | `greaterThan`, `greaterThanOrEqual`, `lessThan`, `lessThanOrEqual` on numbers; on strings `unsupported_condition` | Attribute `format: date` → `after` / `before` (ISO strings converted to the forms LD accepts) |
+| `$veq`, `$vne`, `$vgt`, `$vgte`, `$vlt`, `$vlte` | `semVerEqual`, negated `semVerEqual`, `semVerGreaterThan`, negated `semVerLessThan`, `semVerLessThan`, negated `semVerGreaterThan` | Same trick as StatSig `version_gte`; `version_format` decision when values are not semver (GrowthBook tolerates a leading `v` and `+build`) |
+| `$regex` | `matches` | `regex_dialect` decision as for StatSig (JavaScript without `u` vs the target SDKs) |
+| `$regexi`, `$ini`, `$nini`, `$alli` | `case_insensitive_match` decision | Same decision as StatSig `any` |
+| `$exists` | negated / plain `in [null]`‐style existence via LD's attribute-presence handling | `null_check` decision |
+| `$and` | flattened into the clause list | |
+| `$or`, `$nor` | the rule is split into one LD rule per branch with the same serve; `$nor` is `$not` over `$or` | Sound in LD because bucketing is per flag + context key, so split rules bucket identically; `rule_expansion` decision when a condition expands to more than 20 rules |
+| `$not` | pushed inward (De Morgan) and ends as `negate` on leaves | `negated_missing_attribute` decision where LD and GrowthBook differ on missing attributes |
+| `$savedGroup` / `$inGroup` / `$notInGroup` | `segmentMatch` on the saved group's segment, negated for `$notInGroup` | Dependency on the saved group in the same environment |
+| `$elemMatch`, `$all`, `$size`, `$type` | emitted with the GrowthBook operator name | The mapper's existing `unsupported_condition` path turns them into blocking decisions |
+
+- **Rules → `NeutralFlagEnv`:** per environment, `enabled: false` → flag off; `defaultValue` → fallthrough; rules in order, each translated condition AND'ed with its `savedGroupTargeting` (`all` → one `segmentMatch` clause per group, `any` → one clause with all groups, `none` → negated) and its project scope dropped when the rule is scoped to projects other than the source's (noted). Rule types:
+
+| Rule type | Neutral |
+|---|---|
+| `force` | serve the variation holding `value` |
+| `rollout` (`coverage`, `hashAttribute`, `seed`, `hashVersion`) | `rollout` with `coverage` (21.4) on the context kind / `bucketBy` the hash attribute maps to |
+| `experiment` (`value[]` with `weight`s, `coverage`, `namespace`, `trackingKey`, sticky bucketing) | a rule marked `experiment` (21.4) with a weighted rollout; the mapper decides (21.3) |
+| `experiment-ref` (`experimentId`, `variations`) | the same, with the experiment's current phase weights taken from `definition` |
+| `safe-rollout` (`controlValue`, `variationValue`, `status`) | `released` → force the variation value; `rolled-back` / `stopped` → force the control value; `running` → an `experiment`-marked rule |
+| `contextual-bandit-ref` | skipped with a reason (M7 territory; LD AI Configs are not a flag mapping) |
+
+- **Variations:** GrowthBook has no variation list. The adapter collects the distinct values across every environment's default and rules (from `definition`, so `sparse` partial JSON, `@const:` and `@config:` references and Config-mode `baseConfig` are already flattened; a fidelity note says the indirection was not carried) and types them from `valueType` (`boolean` → a boolean flag with `true` first; `string`, `number`, `json` → multivariate; JSON variations are append-only in the target as today).
+- **Prerequisites:** feature-level `prerequisites` (feature ids that must be `true`) → `NeutralPrerequisite` on the `true` variation. Rule-level `prerequisites[] {id, condition}` → the `rule_prerequisite` decision (21.3); `parentConditions` in a payload are the same thing.
+- **Saved groups → `NeutralSegment`:** `list` groups whose `attributeKey` maps to a context kind's key → `included` targets of that kind; lists on any other attribute → one rule `attribute in values`; `condition` groups → rules through the translator (a nested `$savedGroup` hits the existing "segment rule references another segment" decision, with a new option to inline the nested group's condition); `remote` groups → `unbounded` (big segment); whether their member uploads are readable through `/saved-groups/{id}/uploads/{version}` is a spike item. Saved groups are organization-wide, so each one is replicated into every mapped environment, as StatSig segments are. `archived` groups are skipped; `useEmptyListGroup` is irrelevant (an empty list matches nobody in both).
+- **Identity:** the attribute schema drives context kinds. `id` is the `user` key. Other attributes with `hashAttribute: true` (GrowthBook's "identifier") → `unit_type_kind` decision exactly as StatSig custom unit IDs: their own context kind, or an attribute of `user`, never the `user` key. Every other attribute is an attribute of `user`. A rule's `hashAttribute` becomes the rollout's context kind, or `bucketBy` when the identifier stayed a `user` attribute. `datatype` types clause values (numbers stay numbers, `enum` values are strings, arrays are arrays). `secureString` attributes are hashed in payloads (`hashSecureAttributes`) and plaintext in the API: from the API, the `secure_attribute` acknowledgement (LD compares plaintext; the hashing has no counterpart); from a payload, blocking, because the values cannot be recovered.
+- **Environments:** org-wide with `projects` scope; the source's environment list is those that include the project. `parent` (environment inheritance) semantics are a spike item; until verified, a rule scoped to a parent environment is also emitted into its children with a note.
+- **Not readable, and reported as such:** experiment analysis, metrics, data sources (out of scope by §11), remote-group members if the uploads route proves closed, revisions and drafts (only the live revision is read), custom hooks, releases, code references.
+- **Refresh and monitoring:** `refreshable`, like the Console API. `dateUpdated` and `revision.version` are the source-side fingerprints the monitor compares (§14), next to the effective-targeting fingerprint.
+
+### 21.3 Mapping: what becomes a decision
+
+The mapper is `packages/mapper/src/neutral.ts`, extended rather than forked: GrowthBook flags go through `mapNeutralFlag` and `mapNeutralSegment`, with the new decision types below and a `sourceLabel` for the kind. Everything in the §20.3 table applies unchanged (environment mapping, `unit_type_kind`, `partial_rollout_rebucket`, dependencies and `missing_reference`, `big_segment`, `key_collision`, `unsupported_condition`, archived skipped).
+
+| Difference | Handling |
+|---|---|
+| Rule `coverage` below 1 (rollouts, experiments) | GrowthBook sends the uncovered share to the *next* rule; an LD rollout assigns every matched context. `rollout_coverage` (choice): when the rule is last, or every later rule and the fallthrough serve the same value, the mapper emits a lossless rollout `coverage → value, rest → that value` with no decision; otherwise *acknowledge* that uncovered contexts get the fallthrough value, or *skip* the flag. Always paired with `partial_rollout_rebucket`. |
+| `experiment`, `experiment-ref`, running `safe-rollout` rules | Experiments end in the source (§11). `experiment_rule` (choice): *freeze* the current weights as a plain rollout (no analysis in LD), *serve control* (the first value) as if concluded, or *skip* the flag until the experiment is stopped in GrowthBook. Sticky-bucketed assignments cannot be reproduced; noted. The flag notes the `trackingKey` / `experimentId` for M7. |
+| `namespace` on an experiment rule | No LD counterpart (mutual exclusion across flags). `namespace_exclusion` (acknowledge): the LD rollout is not exclusive with the other flags in the namespace; or skip. |
+| `scheduleRules` on a rule (`scheduleType: schedule`) | `scheduled_rule` (choice): create an LD scheduled change for each future timestamp (M4's scheduled-changes fallback, still unverified live), or migrate the current state only. Past timestamps are already reflected in `definition`. |
+| `scheduleType: ramp` (`rampScheduleId`) | `ramp_in_progress` (acknowledge): the current step's coverage is migrated; the ramp continues in GrowthBook only (LD progressive rollouts are set up new). |
+| Rule-level `prerequisites` | LD prerequisites are flag-level. `rule_prerequisite` (choice): *hoist* when every rule and the fallthrough would carry the same prerequisite (lossless), otherwise *inline* it as a clause when the parent is a boolean flag in the same source (`segmentMatch`-like dependency; evaluates the parent's effective value only if the parent migrated first), or *skip*. Conditions other than `$eq` on `value` are `unsupported_condition`. |
+| Feature `holdout` | LD holdouts exist but are not written by the console yet. `holdout_attached` (acknowledge), as for StatSig: the flag migrates without the holdout. |
+| `secureString` attributes | `secure_attribute` (acknowledge from the API, blocking from a payload), 21.2. |
+| Rules scoped to other projects (`allProjects: false`), `targetingProjects` | Dropped with a note; the source is one project. |
+| Case-insensitive operators, regex, version formats, nulls, negation on missing attributes, rule expansion | The existing `case_insensitive_match`, `regex_dialect`, `version_format`, `null_check`, `negated_missing_attribute`, `rule_expansion` decisions. |
+| `owner` | Resolved through `/api/v1/members` to an email and matched to an LD member in the People step; `maintainer_unknown` when it cannot be. |
+| `customFields`, `tags` | Tags are copied; custom fields go through `copy_custom_properties`. |
+| Constants, configs, `sparse` values, Config mode | Values are migrated flattened (fidelity note `partial`, "indirection not carried"); LD has no counterpart for a shared constant. |
+
+**Provenance** (§3.3) with `kind = growthbook`: tags `migrated-from-growthbook` and `migration-src-<alias>`, `migration.kind = growthbook`, `migration.id` = the feature id or saved-group id, `migration.type = feature | saved_group`; segments get the `[ld-migration: from=growthbook; …]` footer.
+
+### 21.4 Changes to the neutral model
+
+Two additions to `packages/canonical/src/neutral.ts`, both optional so the LD source is untouched:
+- `NeutralRule.coverage?: number`: the share of matched contexts the rule applies to; the rest fall through to the next rule. Absent means 1.
+- `NeutralRule.experiment?: { key: string; sticky?: boolean; namespace?: { id: string; range: [number, number] } }`: the rule is an experiment allocation, not a rollout. The weights stay in `rollout`.
+
+`SourceKind` gains `growthbook` and `growthbook_payload`; `MigrationSourceKind` gains `growthbook`. The snapshot's `neutral` block also records the attribute schema (`contextKinds` already exists; attributes get `attributes: { name, type, identifier, format }[]`) so the explorer can show it and the mapper can type values.
+
+### 21.5 Plumbing, UI, docs, tests
+
+- `AddSource`: a fourth tile; fields host (Cloud by default), key, project picker (after the key validates), or a payload file per environment. `kinds.ts` labels and `secretKindOf`; `DeviceVault` line; `guide.ts` copy.
+- The LD-source explorer (`LdSourceSideBySide`) already renders `snapshot.neutral`; it is renamed to the neutral explorer and gains the attribute schema panel.
+- `packages/coverage/src/matrix.ts`: a `growthbook` area with rows for features, rule types, conditions and operators, saved groups (three types), attributes and identifiers, schedules and ramps, experiments and bandits, constants and configs, holdouts, projects and environments; `pnpm coverage:generate` regenerates `docs/LIMITATIONS.md`.
+- `docs/KNOWN-EDGE-CASES.md` §19: the GrowthBook rows (coverage fall-through, `$or` splitting, `$not` on missing attributes, secure strings, environment inheritance, remote groups, sparse JSON, case-insensitive operators).
+- Demo: a GrowthBook organization "Acme Growth" in `packages/demo-fixtures/src/growthbook/`, served by an MSW handler for `api.growthbook.io` (`msw/growthbook-api.ts`), with one feature per row above; golden files `acme-growth.<env>.json`; translator tests driven by `reference/growthbook/sdk-test-cases.json`.
+- Live facts to record in `reference/README.md` after the spike.
+
+### 21.6 Order of work
+
+| Step | Scope | Done when |
+|---|---|---|
+| G0 spike (real Cloud key, read-only) | CORS on 200 and 401 for `/api/v2/features` and `/api/v1/saved-groups`; `definition` present in the list route; rule `id`s present in `definition`; saved-group format in `definition` (`$savedGroup` vs inline); remote-group uploads readable; `parent` environment semantics; rate limit behaviour and any exposed headers | Facts in `reference/README.md`; the CSP hosts added |
+| G1 read-only | Adapter (API + payload), condition translator, neutral additions, attribute schema, fixtures and MSW, explorer, coverage rows | Inventory and fidelity export for a GrowthBook project; translator passes the SDK `evalCondition` cases it claims to support and reports the rest |
+| G2 migrate | The §21.3 decisions in the mapper, golden files, planner dependencies for saved groups and prerequisites, provenance kind, People-step owners | Features and saved groups migrate per environment into the demo LD project; `docs/LIMITATIONS.md` regenerated |
+| G3 close | Remote groups via uploads (if readable) or the `big_segment` path, scheduled changes for `scheduleRules`, payload-per-environment UX, blog narrative | Edge-case rows closed or marked as backlog |
+
+### 21.7 Out of scope for the first step
+Experiment and holdout analysis, metrics, data sources, fact tables (§11); contextual bandits; ramp schedules and safe rollouts as *live* processes (their current state migrates, the process does not); custom hooks and releases; revisions and drafts; moving StatSig onto the neutral model (the step after this one, §20.1).
