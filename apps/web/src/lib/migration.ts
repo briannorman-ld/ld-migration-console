@@ -518,9 +518,10 @@ function planMappers(i: MappingInputs): PlanMappers {
   };
 }
 
-export function buildPlan(input: { selection: MigrationSelection; ldEnvs: string[]; snapshots: CanonicalSnapshot[]; ld: LdSession } & MappingInputs): Plan {
+export function buildPlan(input: { selection: MigrationSelection; ldEnvs: string[]; snapshots: CanonicalSnapshot[]; ld: LdSession; skipInSync?: boolean } & MappingInputs): Plan {
   return planMigration({
     mappers: planMappers(input),
+    ...(input.skipInSync ? { skipInSync: true } : {}),
     gates: input.selection.gates,
     configs: input.selection.configs ?? [],
     autotunes: input.selection.autotunes,

@@ -121,6 +121,8 @@ export interface RunRecord {
   undoneAt?: string;
   /** Why a `stopped` (or cancelled `undo_failed`) run ended early: a cancel, or the systemic error. */
   stopReason?: string;
+  /** Set while the run waits out a LaunchDarkly rate limit (PLAN §9 step 6); cleared when it goes on. */
+  pause?: { until: string; reason: string };
 }
 
 export interface Journal {
@@ -194,6 +196,17 @@ function isSystemic(e: unknown): boolean {
   return e instanceof LdAuthError || (e instanceof LdWriteError && (e.status === 403 || e.status === 429 || e.status === 'unreachable'));
 }
 
+const isRateLimit = (e: unknown): boolean => e instanceof LdWriteError && e.status === 429;
+
+/**
+ * A 429 that outlived the transport's retries pauses the whole run rather than stopping it: every
+ * step in flight settles, the run waits (a minute, then two, then four) with half the concurrency,
+ * and the step is retried. A long run then rides out LaunchDarkly's limit by itself; only a limit
+ * that holds through every pause stops the run for the user to resume later.
+ */
+export const RATE_LIMIT_PAUSE_MS = 60_000;
+export const MAX_RATE_LIMIT_PAUSES = 3;
+
 export function stepLabel(s: PlanStep): string {
   switch (s.op) {
     case 'ensure_context_kind':
@@ -246,6 +259,19 @@ export class Executor {
     this.sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   }
 
+  /** Waits `ms`, or until the run is cancelled. */
+  private pause(ms: number, signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) return Promise.resolve();
+    return new Promise((resolve) => {
+      const done = () => {
+        signal?.removeEventListener('abort', done);
+        resolve();
+      };
+      signal?.addEventListener('abort', done, { once: true });
+      void this.sleep(ms).then(done);
+    });
+  }
+
   /**
    * Runs (or resumes) every pending step. A dry run writes nothing (LD `dryRun=true`).
    *
@@ -265,7 +291,7 @@ export class Executor {
     run.status = 'running';
     delete run.stopReason;
     await this.save(run);
-    const concurrency = Math.max(1, Math.floor(this.opts.concurrency ?? DEFAULT_CONCURRENCY));
+    let concurrency = Math.max(1, Math.floor(this.opts.concurrency ?? DEFAULT_CONCURRENCY));
     const byId = new Map(run.steps.map((s) => [s.id, s]));
     /** Failed or skipped in this run: their dependents are skipped. */
     const failed = new Set<string>();
@@ -274,6 +300,9 @@ export class Executor {
     const inFlight = new Map<string, Promise<void>>();
     const lanes = new Set<string>();
     let halt = false;
+    /** A 429 outlived the retries: nothing new starts, and once the steps in flight settle the run waits. */
+    let pausing = false;
+    let pauses = 0;
     const resumable = (s: StepRecord) => s.status === 'pending' || s.status === 'running' || s.status === 'failed';
     const settled = (id: string) => {
       const s = byId.get(id);
@@ -298,6 +327,21 @@ export class Executor {
             await this.save(run);
             return;
           }
+          if (isRateLimit(e) && !halt && (pausing || pauses < MAX_RATE_LIMIT_PAUSES)) {
+            // LaunchDarkly is still throttling after the client's own retries. The step goes back to
+            // pending and is retried once the run has waited; the loop below pauses when nothing is in flight.
+            if (!pausing) {
+              pausing = true;
+              pauses++;
+            }
+            rec.status = 'pending';
+            delete rec.startedAt;
+            delete rec.error;
+            started.delete(rec.id);
+            rec.message = `LaunchDarkly rate limit (429) after the client's retries; the run pauses, then retries this step.`;
+            await this.save(run);
+            return;
+          }
           if (isSystemic(e) && halt) {
             // The run is already stopping on a systemic error; this step met the same wall. It goes
             // back to pending (not failed), so the resume retries it rather than skipping its dependents.
@@ -315,7 +359,9 @@ export class Executor {
           if (isSystemic(e)) {
             rec.finishedAt = this.now().toISOString();
             run.status = 'stopped';
-            run.stopReason = `Stopped on a systemic error: ${rec.error} Fix it (or give LaunchDarkly a minute), then resume from Runs.`;
+            run.stopReason = isRateLimit(e)
+              ? `Stopped on LaunchDarkly's rate limit after ${pauses} pause${pauses === 1 ? '' : 's'}: ${rec.error} Resume from Runs in a few minutes; failed steps are retried.`
+              : `Stopped on a systemic error: ${rec.error} Fix it (or give LaunchDarkly a minute), then resume from Runs.`;
             halt = true;
             await this.save(run);
             return;
@@ -331,7 +377,21 @@ export class Executor {
     };
     for (;;) {
       if (signal?.aborted) halt = true;
-      if (!halt) {
+      if (pausing && !halt && inFlight.size === 0) {
+        const ms = RATE_LIMIT_PAUSE_MS * 2 ** (pauses - 1);
+        concurrency = Math.max(1, Math.floor(concurrency / 2));
+        run.pause = {
+          until: new Date(this.now().getTime() + ms).toISOString(),
+          reason: `LaunchDarkly's API rate limit held through the client's retries. Pause ${pauses} of ${MAX_RATE_LIMIT_PAUSES}: waiting ${Math.round(ms / 1000)} s, then going on with ${concurrency} step${concurrency === 1 ? '' : 's'} at a time.`,
+        };
+        await this.save(run);
+        await this.pause(ms, signal);
+        delete run.pause;
+        pausing = false;
+        if (signal?.aborted) halt = true;
+        await this.save(run);
+      }
+      if (!halt && !pausing) {
         for (const rec of run.steps) {
           if (inFlight.size >= concurrency) break;
           if (!resumable(rec) || started.has(rec.id)) continue;
@@ -349,8 +409,8 @@ export class Executor {
           start(rec);
         }
       }
-      if (inFlight.size === 0) break;
-      await Promise.race(inFlight.values());
+      if (inFlight.size === 0 && (!pausing || halt)) break;
+      if (inFlight.size) await Promise.race(inFlight.values());
     }
     if (run.status === 'running' && signal?.aborted) {
       const next = run.steps.find((s) => resumable(s) && !started.has(s.id));
@@ -895,7 +955,21 @@ export class Executor {
     const comment = this.comment(run, s);
     // Scheduled changes an earlier sync created (recorded in the sync provenance) and any this
     // step created before an interrupted attempt: both are replaced below.
-    const previous = unique([...scheduledIdsFrom(readSync(flag.customProperties ?? {}, s.ldEnv)), ...(rec.scheduledChangeIds ?? [])]);
+    const sync = readSync(flag.customProperties ?? {}, s.ldEnv);
+    const previous = unique([...scheduledIdsFrom(sync), ...(rec.scheduledChangeIds ?? [])]);
+
+    // A flag whose targeting already matches (a re-plan that included in-sync items) is not
+    // written again: a plan of hundreds of migrated flags would otherwise spend two writes per
+    // flag and environment on LaunchDarkly's rate limit for nothing. The provenance is still
+    // recorded when it lags (the decisions changed to the same result, or it was never written).
+    const current = flag.environments?.[s.ldEnv];
+    if (current && !scheduled.length && !previous.length && this.targetingMatches(flag, current, instructions)) {
+      const recorded = !!sync && sync[0] === s.provenance.statsigFingerprint && sync[3] === s.provenance.decisionSetHash;
+      if (recorded) return `Targeting in ${s.ldEnv} already in sync; nothing written.`;
+      if (run.dryRun) return `Targeting in ${s.ldEnv} already matches; would record the sync.`;
+      await this.writeProvenance(run, s, []);
+      return `Targeting in ${s.ldEnv} already matches; recorded the sync.`;
+    }
 
     let approval = false;
     try {
@@ -968,6 +1042,26 @@ export class Executor {
     if (!run.dryRun) {
       this.flags.set(s.key, res);
       this.report({ kind: 'flag', key: s.key, flag: res });
+    }
+  }
+
+  /**
+   * Whether `env` (as LaunchDarkly returned it) already is what `desired` would write: the
+   * instructions that would restore the current state, normalized, equal the desired ones. Any
+   * doubt (a prerequisite flag not read yet) counts as a difference, so the write goes out.
+   */
+  private targetingMatches(flag: LdFlag, env: LdFlagConfig, desired: SemanticPatch['instructions']): boolean {
+    const prerequisites: { key: string; variationId: string }[] = [];
+    for (const p of env.prerequisites ?? []) {
+      const pf = this.flags.get(p.key);
+      const id = pf?.variations[p.variation]?._id;
+      if (!id) return false;
+      prerequisites.push({ key: p.key, variationId: id });
+    }
+    try {
+      return stableStringify(normalizeInstructions(restoreInstructions(flag, env, flag, env, prerequisites))) === stableStringify(normalizeInstructions(desired));
+    } catch {
+      return false;
     }
   }
 
@@ -1210,6 +1304,45 @@ export function restoreInstructions(pre: LdFlag, env: LdFlagConfig, current: LdF
   ];
   if (prerequisites.length || currentEnv?.prerequisites?.length) out.push({ kind: 'replacePrerequisites', prerequisites });
   return out;
+}
+
+/**
+ * Semantic-patch instructions in a shape that compares: clauses without their `_id`, `user` where
+ * a context kind is implied, `negate` and `trackEvents` always present, targets and prerequisites
+ * in a fixed order. Two instruction lists that normalize alike describe the same targeting.
+ */
+export function normalizeInstructions(ins: SemanticPatch['instructions']): unknown[] {
+  type R = Record<string, unknown>;
+  const serve = (x: R) =>
+    x.rolloutWeights ? { rolloutContextKind: (x.rolloutContextKind as string | undefined) ?? 'user', rolloutBucketBy: (x.rolloutBucketBy as string | undefined) ?? null, rolloutWeights: x.rolloutWeights } : { variationId: x.variationId };
+  return ins.map((i) => {
+    switch (i.kind) {
+      case 'updateFallthroughVariationOrRollout':
+        return { kind: i.kind, ...serve(i) };
+      case 'replaceRules':
+        return {
+          kind: i.kind,
+          rules: ((i.rules as R[] | undefined) ?? []).map((r) => ({
+            description: (r.description as string | undefined) || '',
+            trackEvents: !!r.trackEvents,
+            clauses: ((r.clauses as R[] | undefined) ?? []).map((c) => ({ contextKind: (c.contextKind as string | undefined) ?? 'user', attribute: c.attribute, op: c.op, values: c.values, negate: !!c.negate })),
+            ...serve(r),
+          })),
+        };
+      case 'replaceTargets':
+        return {
+          kind: i.kind,
+          targets: ((i.targets as { contextKind?: string; variationId: string; values: string[] }[] | undefined) ?? [])
+            .filter((t) => t.values.length)
+            .map((t) => ({ contextKind: t.contextKind ?? 'user', variationId: t.variationId, values: [...t.values].sort() }))
+            .sort((a, b) => `${a.contextKind}|${a.variationId}`.localeCompare(`${b.contextKind}|${b.variationId}`)),
+        };
+      case 'replacePrerequisites':
+        return { kind: i.kind, prerequisites: [...((i.prerequisites as { key: string; variationId: string }[] | undefined) ?? [])].sort((a, b) => a.key.localeCompare(b.key)) };
+      default:
+        return i;
+    }
+  });
 }
 
 function shellPatch(flag: LdFlag, d: Extract<PlanStep, { op: 'upsert_flag_shell' }>['desired']): JsonPatchOp[] {

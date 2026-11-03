@@ -115,6 +115,13 @@ export interface PlanRequest {
   ld: LdProjectState;
   now: string;
   /**
+   * Leave out flags (gates, configs, autotunes, source flags) whose LaunchDarkly provenance says
+   * they are in sync with the source and the decisions: a re-plan then writes only what is new or
+   * changed. Such items are `skipped` with `IN_SYNC_REASON`; an in-sync prerequisite still
+   * satisfies its dependents. Segments are pulled in by their flags as before.
+   */
+  skipInSync?: boolean;
+  /**
    * The mapper functions to use in place of @sslm/mapper's, same signatures and results. The web
    * app passes memoized ones, so a plan reuses what the explorers mapped instead of mapping every
    * selected item again for each environment. Left out, the pure mappers run.
@@ -189,7 +196,12 @@ export interface PlanItem {
   exists: boolean;
   /** For flags: LD has it and the console created it (provenance present). */
   owned?: boolean;
+  /** For flags: where LD's provenance for this environment stands against the current mapping. */
+  sync?: MigrationStatus;
 }
+
+/** The reason on a flag item `skipInSync` left out. */
+export const IN_SYNC_REASON = 'already in sync with StatSig (unchanged since its last sync)';
 
 /**
  * One LD flag of the plan, at project level (PLAN §7 "Changes at project level affect every
@@ -215,6 +227,8 @@ export interface PlanFlag {
   /** `ready` when the shell step runs (targeting is ready in at least one environment). */
   status: ItemStatus;
   reason?: string;
+  /** Every planned environment is in sync per LD's provenance: nothing to write unless asked. */
+  inSync: boolean;
   /** Per-environment outcome, in the plan's environment order. */
   envs: { ldEnv: string; statsigEnv?: string; status: ItemStatus; reason?: string }[];
 }
@@ -378,6 +392,7 @@ export function planMigration(req: PlanRequest): Plan {
         errors.push(`Prerequisites form a cycle: ${[...stack, gate.uid].map((u) => gatesByUid.get(u)?.id ?? u).join(' → ')}.`);
         return { ok: false, reason: 'prerequisite cycle' };
       }
+      if (existing.status === 'skipped' && existing.sync === 'in_sync') return { ok: true };
       return existing.status === 'ready' ? { ok: true, stepId: `env:${ldEnv}:${existing.ldKey}` } : { ok: false, reason: `gate “${gate.id}” is ${existing.status}` };
     }
     const snapshot = snapshotOf.get(gate.source.sourceId)!;
@@ -414,6 +429,9 @@ export function planMigration(req: PlanRequest): Plan {
       }
     }
 
+    item.sync = migrationStatus(ldFlag, ldEnv, r).status;
+    if (req.skipInSync && item.sync === 'in_sync') return finishItem(item, 'skipped', IN_SYNC_REASON);
+
     // Dependencies in the same environment.
     const depSteps: string[] = ensureKinds(r.dependencies);
     const depProblems: string[] = [];
@@ -429,8 +447,10 @@ export function planMigration(req: PlanRequest): Plan {
           continue;
         }
         const p = planGate(ref, ldEnv, gate.uid, [...stack, gate.uid]);
-        if (p.ok && p.stepId) depSteps.push(p.stepId);
-        else depProblems.push(`prerequisite ${p.reason ?? d.key}`);
+        // An in-sync prerequisite (skipInSync) is satisfied with no step of its own.
+        if (p.ok) {
+          if (p.stepId) depSteps.push(p.stepId);
+        } else depProblems.push(`prerequisite ${p.reason ?? d.key}`);
       }
     }
 
@@ -528,6 +548,9 @@ export function planMigration(req: PlanRequest): Plan {
       }
     }
 
+    item.sync = migrationStatus(ldFlag, ldEnv, r).status;
+    if (req.skipInSync && item.sync === 'in_sync') return void finishItem(item, 'skipped', IN_SYNC_REASON);
+
     // Dependencies in the same environment.
     const depSteps: string[] = ensureKinds(r.dependencies);
     const depProblems: string[] = [];
@@ -543,8 +566,10 @@ export function planMigration(req: PlanRequest): Plan {
           continue;
         }
         const p = planGate(ref, ldEnv, config.uid, [config.uid]);
-        if (p.ok && p.stepId) depSteps.push(p.stepId);
-        else depProblems.push(`prerequisite ${p.reason ?? d.key}`);
+        // An in-sync prerequisite (skipInSync) is satisfied with no step of its own.
+        if (p.ok) {
+          if (p.stepId) depSteps.push(p.stepId);
+        } else depProblems.push(`prerequisite ${p.reason ?? d.key}`);
       }
     }
 
@@ -666,6 +691,9 @@ export function planMigration(req: PlanRequest): Plan {
       }
     }
 
+    item.sync = migrationStatus(ldFlag, ldEnv, r).status;
+    if (req.skipInSync && item.sync === 'in_sync') return void finishItem(item, 'skipped', IN_SYNC_REASON);
+
     const depSteps: string[] = ensureKinds(r.dependencies);
     const depProblems: string[] = [];
     if (r.metric) {
@@ -774,6 +802,7 @@ export function planMigration(req: PlanRequest): Plan {
         errors.push(`Prerequisites form a cycle: ${[...stack, flag.uid].map((u) => neutralFlagsByUid.get(u)?.flag.key ?? u).join(' → ')}.`);
         return { ok: false, reason: 'prerequisite cycle' };
       }
+      if (existing.status === 'skipped' && existing.sync === 'in_sync') return { ok: true };
       return existing.status === 'ready' ? { ok: true, stepId: `env:${ldEnv}:${existing.ldKey}` } : { ok: false, reason: `flag “${flag.key}” is ${existing.status}` };
     }
     const sourceEnv = envFor(snapshot.source.sourceId, ldEnv);
@@ -811,6 +840,9 @@ export function planMigration(req: PlanRequest): Plan {
       }
     }
 
+    item.sync = migrationStatus(ldFlag, ldEnv, r).status;
+    if (req.skipInSync && item.sync === 'in_sync') return finishItem(item, 'skipped', IN_SYNC_REASON);
+
     const depSteps: string[] = ensureKinds(r.dependencies, migrationKindOf(snapshot.source.sourceKind));
     const depProblems: string[] = [];
     for (const d of r.dependencies) {
@@ -825,8 +857,10 @@ export function planMigration(req: PlanRequest): Plan {
           continue;
         }
         const p = planNeutralFlag(ref, snapshot, ldEnv, flag.uid, [...stack, flag.uid]);
-        if (p.ok && p.stepId) depSteps.push(p.stepId);
-        else depProblems.push(`prerequisite ${p.reason ?? d.key}`);
+        // An in-sync prerequisite (skipInSync) is satisfied with no step of its own.
+        if (p.ok) {
+          if (p.stepId) depSteps.push(p.stepId);
+        } else depProblems.push(`prerequisite ${p.reason ?? d.key}`);
       }
     }
 
@@ -1024,6 +1058,7 @@ function rollUpFlags(items: PlanItem[], steps: PlanStep[], envOrder: string[]): 
       exists: xs.some((i) => i.exists),
       adopt: shell?.adopt ?? false,
       owned: xs.some((i) => i.owned),
+      inSync: xs.every((i) => i.sync === 'in_sync'),
       status: shell ? 'ready' : worst.status === 'ready' ? 'blocked' : worst.status,
       ...(shell ? {} : worst.reason ? { reason: worst.reason } : {}),
       envs,

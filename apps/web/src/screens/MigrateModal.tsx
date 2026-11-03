@@ -148,19 +148,27 @@ export function MigrateModal({
     if (missing.length) void refreshLdState(workspaceId, { segmentEnvs: missing }).catch(() => undefined);
   }, [ldEnvs, m.ld.segments, workspaceId]);
 
+  // Flags whose LaunchDarkly provenance matches StatSig and the decisions are left out by default:
+  // a plan from "Select all" then writes only what is new or changed in StatSig.
+  const [skipInSync, setSkipInSync] = useState(true);
   const plan = useMemo(
     () =>
       phase.kind === "loading"
         ? null
-        : buildPlan({ ...m, selection, ldEnvs: plannedEnvs, snapshots }),
-    [phase.kind, selection, plannedEnvs, snapshots, m],
+        : buildPlan({ ...m, selection, ldEnvs: plannedEnvs, snapshots, skipInSync }),
+    [phase.kind, selection, plannedEnvs, snapshots, m, skipInSync],
   );
   const requested = plan?.items.filter((i) => !i.dependency) ?? [];
+  const inSyncFlags = plan?.flags.filter((f) => f.inSync).length ?? 0;
+  const leftOut = (i: { sync?: string }) => skipInSync && i.sync === "in_sync";
   // Flags are project-level (created once, present in every environment); targeting, segments
   // and bandits are per environment. Metrics and AI Configs are project-level too (empty ldEnv).
-  const flags = plan?.flags ?? [];
+  const flags = (plan?.flags ?? []).filter((f) => !(skipInSync && f.inSync));
   const projectItems = plan?.items.filter((i) => i.ldEnv === "") ?? [];
-  const itemsIn = (env: string) => (plan?.items ?? []).filter((i) => i.ldEnv === env).sort((a, b) => Number(a.dependency) - Number(b.dependency));
+  const itemsIn = (env: string) =>
+    (plan?.items ?? [])
+      .filter((i) => i.ldEnv === env && !leftOut(i))
+      .sort((a, b) => Number(a.dependency) - Number(b.dependency));
   const groups = useMemo(() => {
     const g = new Map<string, DecisionPoint[]>();
     for (const d of plan?.decisions ?? [])
@@ -287,6 +295,18 @@ export function MigrateModal({
                       <Spinner /> Planning for {ldEnvs.join(", ") || "no environment"}…
                     </p>
                   )}
+                </section>
+              )}
+              {inSyncFlags > 0 && (
+                <section aria-label="Flags already in sync" className="rounded-md border border-line p-3 text-sm">
+                  <label className="flex flex-wrap items-center gap-2">
+                    <input type="checkbox" checked={skipInSync} disabled={busy} onChange={(e) => setSkipInSync(e.target.checked)} />
+                    Skip the {inSyncFlags.toLocaleString()} flag{inSyncFlags === 1 ? "" : "s"} already in sync with StatSig
+                  </label>
+                  <p className="mt-1 text-xs text-fg-muted">
+                    In sync: LaunchDarkly's provenance matches the StatSig state and the decisions. Flags StatSig changed since their last sync, and flags not in
+                    LaunchDarkly yet, stay in the plan.{skipInSync ? "" : " Unticked, the in-sync flags are written again."}
+                  </p>
                 </section>
               )}
               {(flags.length > 0 || projectItems.length > 0) && (
@@ -814,6 +834,13 @@ export function RunProgress({
         )}
         {!inProgress && run.finishedAt && <span>finished in {formatDuration(p.elapsedMs)}</span>}
       </div>
+      {inProgress && run.pause && (
+        <Callout tone="amber">
+          <span className="flex items-center gap-2" role="status">
+            <Spinner /> Paused until {new Date(run.pause.until).toLocaleTimeString()}. {run.pause.reason}
+          </span>
+        </Callout>
+      )}
       </div>
       {!inProgress && errors.failed > 0 && <RunErrors run={run} />}
       <StepList run={run} ldBase={ldBase} showAll={showAll} onShowAll={() => setShowAll(true)} />

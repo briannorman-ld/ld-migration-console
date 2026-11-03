@@ -207,12 +207,48 @@ describe('Executor', () => {
     expect(out.steps[2]!.error).toMatch(/bad clause/);
   });
 
-  it('stops the whole run on a 429 that outlived the retries, instead of throttling step after step', async () => {
-    const ld = fakeLd({ createFlag: async () => Promise.reject(new LdWriteError(429, '/flags/p', { message: 'Rate limit exceeded' })) });
-    const { ex, run } = setup(ld.client, [shell('a'), shell('b')]);
+  it('a 429 that outlived the retries pauses the run (a minute, then two, then four) and retries; a limit that holds through every pause stops it', async () => {
+    const attempts: string[] = [];
+    const ld = fakeLd({
+      createFlag: async (_p: string, body: { key: string }) => {
+        attempts.push(body.key);
+        throw new LdWriteError(429, '/flags/p', { message: 'Rate limit exceeded' });
+      },
+    });
+    const slept: number[] = [];
+    const { ex, run, saved } = setup(ld.client, [shell('a'), shell('b')], { sleep: async (ms) => void slept.push(ms) });
     const out = await ex.run(run);
+    expect(slept).toEqual([60_000, 120_000, 240_000]);
+    // The first attempt plus one per pause, for the step that finally stopped the run.
+    expect(attempts.filter((k) => k === 'a')).toHaveLength(4);
     expect(out.status).toBe('stopped');
+    expect(out.stopReason).toMatch(/rate limit after 3 pauses/);
     expect(out.steps.map((s) => s.status)).toEqual(['failed', 'pending']);
+    expect(out.pause).toBeUndefined();
+    const paused = saved.filter((r) => r.pause);
+    expect(paused.map((r) => r.pause!.reason)).toEqual([expect.stringMatching(/Pause 1 of 3: waiting 60 s/), expect.stringMatching(/Pause 2 of 3: waiting 120 s/), expect.stringMatching(/Pause 3 of 3: waiting 240 s/)]);
+    expect(paused[0]!.steps[0]!.message).toMatch(/the run pauses, then retries this step/);
+  });
+
+  it('a run that was rate-limited goes on once LaunchDarkly accepts writes again, with less concurrency', async () => {
+    let refusals = 2;
+    const base = fakeLd();
+    const create = base.client.createFlag;
+    const ld = fakeLd({
+      createFlag: async (p: string, body: Parameters<typeof create>[1]) => {
+        if (refusals-- > 0) throw new LdWriteError(429, '/flags/p', { message: 'Rate limit exceeded' });
+        return create(p, body);
+      },
+    });
+    const slept: number[] = [];
+    const { ex, run } = setup(ld.client, [shell('a'), shell('b'), shell('c')], { concurrency: 4, sleep: async (ms) => void slept.push(ms) });
+    const out = await ex.run(run);
+    expect(out.status).toBe('done');
+    expect(out.stopReason).toBeUndefined();
+    expect(out.pause).toBeUndefined();
+    expect(out.steps.map((s) => s.status)).toEqual(['done', 'done', 'done']);
+    // Two 429s landed while the same pause was pending: one pause, not two.
+    expect(slept).toEqual([60_000]);
   });
 
   it('stops the whole run on a 401', async () => {
@@ -875,6 +911,51 @@ describe('JSON variations LaunchDarkly returns with another key order', () => {
   });
 });
 
+describe('flags whose targeting already matches (a re-plan that included in-sync items)', () => {
+  const synced = (ld: ReturnType<typeof fakeLd>, key: string, provenance: boolean): LdFlag => ({
+    ...ld.flag(key, {
+      tags: ['migrated-from-statsig', 'migration-src-web'],
+      customProperties: {
+        'migration.id': { name: 'StatSig ID', value: [key] },
+        'migration.source': { name: 'StatSig source', value: ['web'] },
+        ...(provenance ? { 'migration.sync.test': { name: 'StatSig sync (test)', value: ['fp', '3', '2026-10-01T00:00:00.000Z', 'dh'] } } : {}),
+      },
+    }),
+    clientSideAvailability: { usingEnvironmentId: true, usingMobileKey: true },
+    // What LaunchDarkly returns for the targeting `desiredEnv` writes: on, off → false, fallthrough → true.
+    environments: { test: { on: true, offVariation: 1, fallthrough: { variation: 0 }, rules: [], targets: [], contextTargets: [{ contextKind: 'user', variation: 0, values: [] }], prerequisites: [], version: 4 } },
+  });
+
+  it('writes nothing when LaunchDarkly already has the targeting and the sync provenance', async () => {
+    const ld = fakeLd();
+    ld.flags.set('a', synced(ld, 'a', true));
+    const { ex, run } = setup(ld.client, [{ ...(shell('a') as Extract<PlanStep, { op: 'upsert_flag_shell' }>), exists: true }, env('a')]);
+    const out = await ex.run(run);
+    expect(out.status).toBe('done');
+    expect(out.steps[1]!.message).toBe('Targeting in test already in sync; nothing written.');
+    expect(ld.calls.filter((c) => !c.startsWith('get'))).toEqual([]);
+  });
+
+  it('records the sync, and only that, when the targeting matches but the provenance lags', async () => {
+    const ld = fakeLd();
+    ld.flags.set('a', synced(ld, 'a', false));
+    const { ex, run } = setup(ld.client, [{ ...(shell('a') as Extract<PlanStep, { op: 'upsert_flag_shell' }>), exists: true }, env('a')]);
+    const out = await ex.run(run);
+    expect(out.steps[1]!.message).toBe('Targeting in test already matches; recorded the sync.');
+    expect(ld.calls.filter((c) => !c.startsWith('get'))).toEqual(['json a /customProperties/migration.sync.test']);
+  });
+
+  it('still writes when the targeting differs', async () => {
+    const ld = fakeLd();
+    const f = synced(ld, 'a', true);
+    f.environments!.test!.on = false;
+    ld.flags.set('a', f);
+    const { ex, run } = setup(ld.client, [{ ...(shell('a') as Extract<PlanStep, { op: 'upsert_flag_shell' }>), exists: true }, env('a')]);
+    await ex.run(run);
+    expect(ld.calls.filter((c) => !c.startsWith('get'))).toEqual(['semantic a test', 'json a /customProperties/migration.sync.test']);
+  });
+});
+
 describe('reads before writes', () => {
   const plain = (exists: boolean, key = 'beta_testers'): PlanStep => ({
     id: `segment:test:${key}`,
@@ -1093,12 +1174,22 @@ describe('parallel steps', () => {
   });
 
   it('a systemic error stops the run; steps that hit it while in flight go back to pending', async () => {
-    const ld = fakeLd({ createFlag: async () => Promise.reject(new LdWriteError(429, '/flags/p', { message: 'Rate limit exceeded' })) });
+    const ld = fakeLd({ createFlag: async () => Promise.reject(new LdWriteError(403, '/flags/p', { message: 'Forbidden' })) });
     const { ex, run } = setup(ld.client, [shell('a'), shell('b'), shell('c'), shell('d')], { concurrency: 4 });
     const out = await ex.run(run);
     expect(out.status).toBe('stopped');
     expect(out.stopReason).toMatch(/systemic error/);
     expect(out.steps.map((s) => s.status)).toEqual(['failed', 'pending', 'pending', 'pending']);
     expect(out.steps[1]!.message).toMatch(/Stopped with the run/);
+  });
+
+  it('a rate limit that holds through every pause stops the run the same way, with the steps in flight back to pending', async () => {
+    const ld = fakeLd({ createFlag: async () => Promise.reject(new LdWriteError(429, '/flags/p', { message: 'Rate limit exceeded' })) });
+    const { ex, run } = setup(ld.client, [shell('a'), shell('b'), shell('c'), shell('d')], { concurrency: 4, sleep: async () => undefined });
+    const out = await ex.run(run);
+    expect(out.status).toBe('stopped');
+    expect(out.stopReason).toMatch(/rate limit after 3 pauses/);
+    expect(out.steps.filter((s) => s.status === 'failed')).toHaveLength(1);
+    expect(out.steps.filter((s) => s.status === 'pending')).toHaveLength(3);
   });
 });

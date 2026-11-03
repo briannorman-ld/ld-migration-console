@@ -71,7 +71,7 @@ describe('target environments in the plan', () => {
   });
 
   it('lists each flag once at project level, saying whether it is new, created by the console or adopted, with the outcome per environment', () => {
-    const base: Omit<PlanFlag, 'ldKey' | 'exists' | 'owned' | 'adopt' | 'status' | 'envs'> = { uid: 's-web/gate/x', kind: 'gate', entityId: 'x', sourceId: 's-web', flagKind: 'boolean', variations: [{ value: true, name: 'Pass' }, { value: false, name: 'Fail' }] };
+    const base: Omit<PlanFlag, 'ldKey' | 'exists' | 'owned' | 'adopt' | 'status' | 'envs'> = { uid: 's-web/gate/x', kind: 'gate', entityId: 'x', sourceId: 's-web', flagKind: 'boolean', inSync: false, variations: [{ value: true, name: 'Pass' }, { value: false, name: 'Fail' }] };
     const flags: PlanFlag[] = [
       { ...base, ldKey: 'new_checkout_flow', exists: false, owned: false, adopt: false, status: 'ready', envs: [{ ldEnv: 'test', status: 'ready' }, { ldEnv: 'production', status: 'blocked', reason: '1 open decision' }] },
       { ...base, ldKey: 'kill_switch_payments', exists: true, owned: true, adopt: false, status: 'ready', envs: [{ ldEnv: 'test', status: 'ready' }] },
@@ -94,7 +94,7 @@ describe('target environments in the plan', () => {
   });
 
   it('caps a long flag list so the environment choice and the buttons stay in view, with a button for the rest', () => {
-    const base: Omit<PlanFlag, 'ldKey' | 'uid' | 'entityId'> = { kind: 'gate', sourceId: 's-web', flagKind: 'boolean', variations: [{ value: true, name: 'Pass' }, { value: false, name: 'Fail' }], exists: false, owned: false, adopt: false, status: 'ready', envs: [{ ldEnv: 'test', status: 'ready' }] };
+    const base: Omit<PlanFlag, 'ldKey' | 'uid' | 'entityId'> = { kind: 'gate', sourceId: 's-web', flagKind: 'boolean', inSync: false, variations: [{ value: true, name: 'Pass' }, { value: false, name: 'Fail' }], exists: false, owned: false, adopt: false, status: 'ready', envs: [{ ldEnv: 'test', status: 'ready' }] };
     const flags: PlanFlag[] = Array.from({ length: 95 }, (_, i) => ({ ...base, uid: `s-web/gate/g${i}`, entityId: `g${i}`, ldKey: `gate_${i}` }));
     render(<FlagsTable flags={flags} />);
     expect(screen.getAllByRole('row')).toHaveLength(41);

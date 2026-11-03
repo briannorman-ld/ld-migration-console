@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { CanonicalSnapshot } from '@sslm/canonical';
 import { mapGate, mapSegment, type Resolution } from '@sslm/mapper';
-import { flagOwner, migrationStatus, ownsSegment, planMigration, recommendedResolutions, syncPropertyKey, type LdProjectState, type PlanRequest } from '../src/index.ts';
+import { flagOwner, IN_SYNC_REASON, migrationStatus, ownsSegment, planMigration, recommendedResolutions, syncPropertyKey, type LdProjectState, type Plan, type PlanRequest, type PlanStep } from '../src/index.ts';
 import { acmeSnapshot, CAPS, DIRECTORY, NOW, profileFor, server } from './fixtures.ts';
 
 beforeAll(() => server.listen({ onUnhandledFrame: 'error' }));
@@ -163,6 +163,47 @@ describe('planMigration', () => {
 
   it('flags production for typed confirmation', () => {
     expect(planMigration(acceptAll(request(['kill_switch_payments'], { ldEnvs: ['production'] }))).confirmEnvs).toEqual(['production']);
+  });
+});
+
+describe('skipping flags already in sync (PlanRequest.skipInSync)', () => {
+  /** The LaunchDarkly state of a gate the console synced from `plan`: provenance with the plan's fingerprint and decision hash. */
+  const synced = (plan: Plan, key: string, sync?: string[]) => {
+    const step = plan.steps.find((s) => s.id === `env:test:${key}`) as Extract<PlanStep, { op: 'update_flag_env' }>;
+    return {
+      key,
+      tags: ['migrated-from-statsig', 'migration-src-web'],
+      kind: 'boolean',
+      customProperties: {
+        'migration.id': { value: [key] },
+        'migration.source': { value: ['web'] },
+        'migration.type': { value: ['gate'] },
+        [syncPropertyKey('test')]: { value: sync ?? [step.provenance.statsigFingerprint, '3', NOW, step.provenance.decisionSetHash] },
+      },
+    };
+  };
+
+  it('leaves an in-sync gate out, keeps a StatSig-changed one, and lets a dependent stand on an in-sync prerequisite', () => {
+    const base = planMigration(acceptAll(request(['checkout_express_pay'])));
+    const ld: LdProjectState = { ...EMPTY_LD, flags: new Map([['new_checkout_flow', synced(base, 'new_checkout_flow')]]) };
+    const req = acceptAll(request(['new_checkout_flow', 'checkout_express_pay'], { ld, skipInSync: true }));
+    const plan = planMigration(req);
+    expect(plan.items.find((i) => i.entityId === 'new_checkout_flow')).toMatchObject({ status: 'skipped', sync: 'in_sync', reason: IN_SYNC_REASON });
+    expect(plan.steps.map((s) => s.id)).toEqual(['shell:checkout_express_pay', 'env:test:checkout_express_pay']);
+    expect(plan.items.find((i) => i.entityId === 'checkout_express_pay')).toMatchObject({ status: 'ready', sync: 'not_in_ld' });
+    expect(plan.flags.find((f) => f.ldKey === 'new_checkout_flow')).toMatchObject({ status: 'skipped', inSync: true });
+    expect(plan.flags.find((f) => f.ldKey === 'checkout_express_pay')).toMatchObject({ status: 'ready', inSync: false });
+    expect(plan.ready).toBe(true);
+
+    // Without the option the in-sync flag is written again.
+    const all = planMigration({ ...req, skipInSync: false });
+    expect(all.steps.map((s) => s.id)).toContain('env:test:new_checkout_flow');
+    expect(all.items.find((i) => i.entityId === 'new_checkout_flow')).toMatchObject({ status: 'ready', sync: 'in_sync' });
+
+    // StatSig changed since the last sync: the flag stays in the plan.
+    const changed = planMigration({ ...req, ld: { ...EMPTY_LD, flags: new Map([['new_checkout_flow', synced(base, 'new_checkout_flow', ['old-fingerprint', '2', NOW, 'old-hash'])]]) } });
+    expect(changed.items.find((i) => i.entityId === 'new_checkout_flow')).toMatchObject({ status: 'ready', sync: 'statsig_changed' });
+    expect(changed.steps.map((s) => s.id)).toContain('env:test:new_checkout_flow');
   });
 });
 
