@@ -362,6 +362,14 @@ export interface MappingProfile {
   maintainers?: Record<string, MaintainerChoice>;
   /** Source team name → LD team key (`null`: no team). Teams without an entry match an LD team whose key is the sanitized name. */
   teams?: Record<string, string | null>;
+  /**
+   * How LD flags are named (edge case 1.13). `source` (default): the StatSig display name, else the
+   * ID. `readable`: when the display name is the ID (how most StatSig items are created), a
+   * sentence-case name derived from it ("ds_paint_props_shaders" → "Ds paint props shaders"); the
+   * ID stays on the key and in `migration.id`. Noted in the decision-set hash, so switching it
+   * shows migrated flags as changed and the next sync renames them.
+   */
+  flagNames?: 'source' | 'readable';
 }
 
 /**

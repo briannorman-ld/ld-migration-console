@@ -11,7 +11,7 @@
  * `autotune_running` (default: wait); a concluded one becomes a flag serving the winner at 100%.
  */
 import { fingerprint, stableStringify, type Autotune } from '@sslm/canonical';
-import { resolveKind, SkipItem, unique, type ConditionContext, resolveUnit, rolloutFor } from './conditions.ts';
+import { flagName, resolveKind, SkipItem, unique, type ConditionContext, resolveUnit, rolloutFor } from './conditions.ts';
 import { DecisionCollector, SKIP } from './decisions.ts';
 import { chooseClientSideAvailability, provenanceProperties, report, sourceTag, TAG_MIGRATED, type MapArgs, type MapOutcome } from './gate.ts';
 import { chooseMaintainer } from './maintainer.ts';
@@ -74,7 +74,7 @@ export function mapAutotune(args: MapArgs<Autotune>): AutotuneMapResult {
 
   const emptyShell: DesiredFlagShell = {
     key: flagKey,
-    name: a.name || a.id,
+    name: flagName(ctx, a.id, a.name),
     description: a.description ?? '',
     variations: a.variants.map((v) => ({ value: v.json, name: v.name })),
     defaults: { onVariation: 0, offVariation: 0 },
@@ -207,7 +207,7 @@ export function mapAutotune(args: MapArgs<Autotune>): AutotuneMapResult {
     if (renamed.length) fidelity.push({ fidelity: 'full', message: `Tag${renamed.length === 1 ? '' : 's'} ${renamed.map((t) => `“${t}”`).join(', ')} renamed to fit LaunchDarkly's tag format.` });
     const shell: DesiredFlagShell = {
       key: flagKey,
-      name: a.name || a.id,
+      name: flagName(ctx, a.id, a.name),
       description: a.description ?? '',
       variations: arms.map((x) => ({ value: x.value, name: x.name })),
       // Unmigrated (and new) environments serve the first arm, as does "off".
@@ -225,7 +225,7 @@ export function mapAutotune(args: MapArgs<Autotune>): AutotuneMapResult {
             key: flagKey,
             ldEnv: env.ld,
             statsigEnv: env.statsig,
-            name: a.name || a.id,
+            name: flagName(ctx, a.id, a.name),
             description: a.description ?? '',
             hypothesis: `Migrated from StatSig autotune “${a.id}”${a.description ? `: ${a.description}` : ''}. Maximize “${a.successEvent}”.`,
             flagKey,

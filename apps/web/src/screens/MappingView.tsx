@@ -48,6 +48,30 @@ export function MappingView({ workspaceId, sources, snapshots, m, onConnect, onU
           <Spinner /> Refreshing the LaunchDarkly project ({m.ld.probing})…
         </p>
       )}
+      <Card className="p-5">
+        <h3 className="mb-1 font-semibold">Flag names</h3>
+        <p className="mb-3 text-xs text-fg-muted">
+          LaunchDarkly flags take the StatSig display name. Most StatSig items are created with an ID-like name (“ds_paint_props_shaders”), so the display name is the ID; the
+          readable option derives a name from it instead (“Ds paint props shaders”). The ID stays on the flag key and in the migration.id property. Changing this marks migrated
+          flags as changed; the next sync renames them.
+        </p>
+        <label className="flex flex-wrap items-center gap-2 text-sm">
+          Name flags
+          <Select
+            aria-label="Flag names"
+            value={m.profile.flagNames ?? 'source'}
+            onChange={(e) =>
+              save((p) => {
+                if (e.target.value === 'readable') p.flagNames = 'readable';
+                else delete p.flagNames;
+              })
+            }
+          >
+            <option value="source">as in StatSig (display name, else the ID)</option>
+            <option value="readable">readable, derived from the ID when the display name is the ID</option>
+          </Select>
+        </label>
+      </Card>
       {sources.map((s) => {
         const snap = snapshots[s.id];
         if (!snap) return null;

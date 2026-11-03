@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { CanonicalSnapshot, Condition, Config, Gate } from '@sslm/canonical';
-import { acceptsOption, attributeOption, caseFoldedPattern, createKindOption, isValidContextKindKey, mapAutotune, mapConfig, mapGate, mapPrompt, mapSegment, optionLabel, placeholderVariationValue, type MapArgs, type Resolution } from '../src/index.ts';
+import { acceptsOption, attributeOption, caseFoldedPattern, readableName, createKindOption, isValidContextKindKey, mapAutotune, mapConfig, mapGate, mapPrompt, mapSegment, optionLabel, placeholderVariationValue, type MapArgs, type Resolution } from '../src/index.ts';
 import { acmeSnapshot, CAPS, DIRECTORY, NOW, profileFor, server } from './fixtures.ts';
 
 beforeAll(() => server.listen({ onUnhandledFrame: 'error' }));
@@ -108,6 +108,15 @@ describe('operator pitfalls (CLAUDE.md, PLAN §10.3)', () => {
     expect(plain.shell.name).toBe('checkout_express_pay');
     const config = mapConfig({ ...args('checkout_config'), entity: web.configs.find((c) => c.id === 'checkout_config')! });
     expect(config.shell.name).toBe('Checkout tunables');
+    // Workspace option "readable": an ID-like display name becomes sentence case, a real display name stays, and the hash notes the choice.
+    const readable = { ...profileFor(web, MAPPING), flagNames: 'readable' as const };
+    const derived = mapGate(args('checkout_express_pay', { profile: readable }));
+    expect(derived.shell.name).toBe('Checkout express pay');
+    expect(derived.decisionSetHash).not.toBe(plain.decisionSetHash);
+    expect(derived.fidelity.notes.some((n) => n.fidelity === 'full' && /derived from the StatSig ID/.test(n.message))).toBe(true);
+    expect(mapGate(args('new_checkout_flow', { profile: readable })).shell.name).toBe('New checkout flow - one page');
+    expect(readableName('ai_credits_purchase_eligibility_date')).toBe('Ai credits purchase eligibility date');
+    expect(readableName('1p-code.presets')).toBe('1p code presets');
   });
 
   it('a configured unit type → kind mapping needs no decision', () => {

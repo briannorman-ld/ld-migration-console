@@ -76,6 +76,27 @@ function path(ctx: ConditionContext, loc: Loc): string {
   return `${ctx.pathPrefix ? `${ctx.pathPrefix} / ` : ''}rule:${loc.ruleId}:cond:${loc.index}`;
 }
 
+/** A sentence-case name from an ID-like string: "ds_paint_props_shaders" → "Ds paint props shaders". */
+export function readableName(id: string): string {
+  const s = id.split(/[_\-.\s]+/).filter(Boolean).join(' ');
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : id;
+}
+
+/**
+ * The LD flag name for a source entity (MappingProfile.flagNames, edge case 1.13): the display
+ * name, or with the `readable` option a name derived from the ID when the display name *is* the
+ * ID. The derivation is noted as a fact, so the decision-set hash changes with the option.
+ */
+export function flagName(ctx: ConditionContext, id: string, displayName: string | undefined): string {
+  const name = displayName || id;
+  if (ctx.profile.flagNames !== 'readable' || name !== id) return name;
+  const readable = readableName(id);
+  if (readable === id) return name;
+  ctx.decisions.note('flag_name', 'readable');
+  ctx.fidelity.push({ fidelity: 'full', message: `Flag name “${readable}” derived from the StatSig ID (Mapping › Flag names); the ID stays on the key and in migration.id.` });
+  return readable;
+}
+
 /**
  * KNOWN-EDGE-CASES 4.16: StatSig allows several rules with one name; LaunchDarkly refuses two
  * rules with the same description in one environment ("duplicate rule description not allowed").

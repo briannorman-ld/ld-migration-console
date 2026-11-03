@@ -3,7 +3,7 @@
  * the same flag, decisions and fingerprints. `now` is an input because `time` conditions depend on it.
  */
 import { fingerprint, migratedFromTag, overridesForEnvironment, PROP, resolveRulesForEnvironment, SOURCE_KIND_LABEL, sourceTag, targetingFingerprint, type CanonicalSnapshot, type Condition, type Gate, type Holdout, type MigrationSourceKind } from '@sslm/canonical';
-import { dedupeRuleDescriptions, ALWAYS, andDnf, MAX_EXPANSION, NEVER, resolveKind, SkipItem, translateCondition, unique, type ConditionContext, type Dnf, type Loc, resolveUnit, rolloutFor, splitOverrides, type OverrideGroup } from './conditions.ts';
+import { flagName, dedupeRuleDescriptions, ALWAYS, andDnf, MAX_EXPANSION, NEVER, resolveKind, SkipItem, translateCondition, unique, type ConditionContext, type Dnf, type Loc, resolveUnit, rolloutFor, splitOverrides, type OverrideGroup } from './conditions.ts';
 import { DecisionCollector, DROP_CONDITION, DROP_RULE, SKIP } from './decisions.ts';
 import { chooseMaintainer } from './maintainer.ts';
 import { sanitizeKey, sanitizeTag } from './profile.ts';
@@ -517,7 +517,7 @@ function flagShell(ctx: ConditionContext, gate: Gate, alias: string, key: string
 
   return {
     key,
-    name: gate.name || gate.id,
+    name: flagName(ctx, gate.id, gate.name),
     description: gate.description ?? '',
     variations: [
       { value: true, name: 'Pass' },

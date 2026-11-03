@@ -13,7 +13,7 @@
  * the same whichever environment is migrated first (append-only, PLAN §7).
  */
 import { fingerprint, overridesForEnvironment, resolveRulesForEnvironment, stableStringify, targetingFingerprint, type Config, type Rule } from '@sslm/canonical';
-import { dedupeRuleDescriptions, andDnf, resolveKind, SkipItem, translateCondition, unique, type ConditionContext, resolveUnit, rolloutFor, splitOverrides, type OverrideGroup } from './conditions.ts';
+import { flagName, dedupeRuleDescriptions, andDnf, resolveKind, SkipItem, translateCondition, unique, type ConditionContext, resolveUnit, rolloutFor, splitOverrides, type OverrideGroup } from './conditions.ts';
 import { DecisionCollector } from './decisions.ts';
 import { chooseClientSideAvailability, commonPassesGate, expansion, gateReference, PASS, provenanceProperties, report, sourceTag, TAG_MIGRATED, type MapArgs, type MapOutcome } from './gate.ts';
 import { chooseMaintainer } from './maintainer.ts';
@@ -333,7 +333,7 @@ function flagShell(ctx: ConditionContext, config: Config, alias: string, key: st
   if (renamed.length) ctx.fidelity.push({ fidelity: 'full', message: `Tag${renamed.length === 1 ? '' : 's'} ${renamed.map((t) => `“${t}”`).join(', ')} renamed to fit LaunchDarkly's tag format.` });
   return {
     key,
-    name: config.name || config.id,
+    name: flagName(ctx, config.id, config.name),
     description: config.description ?? '',
     variations: vars.list.map((v) => ({ ...v })),
     // Environments that aren't migrated (and new ones) serve the default even if someone turns them on.
