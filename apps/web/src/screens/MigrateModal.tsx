@@ -272,6 +272,23 @@ export function MigrateModal({
                   {e}
                 </Callout>
               ))}
+              {needsEnv && (
+                <section aria-label="Environment targeting">
+                  <EnvChooser
+                    options={envOptions}
+                    chosen={ldEnvs}
+                    onChange={setLdEnvs}
+                    disabled={busy}
+                    title="Configure targeting in"
+                    hint="Rules, rollouts, individual targets and segments are per environment. Tick every environment to configure now, or come back for the others later; the flags below are created once either way."
+                  />
+                  {planning && (
+                    <p className="mt-3 flex items-center gap-2 text-xs text-fg-muted" role="status">
+                      <Spinner /> Planning for {ldEnvs.join(", ") || "no environment"}…
+                    </p>
+                  )}
+                </section>
+              )}
               {(flags.length > 0 || projectItems.length > 0) && (
                 <section aria-label="Flags">
                   <h3 className="text-sm font-semibold">
@@ -295,21 +312,8 @@ export function MigrateModal({
                   )}
                 </section>
               )}
-              {needsEnv && (
-                <section aria-label="Environment targeting">
-                  <EnvChooser
-                    options={envOptions}
-                    chosen={ldEnvs}
-                    onChange={setLdEnvs}
-                    disabled={busy}
-                    title="Configure targeting in"
-                    hint="Rules, rollouts, individual targets and segments are per environment. Add every environment to configure now, or come back for the others later."
-                  />
-                  {planning && (
-                    <p className="mt-3 flex items-center gap-2 text-xs text-fg-muted" role="status">
-                      <Spinner /> Planning for {ldEnvs.join(", ") || "no environment"}…
-                    </p>
-                  )}
+              {needsEnv && plannedEnvs.length > 0 && (
+                <section aria-label="Targeting by environment">
                   {plannedEnvs.map((env) => (
                     <EnvSection key={env} env={env} choice={envOptions.find((o) => o.key === env)} items={itemsIn(env)} critical={plan.confirmEnvs.includes(env)} />
                   ))}
@@ -534,9 +538,27 @@ export function MigrateModal({
   );
 }
 
-function ItemsTable({ items }: { items: PlanItem[] }) {
+/**
+ * Long plans (hundreds of flags) would turn the modal into a wall of rows and push the
+ * environment choice and the buttons out of view; past the cap, a button shows the rest.
+ */
+const ROW_LIMIT = 40;
+
+function ShowAllRows({ total, shown, noun, onShow }: { total: number; shown: number; noun: string; onShow: () => void }) {
+  if (shown >= total) return null;
   return (
-    <table className="w-full text-sm">
+    <Button variant="ghost" className="mt-2 py-1 text-xs" onClick={onShow}>
+      Show all {total.toLocaleString()} {noun}s ({(total - shown).toLocaleString()} more)
+    </Button>
+  );
+}
+
+function ItemsTable({ items }: { items: PlanItem[] }) {
+  const [all, setAll] = useState(false);
+  const shown = all ? items : items.slice(0, ROW_LIMIT);
+  return (
+    <>
+      <table className="w-full text-sm">
       <thead className="text-left text-xs text-fg-muted">
         <tr>
           <th className="py-1 pr-3 font-medium">Item</th>
@@ -545,7 +567,7 @@ function ItemsTable({ items }: { items: PlanItem[] }) {
         </tr>
       </thead>
       <tbody className="divide-y divide-line-soft">
-        {items.map((i) => (
+        {shown.map((i) => (
           <tr key={`${i.uid}|${i.ldEnv}`} className="align-top">
             <td className="py-1.5 pr-3">
               <span className="font-mono text-[13px]">{i.ldKey}</span>{" "}
@@ -582,7 +604,9 @@ function ItemsTable({ items }: { items: PlanItem[] }) {
           </tr>
         ))}
       </tbody>
-    </table>
+      </table>
+      <ShowAllRows total={items.length} shown={shown.length} noun="item" onShow={() => setAll(true)} />
+    </>
   );
 }
 
@@ -596,8 +620,11 @@ function flagPresence(f: PlanFlag): { label: string; tone: "slate" | "green" | "
 
 /** The flags of the plan, one row each: project-level, so no environment column (PLAN §7). */
 export function FlagsTable({ flags }: { flags: PlanFlag[] }) {
+  const [all, setAll] = useState(false);
+  const shown = all ? flags : flags.slice(0, ROW_LIMIT);
   return (
-    <table className="w-full text-sm">
+    <>
+      <table className="w-full text-sm">
       <thead className="text-left text-xs text-fg-muted">
         <tr>
           <th className="py-1 pr-3 font-medium">Flag</th>
@@ -608,7 +635,7 @@ export function FlagsTable({ flags }: { flags: PlanFlag[] }) {
         </tr>
       </thead>
       <tbody className="divide-y divide-line-soft">
-        {flags.map((f) => {
+        {shown.map((f) => {
           const presence = flagPresence(f);
           return (
             <tr key={f.ldKey} className="align-top">
@@ -641,7 +668,9 @@ export function FlagsTable({ flags }: { flags: PlanFlag[] }) {
           );
         })}
       </tbody>
-    </table>
+      </table>
+      <ShowAllRows total={flags.length} shown={shown.length} noun="flag" onShow={() => setAll(true)} />
+    </>
   );
 }
 

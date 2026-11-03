@@ -92,6 +92,16 @@ describe('target environments in the plan', () => {
     // No environment column: the flag itself is created once for the project.
     expect(screen.queryByText('LaunchDarkly env')).toBeNull();
   });
+
+  it('caps a long flag list so the environment choice and the buttons stay in view, with a button for the rest', () => {
+    const base: Omit<PlanFlag, 'ldKey' | 'uid' | 'entityId'> = { kind: 'gate', sourceId: 's-web', flagKind: 'boolean', variations: [{ value: true, name: 'Pass' }, { value: false, name: 'Fail' }], exists: false, owned: false, adopt: false, status: 'ready', envs: [{ ldEnv: 'test', status: 'ready' }] };
+    const flags: PlanFlag[] = Array.from({ length: 95 }, (_, i) => ({ ...base, uid: `s-web/gate/g${i}`, entityId: `g${i}`, ldKey: `gate_${i}` }));
+    render(<FlagsTable flags={flags} />);
+    expect(screen.getAllByRole('row')).toHaveLength(41);
+    fireEvent.click(screen.getByRole('button', { name: 'Show all 95 flags (55 more)' }));
+    expect(screen.getAllByRole('row')).toHaveLength(96);
+    expect(screen.queryByRole('button', { name: /^Show all/ })).toBeNull();
+  });
 });
 
 describe('opening the plan', () => {
@@ -131,6 +141,10 @@ describe('opening the plan', () => {
     render(<MigrateModal workspaceId="w" selection={{ gates: [gate.uid], autotunes: [] }} ldEnvs={['test']} sources={[src]} snapshots={[web]} m={m} onClose={vi.fn()} />);
     // The plan is on screen before the read completes, and the footer says the read is in progress.
     expect(screen.getAllByText('new_checkout_flow').length).toBeGreaterThan(0);
+    // The environment choice comes before the flag list, so it is in view however long the plan is.
+    const envSection = screen.getByRole('region', { name: 'Environment targeting' });
+    const flagsSection = screen.getByRole('region', { name: 'Flags' });
+    expect(envSection.compareDocumentPosition(flagsSection) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getByText('Checking LaunchDarkly for the latest state…')).toBeTruthy();
     const dryRun = screen.getByRole('button', { name: 'Dry run' }) as HTMLButtonElement;
     expect(dryRun.disabled).toBe(true);
