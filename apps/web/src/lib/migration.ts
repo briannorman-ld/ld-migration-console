@@ -174,15 +174,43 @@ export function ldDirectory(ld: Pick<LdSession, 'members' | 'teams' | 'matrix'>)
  * the same entities with the same inputs, and React re-renders on every click, so without this the
  * whole project was re-mapped (0.15 ms per gate per environment: half a second on a real project)
  * for each selection, filter keystroke or nav change. Results are keyed on the identity of what the
- * mapper reads: the profile, the resolutions, the ID lists and their coverage, the capabilities
- * and the LD directory (each a new object only when it changed; useMigration keeps them stable),
- * then the snapshot (a new object after a sync), then entity, environment and `now`. The
- * MigrationContext that carries them changes identity on every LD session patch (a probe step, a
- * flag refresh, a monitoring check), which must not throw the whole project's mapping away.
- * Results are treated as immutable by callers.
+ * mapper reads: the profile, the ID lists and their coverage, the capabilities and the LD
+ * directory (each a new object only when it changed; useMigration keeps them stable), then the
+ * snapshot (a new object after a sync), then entity, environment and `now`. The MigrationContext
+ * that carries them changes identity on every LD session patch (a probe step, a flag refresh, a
+ * monitoring check), which must not throw the whole project's mapping away.
+ *
+ * Resolutions are not a key: the map is rebuilt whenever one decision is saved, and remapping
+ * every entity of a large project then froze the page for seconds. The mapper consults a
+ * resolution only by the id of a decision it raised (`lookupResolution`), so each result remembers
+ * the decision ids it met (applied, unresolved and stale) and stays valid while those entries are
+ * unchanged in the new map. Results are treated as immutable by callers.
  */
-type MemoLeaf = Map<string, unknown>;
-const mapMemo = new WeakMap<object, WeakMap<object, WeakMap<object, WeakMap<object, WeakMap<object, WeakMap<object, WeakMap<CanonicalSnapshot, MemoLeaf>>>>>>>();
+interface MemoEntry {
+  value: unknown;
+  /** The resolutions map the value was computed (or last validated) against. */
+  resolutions: ReadonlyMap<string, Resolution>;
+  /** Decision ids the mapping looked up; undefined when the value does not say (then only the same map is a hit). */
+  consulted: string[] | undefined;
+}
+type MemoLeaf = Map<string, MemoEntry>;
+const mapMemo = new WeakMap<object, WeakMap<object, WeakMap<object, WeakMap<object, WeakMap<object, WeakMap<CanonicalSnapshot, MemoLeaf>>>>>>();
+
+/** The decision ids a mapping result looked up, from its applied, unresolved and stale decisions. */
+function consultedDecisionIds(value: unknown): string[] | undefined {
+  const v = value as { applied?: { decision: { id: string } }[]; unresolved?: { id: string }[]; stale?: { decision: { id: string } }[] } | null;
+  if (!v || typeof v !== 'object' || !Array.isArray(v.applied) || !Array.isArray(v.unresolved)) return undefined;
+  return [...new Set([...v.applied.map((a) => a.decision.id), ...v.unresolved.map((d) => d.id), ...(v.stale ?? []).map((x) => x.decision.id)])];
+}
+
+/** What `lookupResolution` reads of a resolution; `decidedAt` and notes do not change a mapping. */
+const sameResolution = (a: Resolution | undefined, b: Resolution | undefined): boolean => a === b || (!!a && !!b && a.optionKey === b.optionKey && a.scope === b.scope && a.fingerprint === b.fingerprint);
+
+function stillValid(e: MemoEntry, resolutions: ReadonlyMap<string, Resolution>): boolean {
+  if (e.resolutions === resolutions) return true;
+  if (!e.consulted) return false;
+  return e.consulted.every((id) => sameResolution(e.resolutions.get(id), resolutions.get(id)));
+}
 
 function nested<K extends object, V extends object>(map: WeakMap<K, V>, key: K, make: () => V): V {
   let v = map.get(key);
@@ -195,17 +223,20 @@ const MISSING = {};
 const part = (v: unknown): object => (v !== null && typeof v === 'object' ? v : MISSING);
 
 function memoized<T>(i: MappingInputs, snapshot: CanonicalSnapshot, key: string, compute: () => T): T {
-  const byResolutions = nested(mapMemo, part(i.profile), () => new WeakMap());
-  const byIdLists = nested(byResolutions, part(i.resolutions), () => new WeakMap());
+  const byIdLists = nested(mapMemo, part(i.profile), () => new WeakMap());
   const byCoverage = nested(byIdLists, part(i.idLists), () => new WeakMap());
   const byCapabilities = nested(byCoverage, part(i.coverage), () => new WeakMap());
   const byDirectory = nested(byCapabilities, part(i.capabilities), () => new WeakMap());
   const bySnapshot = nested(byDirectory, part(i.directory), () => new WeakMap());
-  const byKey = nested(bySnapshot, snapshot, () => new Map<string, unknown>());
+  const byKey = nested(bySnapshot, snapshot, () => new Map<string, MemoEntry>());
   const full = `${key}|${i.now}`;
-  if (byKey.has(full)) return byKey.get(full) as T;
+  const hit = byKey.get(full);
+  if (hit && stillValid(hit, i.resolutions)) {
+    hit.resolutions = i.resolutions;
+    return hit.value as T;
+  }
   const value = compute();
-  byKey.set(full, value);
+  byKey.set(full, { value, resolutions: i.resolutions, consulted: consultedDecisionIds(value) });
   return value;
 }
 

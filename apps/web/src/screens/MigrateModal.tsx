@@ -454,23 +454,6 @@ export function MigrateModal({
                 </Callout>
               )}
 
-              {needsConfirm.length > 0 && plan.steps.length > 0 && (
-                <Card className="border-error-line/60 p-3">
-                  <label className="block text-sm">
-                    This writes to <b>{needsConfirm.join(", ")}</b>. Type{" "}
-                    <code className="rounded bg-surface-2 px-1">
-                      {needsConfirm.join(", ")}
-                    </code>{" "}
-                    to confirm.
-                    <Input
-                      className="mt-2 w-64 font-mono"
-                      value={confirm}
-                      onChange={(e) => setConfirm(e.target.value)}
-                      aria-label="Type the environment to confirm"
-                    />
-                  </label>
-                </Card>
-              )}
             </>
           )}
 
@@ -518,6 +501,22 @@ export function MigrateModal({
                   "Resolve the decisions above to continue."
                 )}
               </span>
+              {needsConfirm.length > 0 && plan.steps.length > 0 && (
+                // The typed confirmation for critical environments lives here, in the sticky footer,
+                // so a long plan never has to be scrolled to reach it.
+                <label className="flex flex-wrap items-center gap-2 text-sm">
+                  <span className="text-fg-muted">
+                    Writes to <b className="text-fg">{needsConfirm.join(", ")}</b>; type it to confirm
+                  </span>
+                  <Input
+                    className="w-56 py-1 font-mono text-sm"
+                    value={confirm}
+                    onChange={(e) => setConfirm(e.target.value)}
+                    placeholder={needsConfirm.join(", ")}
+                    aria-label="Type the environment to confirm"
+                  />
+                </label>
+              )}
               <Button
                 variant="secondary"
                 className="ml-auto"
@@ -537,7 +536,7 @@ export function MigrateModal({
                   !confirmed ||
                   plan.errors.length > 0
                 }
-                title={waiting ?? (!confirmed ? "Type the environment names above to confirm" : plan.errors.length ? "Fix the plan errors above first" : undefined)}
+                title={waiting ?? (!confirmed ? "Type the environment names in the bar to confirm" : plan.errors.length ? "Fix the plan errors above first" : undefined)}
                 onClick={() => void run(false)}
               >
                 Migrate{" "}

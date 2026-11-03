@@ -27,12 +27,25 @@ describe('mapping memo', () => {
 
     // The MigrationContext is rebuilt on every LD session patch; made of the same parts, it still hits.
     expect(mapGateFor(web, gate, env, { ...inputs })).toBe(first);
-    // A different environment, a new resolutions map (a decision was saved), a new profile, new ID
-    // lists, a different `now` or a new snapshot (a sync) each miss.
+    // A different environment, a new profile, new ID lists, a different `now` or a new snapshot (a
+    // sync) each miss.
     const other = envTargets(profile, web, false)[1]!;
     expect(mapGateFor(web, gate, other, inputs)).not.toBe(first);
-    expect(mapGateFor(web, gate, env, { ...inputs, resolutions: new Map() })).not.toBe(first);
     expect(mapGateFor(web, gate, env, { ...inputs, profile: { ...profile } })).not.toBe(first);
+    // Saving a decision rebuilds the resolutions map. A map that changes nothing this gate looked up
+    // (another entity's decision, or an unrelated id) still hits; one that answers or alters one of
+    // this gate's own decisions misses.
+    const own = first.unresolved[0] ?? first.applied[0]?.decision;
+    expect(own).toBeDefined();
+    const unrelated = new Map([['someone-else', { id: 'someone-else', type: own!.type, optionKey: 'x', scope: 'resource' as const, decidedAt: NOW }]]);
+    expect(mapGateFor(web, gate, env, { ...inputs, resolutions: unrelated })).toBe(first);
+    expect(mapGateFor(web, gate, env, { ...inputs, resolutions: new Map() })).toBe(first);
+    const answered = new Map([[own!.id, { id: own!.id, type: own!.type, optionKey: own!.options[0]!.key, scope: 'resource' as const, fingerprint: own!.fingerprint, decidedAt: NOW }]]);
+    const second = mapGateFor(web, gate, env, { ...inputs, resolutions: answered });
+    expect(second).not.toBe(first);
+    // The same answer in a fresh map (a live query re-reads the records) is still a hit.
+    const again = new Map([[own!.id, { ...answered.get(own!.id)!, decidedAt: '2026-02-02T00:00:00.000Z' }]]);
+    expect(mapGateFor(web, gate, env, { ...inputs, resolutions: again })).toBe(second);
     expect(mapGateFor(web, gate, env, { ...inputs, idLists: {} })).not.toBe(first);
     expect(mapGateFor(web, gate, env, { ...inputs, now: '2026-01-01T00:00:00.000Z' })).not.toBe(first);
     expect(mapGateFor({ ...web }, gate, env, inputs)).not.toBe(first);
