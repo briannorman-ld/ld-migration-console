@@ -5,6 +5,9 @@ import type { AccountAccess, SourceRecord, WorkspaceRecord } from '@sslm/store';
 import { DecisionCard } from '../components/DecisionCard.tsx';
 import { Badge, Button, Callout, Card, cx, Input, Modal, Select, Spinner } from '../components/ui.tsx';
 import { ACCESS_LABEL, ACCOUNT_WIDE_STEPS, computeGuide, describeTally, LOOP_STEP, provisionedBy, STEP_ORDER, STEP_TITLE, teamKeysFor, type GuideInput, type GuideModel, type OwnerRow, type StepKey, type Tally, type TeamRow } from '../lib/guide.ts';
+
+/** The number the guide shows for "Choose an environment", for callouts that point back to it. */
+const ENV_STEP = STEP_ORDER.indexOf('environment') + 1;
 import { KIND_LABEL } from '../lib/kinds.ts';
 import { timeAgo } from '../lib/time.ts';
 import { createLdEnvironment, createLdTeam, inviteLdMembers, refreshLdPeople, refreshLdState, reprobe, requireLdApprovals, setDefaultRandomizationUnit, type LdInviteRole } from '../lib/ld.ts';
@@ -782,7 +785,7 @@ function Contexts({ workspaceId, g, m, nav, onMigrate }: { workspaceId: string; 
           {defaultError && <span className="text-error">{defaultError}</span>}
         </div>
       )}
-      {g.contexts.unitTypes.length === 0 && <Callout tone="blue">{g.ldEnvs.length ? 'The sources in this environment declare no unit types; userID maps to the user context.' : 'Map the environment first (step 2).'}</Callout>}
+      {g.contexts.unitTypes.length === 0 && <Callout tone="blue">{g.ldEnvs.length ? 'The sources in this environment declare no unit types; userID maps to the user context.' : `Map the environment first (step ${ENV_STEP}).`}</Callout>}
       {g.contexts.open.length > 0 && (
         <p className="text-xs text-fg-muted">
           Answer here per item, or set every unit type once on the{' '}
@@ -866,7 +869,7 @@ function Items({ g, tallies, noun, nav, onMigrate, toSelection }: { g: GuideMode
           : 'Gates become boolean flags and dynamic configs become JSON flags, with rules, rollouts and overrides translated. A gate used as a prerequisite migrates before the flags that depend on it. StatSig prompts become AI Configs: the shell only, because the Console API does not expose prompt versions.'}
       </p>
       {noun === 'flag' && !g.aiConfigsAvailable && g.prompts.total > 0 && <Callout tone="amber">{g.prompts.total} StatSig prompt{g.prompts.total === 1 ? '' : 's'} cannot be written: AI Configs are not available to this LaunchDarkly project or token. Recreate them in LaunchDarkly by hand.</Callout>}
-      {!g.ldEnvs.length && <Callout tone="blue">Map the environment first (step 2).</Callout>}
+      {!g.ldEnvs.length && <Callout tone="blue">Map the environment first (step {ENV_STEP}).</Callout>}
       {g.ldEnvs.length > 0 && (
         <>
           {g.ldAsOf && (
