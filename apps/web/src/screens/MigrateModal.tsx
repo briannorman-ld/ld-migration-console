@@ -297,11 +297,14 @@ export function MigrateModal({
                   )}
                 </section>
               )}
-              {inSyncFlags > 0 && (
+              {(plan.flags.length > 0 || inSyncFlags > 0) && (
                 <section aria-label="Flags already in sync" className="rounded-md border border-line p-3 text-sm">
                   <label className="flex flex-wrap items-center gap-2">
                     <input type="checkbox" checked={skipInSync} disabled={busy} onChange={(e) => setSkipInSync(e.target.checked)} />
-                    Skip the {inSyncFlags.toLocaleString()} flag{inSyncFlags === 1 ? "" : "s"} already in sync with StatSig
+                    Skip flags already in sync with StatSig
+                    <span className="text-xs text-fg-muted">
+                      {inSyncFlags > 0 ? `${inSyncFlags.toLocaleString()} of ${plan.flags.length.toLocaleString()} in this selection` : "none in this selection"}
+                    </span>
                   </label>
                   <p className="mt-1 text-xs text-fg-muted">
                     In sync: LaunchDarkly's provenance matches the StatSig state and the decisions. Flags StatSig changed since their last sync, and flags not in

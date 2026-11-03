@@ -85,9 +85,10 @@ export function GuideView({
             {k === 'teams' && <Teams workspaceId={workspaceId} g={g} m={m} />}
             {k === 'people' && <People workspaceId={workspaceId} g={g} m={m} nav={nav} />}
             {k === 'contexts' && <Contexts workspaceId={workspaceId} g={g} m={m} nav={nav} onMigrate={onMigrate} />}
-            {k === 'segments' && <Items g={g} tallies={[g.segments]} noun="segment" nav={nav} onMigrate={onMigrate} toSelection={(uids) => ({ gates: [], autotunes: [], segments: uids })} />}
+            {k === 'segments' && <Items workspaceId={workspaceId} g={g} tallies={[g.segments]} noun="segment" nav={nav} onMigrate={onMigrate} toSelection={(uids) => ({ gates: [], autotunes: [], segments: uids })} />}
             {k === 'flags' && (
               <Items
+                workspaceId={workspaceId}
                 g={g}
                 tallies={g.aiConfigsAvailable ? [g.gates, g.configs, g.prompts] : [g.gates, g.configs]}
                 noun="flag"
@@ -856,7 +857,7 @@ function Contexts({ workspaceId, g, m, nav, onMigrate }: { workspaceId: string; 
   );
 }
 
-function Items({ g, tallies, noun, nav, onMigrate, toSelection }: { g: GuideModel; tallies: Tally[]; noun: string; nav: GuideNav; onMigrate: (selection: MigrationSelection, ldEnvs: string[]) => void; toSelection: (uids: string[]) => MigrationSelection }) {
+function Items({ workspaceId, g, tallies, noun, nav, onMigrate, toSelection }: { workspaceId: string; g: GuideModel; tallies: Tally[]; noun: string; nav: GuideNav; onMigrate: (selection: MigrationSelection, ldEnvs: string[]) => void; toSelection: (uids: string[]) => MigrationSelection }) {
   const uids = tallies.flatMap((t) => t.toMigrate);
   const blocked = tallies.reduce((n, t) => n + t.blocked, 0);
   const total = tallies.reduce((n, t) => n + t.total, 0);
@@ -873,9 +874,21 @@ function Items({ g, tallies, noun, nav, onMigrate, toSelection }: { g: GuideMode
       {g.ldEnvs.length > 0 && (
         <>
           {g.ldAsOf && (
-            <p className="flex items-center gap-1.5 text-xs text-fg-muted" role="status">
-              {g.ldAsOf.refreshing && <Spinner />} LaunchDarkly as read {timeAgo(g.ldAsOf.at)};{' '}
-              {g.ldAsOf.refreshing ? 'reading it again now.' : 'the latest read failed (see step 1).'}
+            <p className="flex flex-wrap items-center gap-1.5 text-xs text-fg-muted" role="status">
+              {g.ldAsOf.refreshing ? (
+                <>
+                  <Spinner /> Reading LaunchDarkly…
+                </>
+              ) : (
+                <>
+                  LaunchDarkly as read {timeAgo(g.ldAsOf.at)}
+                  {g.ldAsOf.failed ? '; the latest read failed (see step 1)' : ''}.
+                  <button type="button" className="text-link hover:underline" onClick={() => void refreshLdState(workspaceId, { segmentEnvs: g.ldEnvs }).catch(() => undefined)}>
+                    Re-read
+                  </button>
+                  <span>Plans read it afresh before a run.</span>
+                </>
+              )}
             </p>
           )}
           <ul className="space-y-1">

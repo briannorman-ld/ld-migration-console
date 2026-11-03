@@ -178,8 +178,11 @@ describe('guide: the saved LaunchDarkly listing', () => {
   it('marks the tallies as of the saved read while the live refresh runs, and drops the mark once it has landed', () => {
     const base: GuideInput = { sources: [], snapshots: [], m: null, env: '', decisions: [], monitoring: { attention: 0, rows: 0, loaded: false }, interruptedRuns: 0 };
     const m = (ld: Partial<NonNullable<GuideInput['m']>['ld']>) => ({ ...base, m: { ld: { status: 'connected', projectKey: 'p1', matrix: { capabilities: [], environments: [] }, ...ld }, connected: true, capabilities: {} } as unknown as NonNullable<GuideInput['m']> });
-    expect(computeGuide(m({ stale: '2026-11-02T10:00:00Z' })).ldAsOf).toEqual({ at: '2026-11-02T10:00:00Z', refreshing: true });
-    expect(computeGuide(m({ stale: '2026-11-02T10:00:00Z', error: 'Could not read the LaunchDarkly project: 503' })).ldAsOf).toEqual({ at: '2026-11-02T10:00:00Z', refreshing: false });
+    expect(computeGuide(m({ stale: '2026-11-02T10:00:00Z' })).ldAsOf).toEqual({ at: '2026-11-02T10:00:00Z', refreshing: false, failed: false });
+    expect(computeGuide(m({ stale: '2026-11-02T10:00:00Z', refreshing: true })).ldAsOf).toEqual({ at: '2026-11-02T10:00:00Z', refreshing: true, failed: false });
+    expect(computeGuide(m({ stale: '2026-11-02T10:00:00Z', error: 'Could not read the LaunchDarkly project: 503' })).ldAsOf).toEqual({ at: '2026-11-02T10:00:00Z', refreshing: false, failed: true });
+    // A live listing shows its own age; nothing re-reads on its own.
+    expect(computeGuide(m({ flags: { items: [], loadedAt: '2026-11-02T11:00:00Z' } })).ldAsOf).toEqual({ at: '2026-11-02T11:00:00Z', refreshing: false, failed: false });
     expect(computeGuide(m({})).ldAsOf).toBeUndefined();
     expect(computeGuide(base).ldAsOf).toBeUndefined();
   });

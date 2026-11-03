@@ -43,6 +43,8 @@ export interface LdSession {
    * the guide and explorers have LD state at once; cleared when the live refresh has landed.
    */
   stale?: string;
+  /** A listing refresh is in flight (the guide shows a spinner next to the listing's age). */
+  refreshing?: boolean;
   error?: string;
 }
 
@@ -157,18 +159,24 @@ export async function chooseProject(workspaceId: string, projectKey: string): Pr
     const saved = (await store.getCapabilities(workspaceId))?.matrix as CapabilityMatrix | undefined;
     if (saved && saved.projectKey === projectKey && saved.instance === c.instance.id && !sessions.get(workspaceId)?.matrix) set(workspaceId, { matrix: saved });
   }
+  let restored = false;
   if (!sessions.get(workspaceId)?.flags) {
     const saved = await store.getLdState(workspaceId).catch(() => undefined);
-    if (saved && saved.projectKey === projectKey && saved.instance === c.instance.id && !sessions.get(workspaceId)?.flags) set(workspaceId, { ...(saved.state as LdListing), stale: saved.loadedAt });
+    if (saved && saved.projectKey === projectKey && saved.instance === c.instance.id && !sessions.get(workspaceId)?.flags) {
+      set(workspaceId, { ...(saved.state as LdListing), stale: saved.loadedAt });
+      restored = true;
+    }
   }
   try {
     const matrix = await probeCapabilities(c, projectKey, { onProgress: (s) => set(workspaceId, { probing: s }) });
     set(workspaceId, { matrix, probing: undefined });
     await store.updateWorkspace(workspaceId, { ld: { instance: c.instance.id, projectKey } });
     await store.saveCapabilities(workspaceId, matrix);
-    // Segments and experiments for the environments the profile maps to, in the same refresh as the
-    // flags: the guide's segment step and the plan need them, and asking afterwards meant a second
-    // full flag listing before the first segment showed.
+    // A saved listing stands until the user asks for a re-read (the guide's "Re-read" next to its
+    // age), or a plan opens: the plan modal always reads the project afresh before a run, and a
+    // finished run merges what it wrote. Without a saved listing, read it now, with the segments
+    // and experiments of the environments the profile maps to in the same refresh as the flags.
+    if (restored) return;
     const mapped = await mappedLdEnvs(workspaceId, matrix);
     await refreshLdState(workspaceId, { segmentEnvs: [...new Set([...mapped, ...Object.keys(sessions.get(workspaceId)?.segments ?? {})])] });
   } catch (e) {
@@ -289,6 +297,22 @@ export async function refreshLdState(workspaceId: string, opts: { segmentEnvs?: 
   const seq = ++refreshSeq;
   const c = client(workspaceId);
   const p = s.projectKey;
+  inFlightRefreshes.set(workspaceId, (inFlightRefreshes.get(workspaceId) ?? 0) + 1);
+  set(workspaceId, { refreshing: true });
+  try {
+    await readLdState(workspaceId, c, p, seq, opts);
+  } finally {
+    const left = (inFlightRefreshes.get(workspaceId) ?? 1) - 1;
+    inFlightRefreshes.set(workspaceId, left);
+    if (left <= 0) set(workspaceId, { refreshing: false });
+  }
+}
+
+/** Refreshes in flight per workspace, so `refreshing` clears only when the last one has landed. */
+const inFlightRefreshes = new Map<string, number>();
+
+async function readLdState(workspaceId: string, c: LdClient, p: string, seq: number, opts: { segmentEnvs?: string[] }): Promise<void> {
+  const s = sessions.get(workspaceId)!;
   const optional = async <T,>(fn: () => Promise<T>): Promise<T | undefined> => {
     try {
       return await fn();

@@ -172,8 +172,12 @@ export interface GuideModel {
   connected: boolean;
   /** LaunchDarkly is being reached (token check or first probe): show a spinner, not "not connected". */
   connecting: boolean;
-  /** The LD state tallied here is the copy saved on the last read, as of `at`; `refreshing` until the live read lands (false once it failed). */
-  ldAsOf?: { at: string; refreshing: boolean };
+  /**
+   * When the LD state tallied here was read (`at`: the saved copy's time, else the live listing's),
+   * whether a re-read is in flight, and whether the latest read failed. The view shows the age with
+   * a "Re-read" action: nothing re-reads on its own, the plan modal reads afresh before a run.
+   */
+  ldAsOf?: { at: string; refreshing: boolean; failed: boolean };
   synced: number;
   /** Owners and teams across every source (account-level, not per environment). */
   people: {
@@ -390,7 +394,7 @@ export function computeGuide(input: GuideInput): GuideModel {
     envBySource,
     connected,
     connecting,
-    ...(m?.ld.stale ? { ldAsOf: { at: m.ld.stale, refreshing: !m.ld.error } } : {}),
+    ...(connected && (m.ld.stale ?? m.ld.flags?.loadedAt) ? { ldAsOf: { at: (m.ld.stale ?? m.ld.flags?.loadedAt)!, refreshing: !!m.ld.refreshing, failed: !!m.ld.error } } : {}),
     synced: snapshots.length,
     people,
     contexts,
