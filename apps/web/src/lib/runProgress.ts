@@ -3,7 +3,14 @@
  * make (planner `requestsFor`), and the pace comes from the steps this run has already finished,
  * so a run of 700 small segments and a run of 20 big flags both estimate from their own history.
  * Until enough has finished to measure, the plan's assumption of half a second per request is
- * used. Pure, so it can be tested with hand-written runs.
+ * used.
+ *
+ * The executor runs several steps at once, so the measured pace is per slot (step time per
+ * request) and the remaining work is spread over the steps the run runs at a time: the run
+ * record's `concurrency` (halved by each rate-limit pause), bounded by what the overlap of the
+ * finished steps shows actually ran together. Summing step durations alone would overstate the
+ * time left by the concurrency factor. A pause in progress adds its remaining wait. Pure, so it
+ * can be tested with hand-written runs.
  */
 import type { RunRecord, StepRecord } from '@sslm/executor';
 import { requestsFor } from '@sslm/planner';
@@ -24,10 +31,28 @@ export interface RunProgressInfo {
   remainingMs?: number;
   /** Whether the estimate comes from this run's own measured pace, or the default. */
   measured: boolean;
+  /** Steps the estimate assumes run at once. */
+  concurrency: number;
 }
 
 const weight = (s: StepRecord): number => Math.max(1, requestsFor(s.step));
 const isFinished = (s: StepRecord): boolean => s.status !== 'pending' && s.status !== 'running';
+
+/** Wall-clock milliseconds covered by at least one of the intervals. */
+function unionMs(intervals: Array<[number, number]>): number {
+  const sorted = intervals.filter(([a, b]) => b > a).sort((x, y) => x[0] - y[0]);
+  let total = 0;
+  let cur: [number, number] | undefined;
+  for (const [a, b] of sorted) {
+    if (cur && a <= cur[1]) cur[1] = Math.max(cur[1], b);
+    else {
+      if (cur) total += cur[1] - cur[0];
+      cur = [a, b];
+    }
+  }
+  if (cur) total += cur[1] - cur[0];
+  return total;
+}
 
 export function runProgress(run: RunRecord, nowMs: number = Date.now()): RunProgressInfo {
   const total = run.steps.length;
@@ -37,18 +62,34 @@ export function runProgress(run: RunRecord, nowMs: number = Date.now()): RunProg
   const endMs = run.finishedAt ? Date.parse(run.finishedAt) : nowMs;
   const elapsedMs = Math.max(0, endMs - Date.parse(run.startedAt));
 
-  // Pace from steps that actually did work (skipped ones finish instantly and would flatter it).
+  // Pace per slot from steps that actually did work (skipped ones finish instantly and would flatter it).
   const worked = finishedSteps.filter((s) => s.status !== 'skipped' && s.startedAt && s.finishedAt);
-  const workedMs = worked.reduce((n, s) => n + Math.max(0, Date.parse(s.finishedAt!) - Date.parse(s.startedAt!)), 0);
+  const span = (s: StepRecord): [number, number] => [Date.parse(s.startedAt!), s.finishedAt ? Date.parse(s.finishedAt) : nowMs];
+  const length = (s: StepRecord): number => Math.max(0, span(s)[1] - span(s)[0]);
+  const workedMs = worked.reduce((n, s) => n + length(s), 0);
   const workedWeight = worked.reduce((n, s) => n + weight(s), 0);
   const measured = worked.length >= MIN_MEASURED_STEPS && workedMs > 0;
-  const msPerRequest = measured ? workedMs / workedWeight : DEFAULT_MS_PER_REQUEST;
+  const msPerRequestPerSlot = measured ? workedMs / workedWeight : DEFAULT_MS_PER_REQUEST;
+
+  // Steps at a time: what the executor says it runs now, bounded by what the history shows ran
+  // together (step time over the wall-clock time anything was in flight; a pause has nothing in
+  // flight, so it does not count). Older run records carry no concurrency: the overlap alone is used.
+  const running = run.steps.filter((s) => s.status === 'running' && s.startedAt);
+  const inFlightMs = workedMs + running.reduce((n, s) => n + length(s), 0);
+  const busyMs = unionMs([...worked, ...running].map(span));
+  const observed = busyMs > 0 ? inFlightMs / busyMs : undefined;
+  const nominal = run.concurrency;
+  const concurrency = Math.max(1, nominal !== undefined && observed !== undefined ? Math.min(nominal, observed) : (nominal ?? observed ?? 1));
 
   const remainingWeight = totalWeight - doneWeight;
-  const running = run.steps.find((s) => s.status === 'running');
-  const runningElapsed = running?.startedAt ? Math.max(0, nowMs - Date.parse(running.startedAt)) : 0;
+  const runningElapsed = running.reduce((n, s) => n + length(s), 0);
+  const pauseLeft = run.pause ? Math.max(0, Date.parse(run.pause.until) - nowMs) : 0;
   const inProgress = run.status === 'running' || run.status === 'undoing';
-  const remainingMs = !inProgress ? (remainingWeight === 0 ? 0 : undefined) : Math.max(0, remainingWeight * msPerRequest - runningElapsed);
+  const remainingMs = !inProgress
+    ? remainingWeight === 0
+      ? 0
+      : undefined
+    : Math.max(0, (remainingWeight * msPerRequestPerSlot - runningElapsed) / concurrency) + pauseLeft;
 
   return {
     total,
@@ -57,6 +98,7 @@ export function runProgress(run: RunRecord, nowMs: number = Date.now()): RunProg
     elapsedMs,
     ...(remainingMs !== undefined ? { remainingMs } : {}),
     measured,
+    concurrency,
   };
 }
 

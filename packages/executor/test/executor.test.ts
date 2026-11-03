@@ -266,6 +266,8 @@ describe('Executor', () => {
     expect(out.steps.map((s) => s.status)).toEqual(['done', 'done', 'done']);
     // Two 429s landed while the same pause was pending: one pause, not two.
     expect(slept).toEqual([60_000]);
+    // The run record says how many steps run at once, so the time-left estimate follows the halving.
+    expect(out.concurrency).toBe(2);
   });
 
   it('a write that times out pauses the run and retries the step; one that stays unreachable through every pause stops it, naming the cause', async () => {

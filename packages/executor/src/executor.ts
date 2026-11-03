@@ -123,6 +123,8 @@ export interface RunRecord {
   stopReason?: string;
   /** Set while the run waits out a LaunchDarkly rate limit (PLAN §9 step 6); cleared when it goes on. */
   pause?: { until: string; reason: string };
+  /** Steps run at once right now: the executor's setting, halved by each rate-limit pause. Drives the time-left estimate. */
+  concurrency?: number;
 }
 
 export interface Journal {
@@ -297,6 +299,7 @@ export class Executor {
     delete run.stopReason;
     await this.save(run);
     let concurrency = Math.max(1, Math.floor(this.opts.concurrency ?? DEFAULT_CONCURRENCY));
+    run.concurrency = concurrency;
     const byId = new Map(run.steps.map((s) => [s.id, s]));
     /** Failed or skipped in this run: their dependents are skipped. */
     const failed = new Set<string>();
@@ -393,6 +396,7 @@ export class Executor {
       if (pausing && !halt && inFlight.size === 0) {
         const ms = RATE_LIMIT_PAUSE_MS * 2 ** (pauses - 1);
         concurrency = Math.max(1, Math.floor(concurrency / 2));
+        run.concurrency = concurrency;
         run.pause = {
           until: new Date(this.now().getTime() + ms).toISOString(),
           reason: `${pauseCause === 'rate_limit' ? "LaunchDarkly's API rate limit held through the client's retries" : 'A write to LaunchDarkly timed out or the connection dropped'}. Pause ${pauses} of ${MAX_RATE_LIMIT_PAUSES}: waiting ${Math.round(ms / 1000)} s, then going on with ${concurrency} step${concurrency === 1 ? '' : 's'} at a time.`,
