@@ -11,7 +11,7 @@
  * scheduled changes carrying the full targeting of that moment; ID lists above 15,000 become big
  * segments filled by a CSV import. The first write a plan refuses updates the capability matrix.
  */
-import { footer as provenanceFooter, parseFooter as parseProvenanceFooter, PROP, readSync, SOURCE_KIND_LABEL, withFooter as withProvenanceFooter, type FooterInput } from '@sslm/canonical';
+import { footer as provenanceFooter, parseFooter as parseProvenanceFooter, PROP, readSync, SOURCE_KIND_LABEL, stableStringify, withFooter as withProvenanceFooter, type FooterInput } from '@sslm/canonical';
 import { LdAuthError, LdWriteError, type JsonPatchOp, type LdAiConfig, type LdClient, type LdExperiment, type LdExperimentationSettings, type LdFlag, type LdFlagConfig, type LdMetric, type LdSegment, type SemanticPatch } from '@sslm/ld-client';
 import { flagOwner, ownsSegment, syncPropertyKey, type PlanStep } from '@sslm/planner';
 import { SOURCE_KIND, type DesiredBandit, type DesiredFlagEnv, type DesiredRule, type DesiredSegment, type VariationOrRollout } from '@sslm/mapper';
@@ -1153,11 +1153,19 @@ export class Executor {
 
 type Ids = (index: number) => string;
 
-/** Maps desired variation indexes (by value) to the flag's variation IDs. */
+/**
+ * Maps desired variation indexes (by value) to the flag's variation IDs. Values are compared
+ * with sorted keys: LaunchDarkly stores JSON variations with its own key order, so a plain
+ * JSON.stringify would miss every object variation it returns.
+ */
+export function sameVariationValue(a: unknown, b: unknown): boolean {
+  return stableStringify(a) === stableStringify(b);
+}
+
 export function variationIds(flag: LdFlag, values: unknown[]): Ids {
   return (index: number) => {
     const want = JSON.stringify(values[index]);
-    const v = flag.variations.find((x) => JSON.stringify(x.value) === want);
+    const v = flag.variations.find((x) => sameVariationValue(x.value, values[index]));
     if (!v) throw new Error(`Flag “${flag.key}” has no variation with value ${want}.`);
     return v._id;
   };
@@ -1176,7 +1184,7 @@ function rule(r: DesiredRule, ids: Ids): Record<string, unknown> {
 export function restoreInstructions(pre: LdFlag, env: LdFlagConfig, current: LdFlag, currentEnv: LdFlagConfig | undefined, prerequisites: { key: string; variationId: string }[]): SemanticPatch['instructions'] {
   const byIndex = (i: number | null | undefined) => {
     const value = pre.variations[i ?? 0]?.value;
-    const v = current.variations.find((x) => JSON.stringify(x.value) === JSON.stringify(value));
+    const v = current.variations.find((x) => sameVariationValue(x.value, value));
     if (!v) throw new Error(`Variation ${i} of “${pre.key}” no longer exists.`);
     return v._id;
   };
@@ -1222,7 +1230,7 @@ function shellPatch(flag: LdFlag, d: Extract<PlanStep, { op: 'upsert_flag_shell'
     if (!cur || JSON.stringify(cur.value ?? []) !== JSON.stringify(v.value)) ops.push({ op: 'add', path: `/customProperties/${pointer(k)}`, value: v });
   }
   // PLAN §7: variations are append-only. New values are added at the end; nothing is removed or reordered.
-  const missing = d.variations.filter((v) => !flag.variations.some((x) => JSON.stringify(x.value) === JSON.stringify(v.value)));
+  const missing = d.variations.filter((v) => !flag.variations.some((x) => sameVariationValue(x.value, v.value)));
   if (missing.length) {
     if (flag.kind === 'boolean' || d.variations.every((v) => typeof v.value === 'boolean')) throw new Error(`Flag “${flag.key}” lacks variation${missing.length === 1 ? '' : 's'} ${missing.map((m) => JSON.stringify(m.value)).join(', ')}.`);
     for (const v of missing) ops.push({ op: 'add', path: '/variations/-', value: { value: v.value, name: v.name } });

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { LdAuthError, LdWriteError, type LdAiConfig, type LdExperiment, type LdFlag, type LdMetric } from '@sslm/ld-client';
 import type { PlanStep } from '@sslm/planner';
 import type { ResourceChange } from '../src/index.ts';
-import { Executor, type ExecutorOptions, footer, newRun, parseFooter, scheduledIdsFrom, segmentInstructions, withFooter, type LdWriter, type RunRecord } from '../src/index.ts';
+import { Executor, type ExecutorOptions, footer, newRun, parseFooter, scheduledIdsFrom, segmentInstructions, variationIds, withFooter, type LdWriter, type RunRecord } from '../src/index.ts';
 
 /** Minimal in-memory LD: enough state for the executor's control flow, not LD's semantics. */
 function fakeLd(over: Partial<Record<keyof LdWriter, (...a: never[]) => unknown>> = {}) {
@@ -841,6 +841,37 @@ describe('prompts → AI Configs (upsert_ai_config, PLAN §6)', () => {
     await created.ex.run(created.run);
     await created.ex.undo(created.run);
     expect(fresh.aiConfigs.has('support_reply_assistant')).toBe(false);
+  });
+});
+
+describe('JSON variations LaunchDarkly returns with another key order', () => {
+  // LaunchDarkly stores object variations with its own key order. Comparing them with a plain
+  // JSON.stringify made every existing JSON variation look missing; the settings step appended it
+  // again and LaunchDarkly answered "Flag variations must all be distinct" for every config.
+  const desiredVariations = [
+    { value: { rps: 50, burst: 10 }, name: 'default' },
+    { value: { rps: 80, burst: 20 }, name: 'New limits' },
+  ];
+  const existing = (ld: ReturnType<typeof fakeLd>, key: string): LdFlag => ({
+    ...ld.flag(key, { tags: ['migrated-from-statsig', 'migration-src-web'], customProperties: { 'migration.id': { name: 'StatSig ID', value: [key] }, 'migration.source': { name: 'StatSig source', value: ['web'] } } }),
+    variations: [
+      { _id: `${key}-0`, value: { burst: 10, rps: 50 } },
+      { _id: `${key}-1`, value: { burst: 20, rps: 80 } },
+    ],
+  });
+
+  it('leaves the variations alone on the settings step and resolves their IDs on the targeting step', async () => {
+    const ld = fakeLd();
+    ld.flags.set('limits', existing(ld, 'limits'));
+    const settings: PlanStep = { ...(shell('limits') as Extract<PlanStep, { op: 'upsert_flag_shell' }>), exists: true };
+    (settings as Extract<PlanStep, { op: 'upsert_flag_shell' }>).desired = { ...(settings as Extract<PlanStep, { op: 'upsert_flag_shell' }>).desired, variations: desiredVariations };
+    const targeting: PlanStep = { ...(env('limits') as Extract<PlanStep, { op: 'update_flag_env' }>), variations: desiredVariations.map((v) => v.value), desired: { ...desiredEnv, offVariation: 0, fallthrough: { variation: 1 } } };
+    const { ex, run } = setup(ld.client, [settings, targeting], { concurrency: 1 });
+    const out = await ex.run(run);
+    expect(out.steps.map((s) => s.error ?? '')).toEqual(['', '']);
+    expect(ld.calls.filter((c) => c.startsWith('json limits')).join(' ')).not.toContain('/variations/-');
+    expect(ld.calls).toContain('semantic limits test');
+    expect(variationIds(ld.flags.get('limits')!, desiredVariations.map((v) => v.value))(1)).toBe('limits-1');
   });
 });
 
