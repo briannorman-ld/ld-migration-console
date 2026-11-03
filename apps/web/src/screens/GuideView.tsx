@@ -15,6 +15,9 @@ import { store } from '../lib/store.ts';
 import type { MigrationSelection } from '../lib/migration.ts';
 import type { MigrationContext } from '../lib/useMigration.ts';
 
+/** The repository copy of docs/RUNBOOK.md: the plan around this guide (preparation, cutover criteria, recovery). */
+const RUNBOOK_URL = 'https://github.com/briannorman-ld/ld-migration-console/blob/main/docs/RUNBOOK.md';
+
 export interface GuideNav {
   connections: () => void;
   ld: () => void;
@@ -71,7 +74,11 @@ export function GuideView({
         <p className="mt-1 text-sm text-fg-muted">
           Teams and the people who join them are account-level and can be done at any time: the environment steps do not wait for them, and a later sync adds the maintainers that
           appeared. Then one environment at a time in dependency order: context kinds, then segments, then the flags that use them, then experiments. Each step runs only what you
-          confirm; repeat from step {STEP_ORDER.indexOf(LOOP_STEP) + 1} for the next environment.
+          confirm; repeat from step {STEP_ORDER.indexOf(LOOP_STEP) + 1} for the next environment. Before the first run, read the{' '}
+          <a href={RUNBOOK_URL} target="_blank" rel="noreferrer" className="text-link hover:underline">
+            runbook
+          </a>
+          : what to settle before opening the console, the cutover criteria, and what to do when a run fails.
         </p>
       </div>
       <ol className="space-y-3">

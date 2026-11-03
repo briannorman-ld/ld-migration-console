@@ -5,7 +5,8 @@ provider and compares them with one LaunchDarkly project. Sources today: a StatS
 API key or uploaded config spec) and another LaunchDarkly project (PLAN §20, read through a
 provider-neutral model that further sources will use; GrowthBook is next, PLAN §21); the name, the repository and the provenance
 written into LD are source-neutral (see the note at the top of PLAN.md). The spec is [PLAN.md](PLAN.md); project rules are in
-[CLAUDE.md](CLAUDE.md). Status: **M0 + M1** (foundations, source adapters, canonical model, demo
+[CLAUDE.md](CLAUDE.md). How to run a migration end to end is in
+[docs/RUNBOOK.md](docs/RUNBOOK.md); what migrates and what does not is in [docs/LIMITATIONS.md](docs/LIMITATIONS.md). Status: **M0 + M1** (foundations, source adapters, canonical model, demo
 dataset, LD connect + capability probe) **+ M3 for gates and dynamic configs** (mapper with
 decisions, mapping profile, planner, dry run, journaled executor with LD provenance, undo; configs
 become JSON multivariate flags with append-only variations). M0 spike #1 is still open:
