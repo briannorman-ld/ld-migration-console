@@ -16,7 +16,7 @@ import {
   Input,
   Spinner,
 } from "../components/ui.tsx";
-import { ldSessionSnapshot, refreshLdState } from "../lib/ld.ts";
+import { FRESH_LD_LISTING_MS, ldSessionSnapshot, refreshLdState } from "../lib/ld.ts";
 import {
   buildPlan,
   cancelRun,
@@ -113,7 +113,7 @@ export function MigrateModal({
     setCheck({ kind: "checking", message: "Checking LaunchDarkly for the latest state…" });
     (async () => {
       try {
-        await refreshLdState(workspaceId, { segmentEnvs: ldEnvs });
+        await refreshLdState(workspaceId, { segmentEnvs: ldEnvs, reuseFlagsWithinMs: FRESH_LD_LISTING_MS });
         const ldError = ldSessionSnapshot(workspaceId).error;
         if (ldError) throw new Error(ldError);
         await fetchDeferredIdLists(
@@ -145,7 +145,7 @@ export function MigrateModal({
   // An environment added later needs its LD segments too; the plan rebuilds when they arrive.
   useEffect(() => {
     const missing = ldEnvs.filter((e) => !m.ld.segments?.[e]);
-    if (missing.length) void refreshLdState(workspaceId, { segmentEnvs: missing }).catch(() => undefined);
+    if (missing.length) void refreshLdState(workspaceId, { segmentEnvs: missing, reuseFlagsWithinMs: FRESH_LD_LISTING_MS }).catch(() => undefined);
   }, [ldEnvs, m.ld.segments, workspaceId]);
 
   // Flags whose LaunchDarkly provenance matches StatSig and the decisions are left out by default:

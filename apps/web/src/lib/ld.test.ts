@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ldConnecting, probeStartPatch, type LdSession } from './ld.ts';
+import { flagsFresh, ldConnecting, probeStartPatch, type LdSession } from './ld.ts';
 
 const matrix = { capabilities: [], environments: [] } as unknown as NonNullable<LdSession['matrix']>;
 const connected: LdSession = { status: 'connected', projectKey: 'p1', matrix, flags: { items: [], loadedAt: 't' }, segments: { test: [] } };
@@ -37,5 +37,18 @@ describe('ldConnecting', () => {
     expect(ldConnecting({ status: 'error', error: 'Unauthorized' })).toBe(false);
     expect(ldConnecting({ status: 'disconnected' })).toBe(false);
     expect(ldConnecting(undefined)).toBe(false);
+  });
+});
+
+describe('flagsFresh', () => {
+  const now = Date.parse('2026-11-03T12:00:00Z');
+  it('is true only for a listing read live in this tab within the window', () => {
+    const fresh = { flags: { items: [], loadedAt: '2026-11-03T11:59:30Z' } };
+    expect(flagsFresh(fresh, 60_000, now)).toBe(true);
+    expect(flagsFresh(fresh, 20_000, now)).toBe(false);
+    expect(flagsFresh(fresh, undefined, now)).toBe(false);
+    expect(flagsFresh({ ...fresh, stale: '2026-11-02T00:00:00Z' }, 60_000, now)).toBe(false);
+    expect(flagsFresh({}, 60_000, now)).toBe(false);
+    expect(flagsFresh({ flags: { items: [], loadedAt: 'not a date' } }, 60_000, now)).toBe(false);
   });
 });

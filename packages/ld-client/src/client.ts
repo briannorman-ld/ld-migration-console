@@ -178,17 +178,45 @@ export class LdClient {
     return out;
   }
 
+  /**
+   * The first page says how many flags there are; the rest are requested at once and the
+   * transport's limiter paces them. A project of thousands of flags (every migrated flag is one)
+   * then takes a few round trips rather than one per hundred flags.
+   */
   private async listFlagPages(projectKey: string, opts: { envKey?: string; signal?: AbortSignal; filter?: string; onPage?: (read: number, total?: number) => void }): Promise<LdFlagSummary[]> {
-    const out: LdFlagSummary[] = [];
-    for (let offset = 0; offset < 100_000; offset += 100) {
-      const query: Record<string, string> = { limit: '100', offset: String(offset), summary: 'true' };
+    const page = (offset: number) => {
+      const query: Record<string, string> = { limit: String(FLAG_PAGE), offset: String(offset), summary: 'true' };
       if (opts.envKey) query.env = opts.envKey;
       if (opts.filter) query.filter = opts.filter;
-      const page = await this.get(`/flags/${encodeURIComponent(projectKey)}`, FlagsSchema, { query, signal: opts.signal });
-      out.push(...page.items);
-      opts.onPage?.(out.length, page.totalCount ?? undefined);
-      if (page.items.length < 100 || (page.totalCount != null && out.length >= page.totalCount)) break;
+      return this.get(`/flags/${encodeURIComponent(projectKey)}`, FlagsSchema, { query, signal: opts.signal });
+    };
+    const first = await page(0);
+    const out: LdFlagSummary[] = [...first.items];
+    const total = first.totalCount ?? undefined;
+    opts.onPage?.(out.length, total);
+    if (first.items.length < FLAG_PAGE || (total != null && out.length >= total)) return out;
+    if (total == null) {
+      // No count to plan from: walk the pages one after another until a short one.
+      for (let offset = FLAG_PAGE; offset < 100_000; offset += FLAG_PAGE) {
+        const next = await page(offset);
+        out.push(...next.items);
+        opts.onPage?.(out.length);
+        if (next.items.length < FLAG_PAGE) break;
+      }
+      return out;
     }
+    const offsets: number[] = [];
+    for (let offset = FLAG_PAGE; offset < total; offset += FLAG_PAGE) offsets.push(offset);
+    let read = out.length;
+    const pages = await Promise.all(
+      offsets.map(async (offset) => {
+        const next = await page(offset);
+        read += next.items.length;
+        opts.onPage?.(read, total);
+        return next.items;
+      }),
+    );
+    for (const items of pages) out.push(...items);
     return out;
   }
 
@@ -626,6 +654,8 @@ export class LdClient {
 
 /** Page size for the account-level lists (members, teams, AI Configs); LD caps `limit` at 50 on some of them. */
 const MEMBER_PAGE = 50;
+/** Page size for the flag listing. */
+const FLAG_PAGE = 100;
 
 const SDK_KEY_FIELDS = new Set(['apiKey', 'mobileKey']);
 

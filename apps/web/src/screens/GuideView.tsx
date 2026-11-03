@@ -10,7 +10,7 @@ import { ACCESS_LABEL, ACCOUNT_WIDE_STEPS, computeGuide, describeTally, LOOP_STE
 const ENV_STEP = STEP_ORDER.indexOf('environment') + 1;
 import { KIND_LABEL } from '../lib/kinds.ts';
 import { timeAgo } from '../lib/time.ts';
-import { createLdEnvironment, createLdTeam, inviteLdMembers, refreshLdPeople, refreshLdState, reprobe, requireLdApprovals, setDefaultRandomizationUnit, type LdInviteRole } from '../lib/ld.ts';
+import { createLdEnvironment, createLdTeam, FRESH_LD_LISTING_MS, inviteLdMembers, refreshLdPeople, refreshLdState, reprobe, requireLdApprovals, setDefaultRandomizationUnit, type LdInviteRole } from '../lib/ld.ts';
 import { store } from '../lib/store.ts';
 import type { MigrationSelection } from '../lib/migration.ts';
 import type { MigrationContext } from '../lib/useMigration.ts';
@@ -62,7 +62,7 @@ export function GuideView({
     const missing = g.ldEnvs.filter((e) => !m.ld.segments?.[e] && !asked.current.has(e));
     if (!missing.length) return;
     missing.forEach((e) => asked.current.add(e));
-    void refreshLdState(workspaceId, { segmentEnvs: missing }).catch(() => undefined);
+    void refreshLdState(workspaceId, { segmentEnvs: missing, reuseFlagsWithinMs: FRESH_LD_LISTING_MS }).catch(() => undefined);
   }, [m, g.ldEnvs, workspaceId]);
 
   const doneCount = STEP_ORDER.filter((k) => g.done[k]).length;

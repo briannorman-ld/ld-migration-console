@@ -293,7 +293,28 @@ export function mergeLdSegments(workspaceId: string, updates: { ldEnv: string; k
  * does not wait for the flag pages. Experimentation reads (metrics, experiments, randomization
  * units) are optional: plans without the add-on answer 403, which must not hide the flags.
  */
-export async function refreshLdState(workspaceId: string, opts: { segmentEnvs?: string[] } = {}): Promise<void> {
+/** A flag listing read live in this tab within this long is reused by a refresh that allows it. */
+export const FRESH_LD_LISTING_MS = 60_000;
+
+export interface RefreshOptions {
+  segmentEnvs?: string[];
+  /**
+   * Keep a flag listing read live in this tab less than this long ago, instead of reading the
+   * project's flags again (segments and the rest are still read). The plan modal and the guide
+   * pass a minute: opening one right after the other otherwise reads thousands of flags twice.
+   * A listing restored from the last visit (`stale`) is never reused.
+   */
+  reuseFlagsWithinMs?: number;
+}
+
+/** True when the session's flag listing was read live within `withinMs` of `now`. */
+export function flagsFresh(s: Pick<LdSession, 'flags' | 'stale'>, withinMs: number | undefined, now = Date.now()): boolean {
+  if (withinMs === undefined || !s.flags || s.stale) return false;
+  const at = Date.parse(s.flags.loadedAt);
+  return Number.isFinite(at) && now - at < withinMs;
+}
+
+export async function refreshLdState(workspaceId: string, opts: RefreshOptions = {}): Promise<void> {
   const s = sessions.get(workspaceId);
   if (!s?.projectKey) return;
   const seq = ++refreshSeq;
@@ -313,7 +334,7 @@ export async function refreshLdState(workspaceId: string, opts: { segmentEnvs?: 
 /** Refreshes in flight per workspace, so `refreshing` clears only when the last one has landed. */
 const inFlightRefreshes = new Map<string, number>();
 
-async function readLdState(workspaceId: string, c: LdClient, p: string, seq: number, opts: { segmentEnvs?: string[] }): Promise<void> {
+async function readLdState(workspaceId: string, c: LdClient, p: string, seq: number, opts: RefreshOptions): Promise<void> {
   const s = sessions.get(workspaceId)!;
   const optional = async <T,>(fn: () => Promise<T>): Promise<T | undefined> => {
     try {
@@ -333,9 +354,11 @@ async function readLdState(workspaceId: string, c: LdClient, p: string, seq: num
   const envs = opts.segmentEnvs ?? Object.keys(s.segments ?? {});
   try {
     const onPage = (read: number, total?: number) => set(workspaceId, { refreshProgress: `Reading flags: ${read.toLocaleString()}${total ? ` of ${total.toLocaleString()}` : ''}…` });
-    const flags = Promise.all([c.listFlags(p, { onPage }), c.listContextKinds(p)]).then(([items, kinds]) =>
-      apply({ flags: { items, loadedAt: new Date().toISOString() }, contextKinds: kinds.items.filter((k) => !k.archived).map((k) => k.key) }),
-    );
+    const flags = flagsFresh(s, opts.reuseFlagsWithinMs)
+      ? c.listContextKinds(p).then((kinds) => apply({ contextKinds: kinds.items.filter((k) => !k.archived).map((k) => k.key) }))
+      : Promise.all([c.listFlags(p, { onPage }), c.listContextKinds(p)]).then(([items, kinds]) =>
+          apply({ flags: { items, loadedAt: new Date().toISOString() }, contextKinds: kinds.items.filter((k) => !k.archived).map((k) => k.key) }),
+        );
     const perEnv = envs.map(async (env) => {
       const [segments, experiments] = await Promise.all([c.listSegments(p, env), optional(() => c.listExperiments(p, env))]);
       const cur = sessions.get(workspaceId);
