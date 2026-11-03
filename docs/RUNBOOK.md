@@ -18,7 +18,9 @@ Most migrations that go badly skipped the project layer and answered the same qu
 
 ## 0. Before you open the console
 
-**Decide the target.** One LaunchDarkly project receives N StatSig projects (a *source* each). Decide which StatSig projects consolidate, and which StatSig tiers map to which LaunchDarkly environments. A tier with no LaunchDarkly counterpart can be created from the Guide, or left *not migrated*.
+**Count the StatSig projects first.** A StatSig project is a hard boundary: every gate, config, segment and experiment belongs to exactly one, and a Console API key reads exactly one. There is no API call that lists an organization's projects, so neither the console nor a script can discover them for you. Ask the customer to list them from the StatSig web console: the project switcher shows every project the signed-in person belongs to, and on Enterprise the organization settings show all of them. Teams inside a project are not projects. Expect more than one when several apps or business units adopted StatSig separately.
+
+**Decide the target.** Each StatSig project becomes a *source* in the console. The simple shape is **one StatSig project → one LaunchDarkly project**, a workspace each. **Consolidation**, several StatSig projects into one LaunchDarkly project, is for projects that share gates or an application: add every source to one workspace; the explorer marks the names that appear in more than one source, and the mapping profile gives each source a key prefix. Migrating the same name from two sources in one run is not supported yet, so decide per overlap which source wins and set the other aside. Do not consolidate projects from different StatSig organizations; the company call on each source reports the organization. Then decide which StatSig tiers map to which LaunchDarkly environments. A tier with no LaunchDarkly counterpart can be created from the Guide, or left *not migrated*.
 
 **Get the credentials.**
 
