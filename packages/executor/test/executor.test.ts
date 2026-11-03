@@ -907,3 +907,39 @@ describe('reads before writes', () => {
     expect(foreign.ld.calls.filter((c) => c.startsWith('json'))).toEqual([]);
   });
 });
+
+describe('flag reads during a run', () => {
+  const env2 = (key: string): PlanStep => ({ ...(env(key) as Extract<PlanStep, { op: 'update_flag_env' }>), id: `env:production:${key}`, ldEnv: 'production', desired: { ...desiredEnv, ldEnv: 'production', statsigEnv: 'production' } });
+
+  it('environment steps use the flag the settings step left in the cache: no read per environment', async () => {
+    const ld = fakeLd();
+    const { ex, run } = setup(ld.client, [shell('a'), env('a'), env2('a')]);
+    const out = await ex.run(run);
+    expect(out.status).toBe('done');
+    expect(ld.calls.filter((c) => c.startsWith('get'))).toEqual([]);
+    expect(ld.calls.filter((c) => c.startsWith('create') || c.startsWith('semantic'))).toEqual(['create a', 'semantic a test', 'semantic a production']);
+    // Each environment step still captured a pre-image to undo from.
+    expect(out.steps.slice(1).every((s) => s.preImage !== undefined)).toBe(true);
+  });
+
+  it('an environment step resumed in a later run reads the flag once', async () => {
+    const ld = fakeLd();
+    ld.flags.set('a', ld.flag('a'));
+    const { ex, run } = setup(ld.client, [{ ...shell('a'), exists: true } as PlanStep, env('a')]);
+    run.steps[0]!.status = 'done';
+    const out = await ex.run(run);
+    expect(out.status).toBe('done');
+    expect(ld.calls.filter((c) => c.startsWith('get'))).toEqual(['get a']);
+  });
+
+  it('reports progress with a new run and step records, sharing the pre-images instead of cloning them', async () => {
+    const ld = fakeLd();
+    const seen: RunRecord[] = [];
+    const ex = new Executor({ client: ld.client, projectKey: 'p', journal: { save: async () => undefined }, onProgress: (r) => seen.push(r), now: () => new Date('2026-10-22T00:00:00Z') });
+    const out = await ex.run(newRun({ id: 'run-progress', workspaceId: 'w', projectKey: 'p', label: 't', dryRun: false, steps: [shell('a'), env('a')], now: new Date('2026-10-22T00:00:00Z') }));
+    expect(seen.length).toBeGreaterThan(2);
+    expect(new Set(seen).size).toBe(seen.length);
+    expect(seen.at(-1)!.steps[1]!.status).toBe('done');
+    expect(seen.at(-1)!.steps[1]!.preImage).toBe(out.steps[1]!.preImage);
+  });
+});

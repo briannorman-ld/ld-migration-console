@@ -1,6 +1,7 @@
 import { useLiveQuery } from "dexie-react-hooks";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { RunRecord } from "@sslm/executor";
+import type { RunJournalRecord } from "@sslm/store";
 import { LD_INSTANCES } from "@sslm/ld-client";
 import { Badge, Button, Callout, Card, cx } from "../components/ui.tsx";
 import {
@@ -39,9 +40,13 @@ export function RunsView({
   workspaceId: string;
   m: MigrationContext;
 }) {
-  const runs =
-    useLiveQuery(() => store.listRuns(workspaceId), [workspaceId]) ?? [];
   const active = useActiveRun(workspaceId);
+  // While a run executes in this tab the journal changes twice per step; the active run is shown
+  // from the executor's own progress below, so the stored list is re-read only once it ends.
+  const runsRef = useRef<RunJournalRecord[] | undefined>(undefined);
+  const runsLive = useLiveQuery(() => (active ? runsRef.current : store.listRuns(workspaceId)), [workspaceId, !!active]);
+  if (runsLive !== undefined) runsRef.current = runsLive;
+  const runs = runsLive ?? runsRef.current ?? [];
   const cancelling = useCancelling(workspaceId);
   const [open, setOpen] = useState<string>();
   const [error, setError] = useState<string>();

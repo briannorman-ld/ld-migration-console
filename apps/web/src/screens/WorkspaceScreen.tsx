@@ -6,7 +6,7 @@ import {
   type CanonicalSnapshot,
   type EntityKind,
 } from "@sslm/canonical";
-import type { SourceRecord } from "@sslm/store";
+import type { RunJournalRecord, SourceRecord } from "@sslm/store";
 import { LdMark } from "../components/Brand.tsx";
 import { UnlockKeysBar } from "../components/DeviceVault.tsx";
 import { ThemeToggle } from "../components/ThemeToggle.tsx";
@@ -34,6 +34,7 @@ import {
   collectDecisions,
   fetchDeferredIdLists,
   isInterrupted,
+  useActiveRun,
   type MigrationSelection,
 } from "../lib/migration.ts";
 import { monitoredItems, useMonitoring, useMonitorNotifications, useMonitorSchedule } from "../lib/monitor.ts";
@@ -155,7 +156,15 @@ export function WorkspaceScreen({
   // Everything ticked across the explorers (lib/selection.ts); kept for the tab per workspace.
   const [selected, setSelected] = useState<Set<string>>(() => loadSelection(workspaceId));
   useEffect(() => saveSelection(workspaceId, selected), [workspaceId, selected]);
-  const runs = useLiveQuery(() => store.listRuns(workspaceId), [workspaceId]);
+  // The journal is written twice per step while this tab executes a run, and every write re-ran
+  // this query: all runs, pre-images included, cloned out of IndexedDB per step. While a run is in
+  // flight here the last list stands (nothing on this screen needs the step-by-step state; the
+  // modal has it from the executor), and it is read again once the run ends.
+  const activeRun = useActiveRun(workspaceId);
+  const runsRef = useRef<RunJournalRecord[] | undefined>(undefined);
+  const runsLive = useLiveQuery(() => (activeRun ? runsRef.current : store.listRuns(workspaceId)), [workspaceId, !!activeRun]);
+  if (runsLive !== undefined) runsRef.current = runsLive;
+  const runs = runsLive ?? runsRef.current;
 
   // A crawl reports every request, response and page as its own event, each in its own task, and
   // each one used to re-render the whole screen (hundreds of times a second on a fast source).

@@ -398,7 +398,10 @@ export class Executor {
 
   private async save(run: RunRecord) {
     await this.opts.journal.save(run);
-    this.opts.onProgress?.(structuredClone(run));
+    // A new run object with new step records, so the UI (which compares identities) re-renders;
+    // the pre-images and plan steps inside are shared, never mutated once set. Deep-cloning a
+    // 3,000-step run with its pre-images twice per step was most of the main thread's work.
+    this.opts.onProgress?.({ ...run, steps: run.steps.map((s) => ({ ...s })) });
   }
 
   private comment(run: RunRecord, s: PlanStep): string {
@@ -761,7 +764,10 @@ export class Executor {
   }
 
   private async flagEnv(run: RunRecord, rec: StepRecord, s: Extract<PlanStep, { op: 'update_flag_env' }>): Promise<string> {
-    const flag = await this.c.getFlag(this.p, s.key, this.signal);
+    // The settings step (or an earlier environment step of this run) left the flag in the cache,
+    // current as of its last write, so this step reads nothing. A step resumed in a later run
+    // starts with an empty cache and reads.
+    const flag = this.flags.get(s.key) ?? (await this.c.getFlag(this.p, s.key, this.signal));
     if (!flag) {
       if (run.dryRun) return `Would set targeting in ${s.ldEnv}: ${envSummary(s.desired, s.variations)}.`;
       throw new Error(`Flag “${s.key}” doesn't exist (its settings step didn't run).`);
@@ -781,6 +787,7 @@ export class Executor {
     try {
       const res = await this.c.patchFlagSemantic(this.p, s.key, { environmentKey: s.ldEnv, comment, instructions }, { dryRun: run.dryRun, signal: this.signal });
       rec.ldVersion = res.environments?.[s.ldEnv]?.version ?? undefined;
+      if (!run.dryRun) this.flags.set(s.key, res);
     } catch (e) {
       if (!(e instanceof LdWriteError && e.status === 405)) throw e;
       approval = true;
@@ -840,7 +847,8 @@ export class Executor {
   private async writeProvenance(run: RunRecord, s: Extract<PlanStep, { op: 'update_flag_env' }>, scheduledChangeIds: string[]): Promise<void> {
     const prop = syncPropertyKey(s.ldEnv);
     const value = [s.provenance.statsigFingerprint, String(s.provenance.statsigVersion ?? ''), this.now().toISOString(), s.provenance.decisionSetHash, ...scheduledChangeIds.map((id) => `sc:${id}`)];
-    await this.c.patchFlagJson(this.p, s.key, [{ op: 'add', path: `/customProperties/${pointer(prop)}`, value: { name: `${SOURCE_KIND_LABEL[s.provenance.sourceKind ?? SOURCE_KIND]} sync (${s.ldEnv})`, value } }], { comment: this.comment(run, s), dryRun: run.dryRun, signal: this.signal });
+    const res = await this.c.patchFlagJson(this.p, s.key, [{ op: 'add', path: `/customProperties/${pointer(prop)}`, value: { name: `${SOURCE_KIND_LABEL[s.provenance.sourceKind ?? SOURCE_KIND]} sync (${s.ldEnv})`, value } }], { comment: this.comment(run, s), dryRun: run.dryRun, signal: this.signal });
+    if (!run.dryRun) this.flags.set(s.key, res);
   }
 
   /** The semantic-patch instructions that make an environment match `state` (also used for scheduled changes and approvals). */

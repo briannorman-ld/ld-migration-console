@@ -21,7 +21,8 @@ vi.mock('../lib/ld.ts', async (orig) => ({
 import type { MappingProfile, Resolution } from '@sslm/mapper';
 import type { SourceRecord } from '@sslm/store';
 import type { PlanFlag } from '@sslm/planner';
-import { EnvChooser, envChoices, FlagsTable, MigrateModal } from './MigrateModal.tsx';
+import { EnvChooser, envChoices, FlagsTable, MigrateModal, RunProgress } from './MigrateModal.tsx';
+import type { RunRecord, StepRecord } from '@sslm/executor';
 
 const sources: SourceRecord[] = [
   { id: 's-web', workspaceId: 'w', alias: 'web', label: 'acme-web', kind: 'console_api', createdAt: '2026-10-22T10:00:00Z' },
@@ -141,5 +142,36 @@ describe('opening the plan', () => {
     expect(screen.queryByText('Checking LaunchDarkly for the latest state…')).toBeNull();
     expect(screen.queryByText(/Could not read the latest LaunchDarkly state/)).toBeNull();
     expect(dryRun.disabled).toBe(false);
+  });
+});
+
+describe('run progress', () => {
+  afterEach(cleanup);
+  const stepRec = (i: number, status: StepRecord['status']): StepRecord => ({ id: `context_kind:k${i}`, label: `Context kind k${i}`, status, step: { id: `context_kind:k${i}`, deps: [], op: 'ensure_context_kind', key: `k${i}`, name: `k${i}`, unitType: `k${i}Key` } });
+  const bigRun = (): RunRecord => ({
+    id: 'r',
+    workspaceId: 'w',
+    projectKey: 'p',
+    label: 'big',
+    dryRun: false,
+    startedAt: '2026-11-02T10:00:00Z',
+    status: 'running',
+    steps: [...Array.from({ length: 300 }, (_, i) => stepRec(i, i === 7 ? 'failed' : 'done')), stepRec(300, 'running'), ...Array.from({ length: 2000 }, (_, i) => stepRec(301 + i, 'pending'))],
+  });
+
+  it('lists a window around the running step, keeps failed steps in view, and can show everything', () => {
+    render(<RunProgress run={bigRun()} title="Migrating" />);
+    const rows = () => screen.getAllByRole('listitem');
+    // 12 before + the running one + 19 after, the failed step from above, and the two summaries.
+    expect(rows().length).toBeLessThan(40);
+    expect(screen.getByText('Context kind k300')).toBeTruthy();
+    expect(screen.getByText('Context kind k7')).toBeTruthy();
+    expect(screen.queryByText('Context kind k0')).toBeNull();
+    expect(screen.getByText(/288 earlier steps \(287 done, 1 failed\)/)).toBeTruthy();
+    // Number formatting follows the runtime's locale; the count is what matters.
+    const more = screen.getByText(/more steps \(.* pending\)/).textContent ?? '';
+    expect(more.replace(/[,.\u202f\u00a0]/g, '')).toMatch(/^1981 more steps \(1981 pending\)$/);
+    fireEvent.click(screen.getByRole('button', { name: /^Show all .*steps$/ }));
+    expect(rows().length).toBe(2301);
   });
 });

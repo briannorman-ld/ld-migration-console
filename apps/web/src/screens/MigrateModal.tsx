@@ -1,6 +1,6 @@
 import { useDeferredValue, useEffect, useMemo, useState } from "react";
 import type { CanonicalSnapshot } from "@sslm/canonical";
-import type { RunRecord, StepStatus } from "@sslm/executor";
+import type { RunRecord, StepRecord, StepStatus } from "@sslm/executor";
 import { LD_INSTANCES } from "@sslm/ld-client";
 import type { DecisionPoint } from "@sslm/mapper";
 import { recommendedResolutions, type ItemStatus, type PlanFlag, type PlanItem } from "@sslm/planner";
@@ -718,6 +718,7 @@ export function RunProgress({
 }) {
   const inProgress = !!run && (run.status === "running" || run.status === "undoing");
   const now = useTick(inProgress);
+  const [showAll, setShowAll] = useState(false);
   if (!run)
     return (
       <div className="flex items-center gap-2 text-sm text-fg-muted">
@@ -777,8 +778,73 @@ export function RunProgress({
         {!inProgress && run.finishedAt && <span>finished in {formatDuration(p.elapsedMs)}</span>}
       </div>
       </div>
-      <ul className="space-y-1 text-xs">
-        {run.steps.map((s) => (
+      <StepList run={run} ldBase={ldBase} showAll={showAll} onShowAll={() => setShowAll(true)} />
+    </section>
+  );
+}
+
+/** Rows kept around the step in flight: what just finished and what comes next. */
+const WINDOW_BEFORE = 12;
+const WINDOW_AFTER = 20;
+
+/**
+ * The run's steps as a window around the one in flight, with the rest summarised above and below.
+ * A 3,000-step run re-rendered every row twice per step; now it renders about thirty, and the
+ * running step stays in view without scrolling. Steps that need attention outside the window
+ * (failed, waiting for approval) stay listed. "Show all" lists everything.
+ */
+function StepList({ run, ldBase, showAll, onShowAll }: { run: RunRecord; ldBase?: string; showAll: boolean; onShowAll: () => void }) {
+  const steps = run.steps;
+  const focus = steps.findIndex((s) => s.status === "running" || s.status === "pending");
+  const start = showAll ? 0 : focus < 0 ? Math.max(0, steps.length - WINDOW_BEFORE - WINDOW_AFTER) : Math.max(0, focus - WINDOW_BEFORE);
+  const end = showAll ? steps.length : focus < 0 ? steps.length : Math.min(steps.length, focus + WINDOW_AFTER);
+  const above = steps.slice(0, start);
+  const below = steps.slice(end);
+  const attention = (s: StepRecord) => s.status === "failed" || s.status === "pending_approval";
+  const tally = (xs: StepRecord[]) => {
+    const n = new Map<StepStatus, number>();
+    for (const s of xs) n.set(s.status, (n.get(s.status) ?? 0) + 1);
+    return [...n.entries()].map(([k, v]) => `${v} ${k.replace("_", " ")}`).join(", ");
+  };
+  return (
+    <ul className="space-y-1 text-xs">
+      {above.length > 0 && (
+        <li className="flex items-center gap-2 text-fg-muted">
+          <span>
+            {above.length.toLocaleString()} earlier step{above.length === 1 ? "" : "s"} ({tally(above)})
+          </span>
+          <button type="button" className="text-link hover:underline" onClick={onShowAll}>
+            Show all {steps.length.toLocaleString()} steps
+          </button>
+        </li>
+      )}
+      {above.filter(attention).map((s) => (
+        <StepRow key={s.id} s={s} run={run} ldBase={ldBase} />
+      ))}
+      {steps.slice(start, end).map((s) => (
+        <StepRow key={s.id} s={s} run={run} ldBase={ldBase} />
+      ))}
+      {below.filter(attention).map((s) => (
+        <StepRow key={s.id} s={s} run={run} ldBase={ldBase} />
+      ))}
+      {below.length > 0 && (
+        <li className="flex items-center gap-2 text-fg-muted">
+          <span>
+            {below.length.toLocaleString()} more step{below.length === 1 ? "" : "s"} ({tally(below)})
+          </span>
+          {above.length === 0 && (
+            <button type="button" className="text-link hover:underline" onClick={onShowAll}>
+              Show all {steps.length.toLocaleString()} steps
+            </button>
+          )}
+        </li>
+      )}
+    </ul>
+  );
+}
+
+function StepRow({ s, run, ldBase }: { s: StepRecord; run: RunRecord; ldBase?: string }) {
+  return (
           <li
             key={s.id}
             className={cx(
@@ -821,9 +887,6 @@ export function RunProgress({
                 )}
             </span>
           </li>
-        ))}
-      </ul>
-    </section>
   );
 }
 
