@@ -229,6 +229,22 @@ export function MigrateModal({
   // A run needs the check to have landed and every chosen environment's segments in the session
   // (an environment ticked later loads its segments through the effect above).
   const fresh = check.kind === "ready" && (!needsEnv || ldEnvs.every((e) => !!m.ld.segments?.[e]));
+  /** Why Dry run and Migrate are disabled, for their tooltips; undefined when they can go. */
+  const waiting = !plan
+    ? undefined
+    : check.kind === "checking"
+      ? "Waiting for the fresh read of LaunchDarkly to land"
+      : check.kind === "error"
+        ? "The latest LaunchDarkly read failed; retry above"
+        : !fresh
+          ? "Reading the segments of the chosen environments"
+          : planning
+            ? "Planning…"
+            : plan.steps.length === 0
+              ? "Nothing to write"
+              : needsEnv && ldEnvs.length === 0
+                ? "Choose at least one environment"
+                : undefined;
   return (
     <div
       className="fixed inset-0 z-50 flex items-stretch justify-center bg-overlay p-6 backdrop-blur-[2px]"
@@ -482,14 +498,16 @@ export function MigrateModal({
         <footer className="flex flex-wrap items-center gap-3 border-t border-line bg-surface-2 px-5 py-3">
           {plan && phase.kind === "plan" && (
             <>
-              <span className="flex items-center gap-2 text-sm text-fg-muted">
-                {check.kind === "checking" && (
-                  <span className="flex items-center gap-1.5" role="status">
-                    <Spinner /> {check.message}
+              <span className="flex flex-wrap items-center gap-2 text-sm text-fg-muted">
+                {check.kind === "checking" ? (
+                  <span className="flex flex-wrap items-center gap-1.5" role="status">
+                    <Spinner /> <span>{check.message}</span>
+                    {m.ld.refreshProgress && <span>{m.ld.refreshProgress}</span>}
+                    <span>Dry run and Migrate enable once it lands.</span>
                   </span>
-                )}
-                {check.kind === "checking" && <span aria-hidden>·</span>}
-                {plan.ready ? (
+                ) : check.kind === "error" ? (
+                  "The latest LaunchDarkly read failed; retry above."
+                ) : plan.ready ? (
                   "Ready."
                 ) : plan.steps.length ? (
                   <>
@@ -504,6 +522,7 @@ export function MigrateModal({
                 variant="secondary"
                 className="ml-auto"
                 disabled={busy || planning || !fresh || plan.steps.length === 0 || (needsEnv && ldEnvs.length === 0)}
+                title={waiting}
                 onClick={() => void run(true)}
               >
                 Dry run
@@ -518,6 +537,7 @@ export function MigrateModal({
                   !confirmed ||
                   plan.errors.length > 0
                 }
+                title={waiting ?? (!confirmed ? "Type the environment names above to confirm" : plan.errors.length ? "Fix the plan errors above first" : undefined)}
                 onClick={() => void run(false)}
               >
                 Migrate{" "}

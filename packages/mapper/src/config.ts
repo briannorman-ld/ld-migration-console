@@ -13,7 +13,7 @@
  * the same whichever environment is migrated first (append-only, PLAN §7).
  */
 import { fingerprint, overridesForEnvironment, resolveRulesForEnvironment, stableStringify, targetingFingerprint, type Config, type Rule } from '@sslm/canonical';
-import { andDnf, resolveKind, SkipItem, translateCondition, unique, type ConditionContext, resolveUnit, rolloutFor, splitOverrides, type OverrideGroup } from './conditions.ts';
+import { dedupeRuleDescriptions, andDnf, resolveKind, SkipItem, translateCondition, unique, type ConditionContext, resolveUnit, rolloutFor, splitOverrides, type OverrideGroup } from './conditions.ts';
 import { DecisionCollector } from './decisions.ts';
 import { chooseClientSideAvailability, commonPassesGate, expansion, gateReference, PASS, provenanceProperties, report, sourceTag, TAG_MIGRATED, type MapArgs, type MapOutcome } from './gate.ts';
 import { chooseMaintainer } from './maintainer.ts';
@@ -153,7 +153,7 @@ export function mapConfig(args: MapArgs<Config>): ConfigMapResult {
       on: config.enabled,
       offVariation: DEFAULT,
       fallthrough,
-      rules: [...ov.rules, ...out],
+      rules: dedupeRuleDescriptions([...ov.rules, ...out], c.fidelity),
       targets: ov.targets,
       prerequisites: [...prerequisites].sort().map((k) => ({ key: sanitizeKey(k), variation: PASS })),
     };

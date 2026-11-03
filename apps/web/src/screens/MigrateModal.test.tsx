@@ -146,16 +146,22 @@ describe('opening the plan', () => {
     const flagsSection = screen.getByRole('region', { name: 'Flags' });
     expect(envSection.compareDocumentPosition(flagsSection) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getByText('Checking LaunchDarkly for the latest state…')).toBeTruthy();
+    // One status line while the read runs: no "Ready." beside the spinner, and the buttons say what they wait for.
+    expect(screen.getByText('Dry run and Migrate enable once it lands.')).toBeTruthy();
+    expect(screen.queryByText('Ready.')).toBeNull();
     const dryRun = screen.getByRole('button', { name: 'Dry run' }) as HTMLButtonElement;
     expect(dryRun.disabled).toBe(true);
+    expect(dryRun.title).toBe('Waiting for the fresh read of LaunchDarkly to land');
     expect(refresh.calls).toBe(1);
     await act(async () => {
       refresh.resolve();
       await new Promise((r) => setTimeout(r, 20));
     });
     expect(screen.queryByText('Checking LaunchDarkly for the latest state…')).toBeNull();
+    expect(screen.queryByText('Dry run and Migrate enable once it lands.')).toBeNull();
     expect(screen.queryByText(/Could not read the latest LaunchDarkly state/)).toBeNull();
     expect(dryRun.disabled).toBe(false);
+    expect(dryRun.title).toBe('');
   });
 });
 

@@ -6,7 +6,7 @@
  * segment (same decision id), so one answer covers the segment and every rule that needs it.
  */
 import { fingerprint, resolveRulesForEnvironment, targetingFingerprint, type Segment } from '@sslm/canonical';
-import { andDnf, bigSegmentChoice, hashedListChoice, LIST_SEGMENT_MAX, MAX_EXPANSION, resolveKind, segmentSize, SkipItem, translateCondition, unique, type ConditionContext, resolveUnit } from './conditions.ts';
+import { dedupeRuleDescriptions, andDnf, bigSegmentChoice, hashedListChoice, LIST_SEGMENT_MAX, MAX_EXPANSION, resolveKind, segmentSize, SkipItem, translateCondition, unique, type ConditionContext, resolveUnit } from './conditions.ts';
 import { DecisionCollector } from './decisions.ts';
 import { report, sourceTag, TAG_MIGRATED, type MapArgs, type MapOutcome } from './gate.ts';
 import { sanitizeKey, sanitizeTag } from './profile.ts';
@@ -164,7 +164,7 @@ export function mapSegment(args: MapArgs<Segment>): SegmentMapResult {
         out.push({ description: dnf.length > 1 ? `${r.name} (${k + 1}/${dnf.length})` : r.name, clauses, ...(weight !== undefined ? { weight, rolloutContextKind: kind, ...(unit.attribute !== 'key' ? { bucketBy: unit.attribute } : {}) } : {}) });
       }
     }
-    base.rules = out;
+    base.rules = dedupeRuleDescriptions(out, fidelity);
     return finish(base);
   } catch (e) {
     if (e instanceof SkipItem) return finish(null, e.reason);

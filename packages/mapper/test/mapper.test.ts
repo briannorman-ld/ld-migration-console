@@ -89,11 +89,11 @@ describe('operator pitfalls (CLAUDE.md, PLAN §10.3)', () => {
     expect(types(r)).not.toContain('unit_type_kind');
     expect(r.dependencies.filter((x) => x.kind === 'context_kind')).toEqual([]);
     expect(r.env.targets).toEqual([]);
-    const overrideRules = r.env.rules.filter((x) => x.description === 'companyID overrides');
+    const overrideRules = r.env.rules.filter((x) => x.description.startsWith('companyID overrides'));
     expect(overrideRules).toHaveLength(2);
     expect(overrideRules.map((x) => x.clauses[0])).toEqual(first.env.targets.map((t) => ({ contextKind: 'user', attribute: 'companyID', op: 'in', values: t.values, negate: false })));
     expect(overrideRules.map((x) => x.variation)).toEqual(first.env.targets.map((t) => t.variation));
-    const ruleClauses = r.env.rules.filter((x) => x.description !== 'companyID overrides').flatMap((x) => x.clauses);
+    const ruleClauses = r.env.rules.filter((x) => !x.description.startsWith('companyID overrides')).flatMap((x) => x.clauses);
     expect(ruleClauses[0]).toMatchObject({ contextKind: 'user', attribute: 'companyID' });
     expect(r.fidelity.notes.map((n) => n.message)).toContainEqual(expect.stringMatching(/became 2 targeting rules on user attribute “companyID”/));
     expect(optionLabel(d, attributeOption('companyID'))).toBe('Keep “companyID” as an attribute of the user context');
@@ -126,9 +126,9 @@ describe('operator pitfalls (CLAUDE.md, PLAN §10.3)', () => {
     expect(types(r)).not.toContain('unit_type_kind');
     expect(r.dependencies.filter((x) => x.kind === 'context_kind')).toEqual([]);
     expect(r.env.targets).toEqual([]);
-    const ruleClauses = r.env.rules.filter((x) => x.description !== 'companyID overrides').flatMap((x) => x.clauses);
+    const ruleClauses = r.env.rules.filter((x) => !x.description.startsWith('companyID overrides')).flatMap((x) => x.clauses);
     expect(ruleClauses[0]).toMatchObject({ contextKind: 'user', attribute: 'account_id' });
-    expect(r.env.rules.filter((x) => x.description === 'companyID overrides')).toHaveLength(2);
+    expect(r.env.rules.filter((x) => x.description.startsWith('companyID overrides'))).toHaveLength(2);
     // The attribute may live on another kind (`attribute:<kind>/<name>`): clauses and override rules name that kind, and the kind is created when LD lacks it.
     const first = mapGate(args('b2b_bulk_ordering'));
     const onKind = profileFor(web, MAPPING);
@@ -138,10 +138,10 @@ describe('operator pitfalls (CLAUDE.md, PLAN §10.3)', () => {
     expect(types(k)).not.toContain('unit_type_kind');
     expect(k.dependencies).toContainEqual({ kind: 'context_kind', key: 'account', entityId: 'companyID' });
     expect(k.env.targets).toEqual([]);
-    const onKindRules = k.env.rules.filter((x) => x.description === 'companyID overrides');
+    const onKindRules = k.env.rules.filter((x) => x.description.startsWith('companyID overrides'));
     expect(onKindRules).toHaveLength(2);
     expect(onKindRules.map((x) => x.clauses[0])).toEqual(first.env.targets.map((t) => ({ contextKind: 'account', attribute: 'account_id', op: 'in', values: t.values, negate: false })));
-    expect(k.env.rules.filter((x) => x.description !== 'companyID overrides').flatMap((x) => x.clauses)[0]).toMatchObject({ contextKind: 'account', attribute: 'account_id' });
+    expect(k.env.rules.filter((x) => !x.description.startsWith('companyID overrides')).flatMap((x) => x.clauses)[0]).toMatchObject({ contextKind: 'account', attribute: 'account_id' });
     expect(k.fidelity.notes.map((n) => n.message)).toContainEqual(expect.stringMatching(/became 2 targeting rules on account attribute “account_id”/));
     expect(optionLabel(first.unresolved.find((x) => x.type === 'unit_type_kind')!, 'attribute:account/account_id')).toBe('Keep “account_id” as an attribute of the account context');
     expect(acceptsOption(first.unresolved.find((x) => x.type === 'unit_type_kind')!, 'attribute:account/account_id')).toBe(true);
@@ -151,7 +151,7 @@ describe('operator pitfalls (CLAUDE.md, PLAN §10.3)', () => {
     onExisting.sources[web.source.sourceId]!.unitTypeKinds.companyID = attributeOption('account_id', 'device');
     const e = mapGate(args('b2b_bulk_ordering', { profile: onExisting, capabilities: { ...CAPS, existingContextKinds: ['user', 'device'] } }));
     expect(e.dependencies.filter((x) => x.kind === 'context_kind')).toEqual([]);
-    expect(e.env.rules.filter((x) => x.description !== 'companyID overrides').flatMap((x) => x.clauses)[0]).toMatchObject({ contextKind: 'device', attribute: 'account_id' });
+    expect(e.env.rules.filter((x) => !x.description.startsWith('companyID overrides')).flatMap((x) => x.clauses)[0]).toMatchObject({ contextKind: 'device', attribute: 'account_id' });
     // Case-insensitive, like StatSig's customIDs lookup.
     const ci = profileFor(web, MAPPING);
     ci.sources[web.source.sourceId]!.unitTypeKinds.COMPANYID = 'account';
@@ -560,6 +560,18 @@ describe('known edge cases (docs/KNOWN-EDGE-CASES.md)', () => {
       const r = mapGate(args('reviews_v2'));
       expect(r.env.rules[0]).toMatchObject({ description: 'Exclude load tests', variation: 1 });
       expect(r.env.fallthrough).toEqual({ variation: 0 });
+    });
+
+    describe('4.16: repeated rule names (LaunchDarkly wants one description per rule)', () => {
+      it('numbers the second and later rules of a name, with a full-fidelity note', () => {
+        const r = mapGate(args('sku_preview'));
+        expect(r.env.rules.map((x) => x.description)).toEqual(['SKU regex', 'SKU regex (2)']);
+        expect(r.fidelity.notes.some((n) => n.fidelity === 'full' && /numbered for LaunchDarkly/.test(n.message) && /“SKU regex \(2\)”/.test(n.message))).toBe(true);
+        // Overrides on a unit type kept as an attribute make one rule per served variation, all named "<unit> overrides": numbered too.
+        const d = mapGate(args('b2b_bulk_ordering')).unresolved.find((x) => x.type === 'unit_type_kind')!;
+        const asAttribute = mapGate(args('b2b_bulk_ordering', { resolutions: new Map([[d.id, { id: d.id, type: d.type, optionKey: attributeOption('companyID'), scope: 'resource' as const, fingerprint: d.fingerprint, decidedAt: NOW }]]) }));
+        expect(asAttribute.env.rules.filter((x) => x.description.startsWith('companyID overrides')).map((x) => x.description)).toEqual(['companyID overrides', 'companyID overrides (2)']);
+      });
     });
 
     describe('4.15: rules that serve what the default rule serves (redundant_rules)', () => {

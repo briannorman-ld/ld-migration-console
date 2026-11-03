@@ -1820,11 +1820,12 @@
       "name": "sku_preview",
       "fidelity": "partial",
       "notes": [
-        "partial: Regex uses lookbehind; not portable to every SDK. [rule “Lookbehind regex” › condition 1]"
+        "partial: Regex uses lookbehind; not portable to every SDK. [rule “SKU regex” › condition 1]",
+        "full: Rule name repeated in StatSig numbered for LaunchDarkly, which wants one description per rule: “SKU regex (2)”."
       ],
       "decisions": [
         "choice client_side_availability (flag settings) → both",
-        "choice regex_dialect (rule “Lookbehind regex” › condition 1) → keep"
+        "choice regex_dialect (rule “SKU regex” › condition 1) → keep"
       ],
       "dependencies": [],
       "env": {
@@ -1837,7 +1838,7 @@
         },
         "rules": [
           {
-            "description": "Portable regex",
+            "description": "SKU regex",
             "clauses": [
               {
                 "contextKind": "user",
@@ -1852,7 +1853,7 @@
             "variation": 0
           },
           {
-            "description": "Lookbehind regex",
+            "description": "SKU regex (2)",
             "clauses": [
               {
                 "contextKind": "user",

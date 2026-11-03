@@ -163,7 +163,7 @@ export class LdClient {
   }
 
   /** Flag summaries (key, tags, on/off for `envKey`), paged. Read-only. */
-  async listFlags(projectKey: string, opts: { envKey?: string; signal?: AbortSignal; includeArchived?: boolean } = {}): Promise<LdFlagSummary[]> {
+  async listFlags(projectKey: string, opts: { envKey?: string; signal?: AbortSignal; includeArchived?: boolean; onPage?: (read: number, total?: number) => void } = {}): Promise<LdFlagSummary[]> {
     const out = await this.listFlagPages(projectKey, opts);
     if (!opts.includeArchived) return out;
     // Archived flags are left out of the default listing and `filter=state:` takes one value, so a
@@ -173,7 +173,7 @@ export class LdClient {
     return out;
   }
 
-  private async listFlagPages(projectKey: string, opts: { envKey?: string; signal?: AbortSignal; filter?: string }): Promise<LdFlagSummary[]> {
+  private async listFlagPages(projectKey: string, opts: { envKey?: string; signal?: AbortSignal; filter?: string; onPage?: (read: number, total?: number) => void }): Promise<LdFlagSummary[]> {
     const out: LdFlagSummary[] = [];
     for (let offset = 0; offset < 100_000; offset += 100) {
       const query: Record<string, string> = { limit: '100', offset: String(offset), summary: 'true' };
@@ -181,6 +181,7 @@ export class LdClient {
       if (opts.filter) query.filter = opts.filter;
       const page = await this.get(`/flags/${encodeURIComponent(projectKey)}`, FlagsSchema, { query, signal: opts.signal });
       out.push(...page.items);
+      opts.onPage?.(out.length, page.totalCount ?? undefined);
       if (page.items.length < 100 || (page.totalCount != null && out.length >= page.totalCount)) break;
     }
     return out;

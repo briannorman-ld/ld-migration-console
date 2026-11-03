@@ -22,7 +22,7 @@ import {
   type NeutralSegment,
   type NeutralServe,
 } from '@sslm/canonical';
-import { LIST_SEGMENT_MAX, SkipItem, unique } from './conditions.ts';
+import { dedupeRuleDescriptions, LIST_SEGMENT_MAX, SkipItem, unique } from './conditions.ts';
 import { DecisionCollector, DROP_CONDITION, DROP_RULE, SKIP, plannedContextKinds, plannedKindOptions } from './decisions.ts';
 import { provenanceProperties, report, type MapArgs, type MapOutcome } from './gate.ts';
 import { chooseMaintainer } from './maintainer.ts';
@@ -337,7 +337,7 @@ function translateEnv(ctx: Ctx, flag: NeutralFlag, source: NeutralFlagEnv, ldEnv
 
   const prerequisites = translatePrerequisites(ctx, source, source.env);
   if (source.offVariation >= n) throw new SkipItem(`the off variation is ${source.offVariation}, which the flag doesn't have`);
-  return { ldEnv, statsigEnv: source.env, on: source.on, offVariation: source.offVariation, fallthrough, rules, targets, prerequisites };
+  return { ldEnv, statsigEnv: source.env, on: source.on, offVariation: source.offVariation, fallthrough, rules: dedupeRuleDescriptions(rules, ctx.fidelity), targets, prerequisites };
 }
 
 function translatePrerequisites(ctx: Ctx, source: NeutralFlagEnv, env: string): DesiredFlagEnv['prerequisites'] {
@@ -538,7 +538,7 @@ export function mapNeutralSegment(args: MapArgs<NeutralSegment>): NeutralSegment
       }
       out.push({ description: r.description, clauses: clauses.length ? clauses : [{ contextKind: 'user', attribute: 'key', op: 'matches', values: ['.*'], negate: false }], ...(weight ?? {}) });
     }
-    base.rules = out;
+    base.rules = dedupeRuleDescriptions(out, ctx.fidelity);
     for (const inc of source.included) {
       const kind = resolveSourceKind(ctx, inc.contextKind);
       if (inc.values.length > LIST_SEGMENT_MAX) throw new SkipItem(`${inc.values.length.toLocaleString('en-US')} included ${kind} keys exceed LaunchDarkly's ${LIST_SEGMENT_MAX.toLocaleString('en-US')}-key limit`);

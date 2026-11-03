@@ -76,6 +76,29 @@ function path(ctx: ConditionContext, loc: Loc): string {
   return `${ctx.pathPrefix ? `${ctx.pathPrefix} / ` : ''}rule:${loc.ruleId}:cond:${loc.index}`;
 }
 
+/**
+ * KNOWN-EDGE-CASES 4.16: StatSig allows several rules with one name; LaunchDarkly refuses two
+ * rules with the same description in one environment ("duplicate rule description not allowed").
+ * The second and later rules of a name get " (2)", " (3)"…, noted at full fidelity. In place.
+ */
+export function dedupeRuleDescriptions<T extends { description: string }>(rules: T[], fidelity?: FidelityNote[]): T[] {
+  const used = new Set<string>();
+  const renamed: string[] = [];
+  for (const r of rules) {
+    let label = r.description;
+    if (used.has(label)) {
+      let n = 2;
+      while (used.has(`${r.description} (${n})`)) n++;
+      label = `${r.description} (${n})`;
+      renamed.push(label);
+      r.description = label;
+    }
+    used.add(label);
+  }
+  if (renamed.length && fidelity) fidelity.push({ fidelity: 'full', message: `Rule name${renamed.length === 1 ? '' : 's'} repeated in StatSig numbered for LaunchDarkly, which wants one description per rule: ${renamed.map((l) => `“${l}”`).join(', ')}.` });
+  return rules;
+}
+
 function note(ctx: ConditionContext, loc: Loc, fidelity: FidelityNote['fidelity'], message: string) {
   ctx.fidelity.push({ fidelity, message, location: locLabel(ctx, loc) });
 }

@@ -45,6 +45,8 @@ export interface LdSession {
   stale?: string;
   /** A listing refresh is in flight (the guide shows a spinner next to the listing's age). */
   refreshing?: boolean;
+  /** Where the refresh in flight stands ("Reading flags: 300 of 1,480…"), for the plan modal's footer. */
+  refreshProgress?: string;
   error?: string;
 }
 
@@ -304,7 +306,7 @@ export async function refreshLdState(workspaceId: string, opts: { segmentEnvs?: 
   } finally {
     const left = (inFlightRefreshes.get(workspaceId) ?? 1) - 1;
     inFlightRefreshes.set(workspaceId, left);
-    if (left <= 0) set(workspaceId, { refreshing: false });
+    if (left <= 0) set(workspaceId, { refreshing: false, refreshProgress: undefined });
   }
 }
 
@@ -330,7 +332,8 @@ async function readLdState(workspaceId: string, c: LdClient, p: string, seq: num
   };
   const envs = opts.segmentEnvs ?? Object.keys(s.segments ?? {});
   try {
-    const flags = Promise.all([c.listFlags(p), c.listContextKinds(p)]).then(([items, kinds]) =>
+    const onPage = (read: number, total?: number) => set(workspaceId, { refreshProgress: `Reading flags: ${read.toLocaleString()}${total ? ` of ${total.toLocaleString()}` : ''}…` });
+    const flags = Promise.all([c.listFlags(p, { onPage }), c.listContextKinds(p)]).then(([items, kinds]) =>
       apply({ flags: { items, loadedAt: new Date().toISOString() }, contextKinds: kinds.items.filter((k) => !k.archived).map((k) => k.key) }),
     );
     const perEnv = envs.map(async (env) => {

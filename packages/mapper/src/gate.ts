@@ -3,7 +3,7 @@
  * the same flag, decisions and fingerprints. `now` is an input because `time` conditions depend on it.
  */
 import { fingerprint, migratedFromTag, overridesForEnvironment, PROP, resolveRulesForEnvironment, SOURCE_KIND_LABEL, sourceTag, targetingFingerprint, type CanonicalSnapshot, type Condition, type Gate, type Holdout, type MigrationSourceKind } from '@sslm/canonical';
-import { ALWAYS, andDnf, MAX_EXPANSION, NEVER, resolveKind, SkipItem, translateCondition, unique, type ConditionContext, type Dnf, type Loc, resolveUnit, rolloutFor, splitOverrides, type OverrideGroup } from './conditions.ts';
+import { dedupeRuleDescriptions, ALWAYS, andDnf, MAX_EXPANSION, NEVER, resolveKind, SkipItem, translateCondition, unique, type ConditionContext, type Dnf, type Loc, resolveUnit, rolloutFor, splitOverrides, type OverrideGroup } from './conditions.ts';
 import { DecisionCollector, DROP_CONDITION, DROP_RULE, SKIP } from './decisions.ts';
 import { chooseMaintainer } from './maintainer.ts';
 import { sanitizeKey, sanitizeTag } from './profile.ts';
@@ -288,7 +288,7 @@ export function mapGate(args: MapArgs<Gate>): GateMapResult {
       on: enabled,
       offVariation: FAIL,
       fallthrough,
-      rules: [...ov.rules, ...kept],
+      rules: dedupeRuleDescriptions([...ov.rules, ...kept], c.fidelity),
       targets: ov.targets,
       prerequisites: [...prerequisites].sort().map((k) => ({ key: sanitizeKey(k), variation: PASS })),
     };

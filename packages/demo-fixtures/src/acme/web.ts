@@ -470,12 +470,12 @@ export function acmeWeb(): ProjectSeed {
       },
       {
         id: 'sku_preview',
-        description: 'Regex on SKU. Rule 2 uses a lookbehind (not portable across SDK regex engines).',
+        description: 'Regex on SKU. Rule 2 uses a lookbehind (not portable across SDK regex engines). Both rules carry the same name, which StatSig allows and LaunchDarkly does not (edge case 4.16).',
         owner: P.priya,
         tags: ['search'],
         rules: [
-          { name: 'Portable regex', conditions: [{ type: 'custom_field', field: 'sku', operator: 'str_matches', targetValue: '^ACME-[0-9]{4}$' }] },
-          { name: 'Lookbehind regex', conditions: [{ type: 'custom_field', field: 'sku', operator: 'str_matches', targetValue: '(?<=ACME-)9[0-9]{3}' }] },
+          { name: 'SKU regex', conditions: [{ type: 'custom_field', field: 'sku', operator: 'str_matches', targetValue: '^ACME-[0-9]{4}$' }] },
+          { name: 'SKU regex', conditions: [{ type: 'custom_field', field: 'sku', operator: 'str_matches', targetValue: '(?<=ACME-)9[0-9]{3}' }] },
         ],
       },
       {
