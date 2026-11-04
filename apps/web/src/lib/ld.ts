@@ -342,37 +342,28 @@ export function mergeLdSegments(workspaceId: string, updates: { ldEnv: string; k
 }
 
 /**
- * Re-read flags (all environments) and context kinds: after connecting and after every run.
- * `segmentEnvs` also loads segments and experiments in those environments (what a plan and the
- * guide's segment step need); without it, the environments already loaded are re-read. Every
- * list is read in parallel and lands in the session as soon as it is in, so the segments step
- * does not wait for the flag pages. Experimentation reads (metrics, experiments, randomization
- * units) are optional: plans without the add-on answer 403, which must not hide the flags.
+ * Read the LaunchDarkly project: context kinds, the account lists (members, teams, metrics, AI
+ * Configs, experimentation settings) and, with `segmentEnvs`, the segments and experiments of
+ * those environments (what a plan and the guide's segment step need); without it, the
+ * environments already loaded are re-read. Every list is read in parallel and lands in the
+ * session as soon as it is in. Experimentation reads are optional: plans without the add-on
+ * answer 403, which must not hide the flags.
+ *
+ * The flag listing is the expensive part (a project of thousands of flags is dozens of pages,
+ * and every migrated flag is one). It is a cache: the listing on hand, read live in this tab or
+ * restored from the last visit, is kept unless `flags: 'reread'` asks for a fresh one. Only the
+ * user asks for that (the guide's and the plan's "Re-read", monitoring's "Refresh now") or a
+ * migration about to write. A project never listed is read either way.
  */
-/**
- * A flag listing read live in this tab within this long is reused by a refresh that allows it:
- * the plan modal and the guide's segment step. Five minutes covers a re-read from the guide
- * followed by a plan, or two plans in a row, without reading thousands of flags again; the
- * executor still reads each flag it updates and re-checks anything that appeared since.
- */
-export const FRESH_LD_LISTING_MS = 5 * 60_000;
-
 export interface RefreshOptions {
   segmentEnvs?: string[];
-  /**
-   * Keep a flag listing read live in this tab less than this long ago, instead of reading the
-   * project's flags again (segments and the rest are still read). The plan modal and the guide
-   * pass `FRESH_LD_LISTING_MS`: opening one right after the other otherwise reads thousands of
-   * flags twice. A listing restored from the last visit (`stale`) is never reused.
-   */
-  reuseFlagsWithinMs?: number;
+  /** `'reread'` reads the flags again; otherwise (the default) the listing on hand is kept. */
+  flags?: 'keep' | 'reread';
 }
 
-/** True when the session's flag listing was read live within `withinMs` of `now`. */
-export function flagsFresh(s: Pick<LdSession, 'flags' | 'stale'>, withinMs: number | undefined, now = Date.now()): boolean {
-  if (withinMs === undefined || !s.flags || s.stale) return false;
-  const at = Date.parse(s.flags.loadedAt);
-  return Number.isFinite(at) && now - at < withinMs;
+/** Whether a refresh keeps the session's flag listing: there is one, and the caller did not ask for a re-read. */
+export function keepsListing(s: Pick<LdSession, 'flags'>, flags: RefreshOptions['flags']): boolean {
+  return flags !== 'reread' && !!s.flags;
 }
 
 export async function refreshLdState(workspaceId: string, opts: RefreshOptions = {}): Promise<void> {
@@ -415,7 +406,8 @@ async function readLdState(workspaceId: string, c: LdClient, p: string, seq: num
   const envs = opts.segmentEnvs ?? Object.keys(s.segments ?? {});
   try {
     const onPage = (read: number, total?: number) => set(workspaceId, { refreshProgress: `Reading flags: ${read.toLocaleString()}${total ? ` of ${total.toLocaleString()}` : ''}…` });
-    const flags = flagsFresh(s, opts.reuseFlagsWithinMs)
+    const kept = keepsListing(s, opts.flags);
+    const flags = kept
       ? c.listContextKinds(p).then((kinds) => apply({ contextKinds: kinds.items.filter((k) => !k.archived).map((k) => k.key) }))
       : Promise.all([c.listFlags(p, { onPage }), c.listContextKinds(p)]).then(([items, kinds]) =>
           apply({ flags: { items, loadedAt: new Date().toISOString() }, contextKinds: kinds.items.filter((k) => !k.archived).map((k) => k.key) }),
@@ -442,7 +434,8 @@ async function readLdState(workspaceId: string, c: LdClient, p: string, seq: num
       },
     );
     await Promise.all([flags, account, ...perEnv]);
-    if (!apply({ stale: undefined })) return;
+    // A kept listing is as old as it was: its `stale` marker (the time it was read) stays.
+    if (!apply(kept ? {} : { stale: undefined })) return;
     await persistLdState(workspaceId);
   } catch (e) {
     set(workspaceId, { error: `Could not read the LaunchDarkly project: ${(e as Error).message}` });

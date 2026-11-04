@@ -7,6 +7,7 @@
  */
 import type { Owner } from '@sslm/canonical';
 import type { DecisionCollector } from './decisions.ts';
+import { memberByEmail } from './lookup.ts';
 import { sanitizeKey } from './profile.ts';
 import type { DecisionOption, DecisionSubject, FidelityNote, LdDirectory, MappingProfile } from './types.ts';
 
@@ -45,7 +46,7 @@ export function teamKeyForName(profile: MappingProfile, directory: LdDirectory |
 export function memberIdForEmail(profile: MappingProfile, directory: LdDirectory | undefined, email: string): string | undefined {
   const choice = profile.maintainers?.[email];
   if (choice && typeof choice === 'object' && 'memberId' in choice) return choice.memberId;
-  return directory?.members.find((m) => m.email.toLowerCase() === email)?.id;
+  return directory ? memberByEmail(directory).get(email)?.id : undefined;
 }
 
 export function chooseMaintainer(ctx: MaintainerContext, entity: { owner?: Owner; team?: string | null }): MaintainerAssignment {
@@ -81,7 +82,7 @@ function pickMaintainer(ctx: MaintainerContext, entity: { owner?: Owner; team?: 
   if (choice && 'memberId' in choice) return { maintainerId: choice.memberId };
   if (choice && 'teamKey' in choice) return { maintainerTeamKey: choice.teamKey };
 
-  const member = ctx.directory?.members.find((m) => m.email.toLowerCase() === email);
+  const member = ctx.directory ? memberByEmail(ctx.directory).get(email) : undefined;
   if (member) return { maintainerId: member.id };
 
   const readable = ctx.directory?.membersReadable ?? false;

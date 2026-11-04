@@ -5,6 +5,7 @@
  * list of idempotent steps. Pure: LD state is an input.
  */
 import { hasMigratedTag, hasSourceTag, migrationKindOf, readFlagProvenance, readSync, stableStringify, syncedEnvsOf, syncPropertyKey, type Autotune, type CanonicalSnapshot, type Config, type Gate, type MigrationSourceKind, type NeutralFlag, type Prompt } from '@sslm/canonical';
+import { gateById, neutralFlagByKey, neutralSegmentByKey, segmentById } from '@sslm/mapper';
 import {
   decisionPoint,
   lookupResolution,
@@ -329,7 +330,7 @@ export function planMigration(req: PlanRequest): Plan {
   ensureKinds((req.contextKinds ?? []).map((k) => ({ kind: 'context_kind', key: k.key, entityId: k.unitType })));
 
   const planSegment = (snapshot: CanonicalSnapshot, segmentId: string, statsigEnv: string, ldEnv: string, requiredBy: string | null, stack: string[] = []): { stepId?: string; ok: boolean; reason?: string } => {
-    const seg = snapshot.segments.find((s) => s.id === segmentId);
+    const seg = segmentById(snapshot).get(segmentId);
     if (!seg) return { ok: false, reason: `segment “${segmentId}” not found` };
     if (stack.includes(seg.uid)) return { ok: false, reason: `segment “${segmentId}” references itself through other segments` };
     const itemKey = `${seg.uid}|${ldEnv}`;
@@ -482,7 +483,7 @@ export function planMigration(req: PlanRequest): Plan {
         if (s.ok && s.stepId) depSteps.push(s.stepId);
         else depProblems.push(s.reason ?? `segment ${d.key}`);
       } else if (d.kind === 'flag') {
-        const ref = snapshot.gates.find((g) => g.id === d.entityId);
+        const ref = d.entityId === undefined ? undefined : gateById(snapshot).get(d.entityId);
         if (!ref) {
           depProblems.push(`prerequisite gate “${d.entityId}” not found`);
           continue;
@@ -603,7 +604,7 @@ export function planMigration(req: PlanRequest): Plan {
         if (s.ok && s.stepId) depSteps.push(s.stepId);
         else depProblems.push(s.reason ?? `segment ${d.key}`);
       } else if (d.kind === 'flag') {
-        const ref = snapshot.gates.find((g) => g.id === d.entityId);
+        const ref = d.entityId === undefined ? undefined : gateById(snapshot).get(d.entityId);
         if (!ref) {
           depProblems.push(`prerequisite gate “${d.entityId}” not found`);
           continue;
@@ -786,7 +787,7 @@ export function planMigration(req: PlanRequest): Plan {
   const segmentsByUid = new Map(req.snapshots.flatMap((s) => s.segments.map((g) => [g.uid, { segment: g, snapshot: s }] as const)));
 
   const planNeutralSegment = (snapshot: CanonicalSnapshot, key: string, sourceEnv: string, ldEnv: string, requiredBy: string | null, stack: string[] = []): { stepId?: string; ok: boolean; reason?: string } => {
-    const seg = snapshot.neutral?.segments.find((g) => g.key === key);
+    const seg = neutralSegmentByKey(snapshot).get(key);
     if (!seg) return { ok: false, reason: `segment “${key}” not found` };
     if (stack.includes(seg.uid)) return { ok: false, reason: `segment “${key}” references itself through other segments` };
     const itemKey = `${seg.uid}|${ldEnv}`;
@@ -894,7 +895,7 @@ export function planMigration(req: PlanRequest): Plan {
         if (sg.ok && sg.stepId) depSteps.push(sg.stepId);
         else depProblems.push(sg.reason ?? `segment ${d.key}`);
       } else if (d.kind === 'flag') {
-        const ref = snapshot.neutral?.flags.find((f) => f.key === d.entityId);
+        const ref = d.entityId === undefined ? undefined : neutralFlagByKey(snapshot).get(d.entityId);
         if (!ref) {
           depProblems.push(`prerequisite flag “${d.entityId}” not found`);
           continue;
@@ -1030,29 +1031,41 @@ export function planMigration(req: PlanRequest): Plan {
     }
   }
 
-  // A step whose dependency was dropped (blocked item) can't run either.
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const [id, s] of steps) {
-      if (s.deps.some((d) => !steps.has(d))) {
-        steps.delete(id);
-        changed = true;
-      }
+  // A step whose dependency was dropped (blocked item) can't run either. Dropping one step can
+  // orphan its dependents, so the removal follows the reverse edges (each step is visited once).
+  const dependents = new Map<string, string[]>();
+  for (const s of steps.values()) {
+    for (const d of s.deps) {
+      const xs = dependents.get(d);
+      if (xs) xs.push(s.id);
+      else dependents.set(d, [s.id]);
     }
+  }
+  const orphaned = [...steps.values()].filter((s) => s.deps.some((d) => !steps.has(d))).map((s) => s.id);
+  while (orphaned.length) {
+    const id = orphaned.pop()!;
+    if (!steps.delete(id)) continue;
+    orphaned.push(...(dependents.get(id) ?? []));
   }
   // Drop dependencies nothing needs any more: shells whose environment steps were removed, and
   // segments / context kinds whose only dependents are blocked (they'd be written for nothing).
+  // A step is kept while something still depends on it; dropping it may free its own dependencies.
   const requestedSegmentSteps = new Set([...items.values()].filter((i) => i.kind === 'segment' && !i.dependency && i.status === 'ready').map((i) => `segment:${i.ldEnv}:${i.ldKey}`));
   // Context kinds asked for on their own (guide step 3) are wanted even with nothing depending on them.
   const requestedKindSteps = new Set((req.contextKinds ?? []).map((k) => `context_kind:${k.key}`));
-  changed = true;
-  while (changed) {
-    changed = false;
-    for (const [id, s] of steps) {
-      if (s.op === 'update_flag_env' || s.op === 'create_bandit' || s.op === 'upsert_ai_config' || requestedSegmentSteps.has(id) || requestedKindSteps.has(id) || [...steps.values()].some((x) => x.deps.includes(id))) continue;
-      steps.delete(id);
-      changed = true;
+  const wanted = (s: PlanStep) => s.op === 'update_flag_env' || s.op === 'create_bandit' || s.op === 'upsert_ai_config' || requestedSegmentSteps.has(s.id) || requestedKindSteps.has(s.id);
+  const dependentCount = new Map<string, number>();
+  for (const s of steps.values()) for (const d of new Set(s.deps)) dependentCount.set(d, (dependentCount.get(d) ?? 0) + 1);
+  const unneeded = [...steps.values()].filter((s) => !wanted(s) && !(dependentCount.get(s.id) ?? 0)).map((s) => s.id);
+  while (unneeded.length) {
+    const s = steps.get(unneeded.pop()!);
+    if (!s) continue;
+    steps.delete(s.id);
+    for (const d of new Set(s.deps)) {
+      const n = (dependentCount.get(d) ?? 1) - 1;
+      dependentCount.set(d, n);
+      const dep = steps.get(d);
+      if (n === 0 && dep && !wanted(dep)) unneeded.push(d);
     }
   }
 
@@ -1135,7 +1148,17 @@ export function requestsFor(s: PlanStep): number {
  */
 export function topoSort(steps: PlanStep[], errors: string[], envOrder: string[] = []): PlanStep[] {
   const byId = new Map(steps.map((s) => [s.id, s]));
-  const indegree = new Map(steps.map((s) => [s.id, s.deps.filter((d) => byId.has(d)).length]));
+  // Duplicate dependency ids count once, so a step is freed exactly when its last distinct dependency ran.
+  const indegree = new Map(steps.map((s) => [s.id, new Set(s.deps.filter((d) => byId.has(d))).size]));
+  const dependents = new Map<string, string[]>();
+  for (const s of steps) {
+    for (const d of new Set(s.deps)) {
+      if (!byId.has(d)) continue;
+      const xs = dependents.get(d);
+      if (xs) xs.push(s.id);
+      else dependents.set(d, [s.id]);
+    }
+  }
   const PROJECT = ['context_kind', 'randomization_unit', 'metric', 'shell', 'ai_config'];
   const PER_ENV = ['segment', 'env', 'bandit'];
   const order = (id: string) => {
@@ -1145,23 +1168,35 @@ export function topoSort(steps: PlanStep[], errors: string[], envOrder: string[]
     const e = envOrder.indexOf(env ?? '');
     return `1:${String(e < 0 ? envOrder.length : e).padStart(3, '0')}:${PER_ENV.indexOf(op)}:${id}`;
   };
-  const queue = steps.filter((s) => indegree.get(s.id) === 0).map((s) => s.id).sort((a, b) => order(a).localeCompare(order(b)));
-  const out: PlanStep[] = [];
-  while (queue.length) {
-    const id = queue.shift()!;
-    out.push(byId.get(id)!);
-    const freed: string[] = [];
-    for (const s of steps) {
-      if (!s.deps.includes(id)) continue;
-      const n = indegree.get(s.id)! - 1;
-      indegree.set(s.id, n);
-      if (n === 0) freed.push(s.id);
+  const keys = new Map(steps.map((s) => [s.id, order(s.id)]));
+  const before = (a: string, b: string) => keys.get(a)!.localeCompare(keys.get(b)!);
+  // The ready queue stays sorted: a freed step is inserted at its place (binary search), so the
+  // whole queue is never re-sorted per step. Plans run to thousands of steps.
+  const queue = steps.filter((s) => indegree.get(s.id) === 0).map((s) => s.id).sort(before);
+  let head = 0;
+  const insert = (id: string) => {
+    let lo = head;
+    let hi = queue.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (before(queue[mid]!, id) <= 0) lo = mid + 1;
+      else hi = mid;
     }
-    queue.push(...freed);
-    queue.sort((a, b) => order(a).localeCompare(order(b)));
+    queue.splice(lo, 0, id);
+  };
+  const out: PlanStep[] = [];
+  while (head < queue.length) {
+    const id = queue[head++]!;
+    out.push(byId.get(id)!);
+    for (const next of dependents.get(id) ?? []) {
+      const n = indegree.get(next)! - 1;
+      indegree.set(next, n);
+      if (n === 0) insert(next);
+    }
   }
   if (out.length < steps.length) {
-    const stuck = steps.filter((s) => !out.includes(s)).map((s) => s.id);
+    const done = new Set(out.map((s) => s.id));
+    const stuck = steps.filter((s) => !done.has(s.id)).map((s) => s.id);
     errors.push(`Dependency cycle between: ${stuck.join(', ')}.`);
   }
   return out;

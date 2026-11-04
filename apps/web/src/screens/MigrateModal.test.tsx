@@ -109,7 +109,7 @@ describe('opening the plan', () => {
   afterAll(() => server.close());
   afterEach(cleanup);
 
-  it('shows the plan from the current LaunchDarkly listing at once, and lets it run only once the fresh read has landed', async () => {
+  it('shows the plan from the listing on hand, lets a dry run go without reading LaunchDarkly, and re-reads on request', async () => {
     const web = await acmeSnapshot('web');
     const gate = web.gates.find((g) => g.id === 'new_checkout_flow')!;
     const m = {
@@ -139,29 +139,42 @@ describe('opening the plan', () => {
     }
     const src: SourceRecord = { id: web.source.sourceId, workspaceId: 'w', alias: 'web', label: 'acme-web', kind: 'config_spec', createdAt: NOW };
     render(<MigrateModal workspaceId="w" selection={{ gates: [gate.uid], autotunes: [] }} ldEnvs={['test']} sources={[src]} snapshots={[web]} m={m} onClose={vi.fn()} />);
-    // The plan is on screen before the read completes, and the footer says the read is in progress.
+    // The plan is on screen at once, from the listing on hand: nothing is read from LaunchDarkly.
     expect(screen.getAllByText('new_checkout_flow').length).toBeGreaterThan(0);
+    expect(refresh.calls).toBe(0);
     // The environment choice comes before the flag list, so it is in view however long the plan is.
     const envSection = screen.getByRole('region', { name: 'Environment targeting' });
     const flagsSection = screen.getByRole('region', { name: 'Flags' });
     expect(envSection.compareDocumentPosition(flagsSection) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(screen.getByText('Checking LaunchDarkly for the latest state…')).toBeTruthy();
-    // One status line while the read runs: no "Ready." beside the spinner, and the buttons say what they wait for.
+    // The check on open covers the StatSig ID lists only; once it lands the dry run can go.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    expect(refresh.calls).toBe(0);
+    expect(screen.getByText('Ready.')).toBeTruthy();
+    // The footer says how old the listing is, offers a re-read, and says a run re-reads anyway.
+    expect(screen.getByText(/LaunchDarkly as read .* ago\./)).toBeTruthy();
+    expect(screen.getByText('Migrate re-reads it before writing.')).toBeTruthy();
+    const dryRun = screen.getByRole('button', { name: 'Dry run' }) as HTMLButtonElement;
+    expect(dryRun.disabled).toBe(false);
+    expect(dryRun.title).toBe('');
+    // Re-read: one status line while the read runs, no "Ready." beside the spinner, buttons say what they wait for.
+    fireEvent.click(screen.getByRole('button', { name: 'Re-read' }));
+    expect(refresh.calls).toBe(1);
+    expect(screen.getByText('Reading LaunchDarkly…')).toBeTruthy();
     expect(screen.getByText('Dry run and Migrate enable once it lands.')).toBeTruthy();
     expect(screen.queryByText('Ready.')).toBeNull();
-    const dryRun = screen.getByRole('button', { name: 'Dry run' }) as HTMLButtonElement;
     expect(dryRun.disabled).toBe(true);
-    expect(dryRun.title).toBe('Waiting for the fresh read of LaunchDarkly to land');
-    expect(refresh.calls).toBe(1);
+    expect(dryRun.title).toBe('Waiting for the check to finish');
     await act(async () => {
       refresh.resolve();
       await new Promise((r) => setTimeout(r, 20));
     });
-    expect(screen.queryByText('Checking LaunchDarkly for the latest state…')).toBeNull();
+    expect(screen.queryByText('Reading LaunchDarkly…')).toBeNull();
     expect(screen.queryByText('Dry run and Migrate enable once it lands.')).toBeNull();
-    expect(screen.queryByText(/Could not read the latest LaunchDarkly state/)).toBeNull();
+    expect(screen.queryByText(/Could not read LaunchDarkly/)).toBeNull();
+    expect(screen.getByText('Ready.')).toBeTruthy();
     expect(dryRun.disabled).toBe(false);
-    expect(dryRun.title).toBe('');
   });
 });
 
@@ -179,7 +192,8 @@ describe('run progress', () => {
     steps: [...Array.from({ length: 300 }, (_, i) => stepRec(i, i === 7 ? 'failed' : 'done')), stepRec(300, 'running'), ...Array.from({ length: 2000 }, (_, i) => stepRec(301 + i, 'pending'))],
   });
 
-  it('lists a window around the running step, keeps failed steps in view, and can show everything', () => {
+  // Renders every one of 2,269 rows on "Show all": slow under the full suite's load, so it gets its own budget.
+  it('lists a window around the running step, keeps failed steps in view, and can show everything', { timeout: 30_000 }, () => {
     render(<RunProgress run={bigRun()} title="Migrating" />);
     const rows = () => screen.getAllByRole('listitem');
     // 12 before + the running one + 19 after, the failed step from above, and the two summaries.
@@ -187,10 +201,11 @@ describe('run progress', () => {
     expect(screen.getByText('Context kind k300')).toBeTruthy();
     expect(screen.getByText('Context kind k7')).toBeTruthy();
     expect(screen.queryByText('Context kind k0')).toBeNull();
-    expect(screen.getByText(/288 earlier steps \(287 done, 1 failed\)/)).toBeTruthy();
+    // Earlier steps are done unless said otherwise: only the exceptions are tallied.
+    expect(screen.getByText(/288 earlier steps \(1 failed\)/)).toBeTruthy();
     // Number formatting follows the runtime's locale; the count is what matters.
-    const more = screen.getByText(/more steps \(.* pending\)/).textContent ?? '';
-    expect(more.replace(/[,.\u202f\u00a0]/g, '')).toMatch(/^1981 more steps \(1981 pending\)$/);
+    const more = screen.getByText(/more steps/).textContent ?? '';
+    expect(more.replace(/[,.\u202f\u00a0]/g, '')).toMatch(/^1981 more steps$/);
     fireEvent.click(screen.getByRole('button', { name: /^Show all .*steps$/ }));
     expect(rows().length).toBe(2301);
   });

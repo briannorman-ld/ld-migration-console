@@ -127,7 +127,7 @@ export async function resetLdProject(workspaceId: string, ld: LdSession, plan: R
   await store.clearMonitoring(workspaceId);
   // The environment list may have changed: re-probe, then re-read flags and segments.
   await reprobe(workspaceId);
-  await refreshLdState(workspaceId);
+  await refreshLdState(workspaceId, { flags: 'reread' });
   return report;
 }
 

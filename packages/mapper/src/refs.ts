@@ -5,6 +5,7 @@
  */
 import { overridesForEnvironment, resolveRulesForEnvironment, targetingFingerprint, type Gate } from '@sslm/canonical';
 import { ALWAYS, andDnf, MAX_EXPANSION, NEVER, notDnf, resolveKind, translateCondition, type ConditionContext, type Dnf, resolveUnit } from './conditions.ts';
+import { gateById } from './lookup.ts';
 import type { EnvTarget, LdClause } from './types.ts';
 
 const MAX_DEPTH = 4;
@@ -43,7 +44,7 @@ export function inlineGate(ctx: ConditionContext, state: InlineState, gateId: st
 }
 
 function computeInline(ctx: ConditionContext, state: InlineState, gateId: string, negate: boolean): InlineResult {
-  const gate = ctx.snapshot.gates.find((g) => g.id === gateId);
+  const gate = gateById(ctx.snapshot).get(gateId);
   if (!gate) return { ok: false, reason: `gate “${gateId}” is not in this StatSig snapshot` };
   if (gate.archived) return { ok: false, reason: `gate “${gateId}” is archived` };
   if (state.stack.includes(gateId) || gate.uid === ctx.subject.uid) return { ok: false, reason: `gate references form a cycle (${[...state.stack, gateId].join(' → ')})` };

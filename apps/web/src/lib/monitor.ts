@@ -73,12 +73,13 @@ export function useMonitorError(workspaceId: string): string | undefined {
 }
 
 /**
- * "Refresh now" and the 15-minute tick: re-read flags, read flag statuses for every LD environment,
- * record samples, save the check. StatSig is not re-crawled here (that is the sidebar's refresh,
- * within the Console API budget); spec sources refresh when a file is uploaded. With
- * `reuseListing`, the check runs against the listing the session holds (the one kept from the
- * last read, on open) and reads only the flag statuses: the check on open costs one request per
- * environment instead of every flag page again.
+ * "Refresh now": re-read the flags, read flag statuses for every LD environment, record samples,
+ * save the check. StatSig is not re-crawled here (that is the sidebar's refresh, within the
+ * Console API budget); spec sources refresh when a file is uploaded. With `reuseListing` (the
+ * check on open and the 15-minute tick), the check runs against the listing the session holds
+ * and reads only the flag statuses: one request per environment instead of every flag page
+ * again. A change made in LaunchDarkly itself therefore shows after "Refresh now" (or any other
+ * re-read of the project), not on its own.
  */
 export async function checkMonitor(workspaceId: string, ld: LdSession, snapshots: CanonicalSnapshot[], opts: { reuseListing?: boolean } = {}): Promise<void> {
   if (!ld.projectKey || ld.status !== 'connected' || checking.has(workspaceId)) return;
@@ -86,7 +87,7 @@ export async function checkMonitor(workspaceId: string, ld: LdSession, snapshots
   errors.delete(workspaceId);
   notify();
   try {
-    if (!(opts.reuseListing && ldSessionSnapshot(workspaceId).flags)) await refreshLdState(workspaceId);
+    if (!(opts.reuseListing && ldSessionSnapshot(workspaceId).flags)) await refreshLdState(workspaceId, { flags: 'reread' });
     const c = ldClient(workspaceId);
     const envs = (ld.matrix?.environments ?? []).map((e) => e.key);
     const statuses: MonitorStateRecord['statuses'] = {};
@@ -133,9 +134,10 @@ export async function checkMonitor(workspaceId: string, ld: LdSession, snapshots
 }
 
 /**
- * Run a check when the LD connection is ready, then every 15 minutes while the tab is open. The
- * first check uses the listing the session holds (on open, the one kept from the last read); the
- * ticks re-read the project, so a change made in LaunchDarkly shows up within the interval.
+ * Run a check when the LD connection is ready, then every 15 minutes while the tab is open. Every
+ * check uses the listing the session holds and reads only the flag statuses: the flags are a
+ * cache that the user refreshes ("Refresh now", the guide's "Re-read") or a migration re-reads.
+ * Reading thousands of flags every quarter hour, in every open tab, made the app crawl.
  */
 export function useMonitorSchedule(workspaceId: string, ld: LdSession, snapshots: CanonicalSnapshot[], enabled: boolean): void {
   const ready = enabled && ld.status === 'connected' && !!ld.matrix && snapshots.length > 0;
@@ -143,7 +145,7 @@ export function useMonitorSchedule(workspaceId: string, ld: LdSession, snapshots
   useEffect(() => {
     if (!ready) return;
     void checkMonitor(workspaceId, ld, snapshots, { reuseListing: true });
-    const t = window.setInterval(() => void checkMonitor(workspaceId, ld, snapshots), MONITOR_INTERVAL_MS);
+    const t = window.setInterval(() => void checkMonitor(workspaceId, ld, snapshots, { reuseListing: true }), MONITOR_INTERVAL_MS);
     return () => window.clearInterval(t);
     // `ld` changes identity on every session patch; re-running on connection/project only.
     // eslint-disable-next-line react-hooks/exhaustive-deps

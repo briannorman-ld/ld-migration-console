@@ -3,6 +3,7 @@ import type { CanonicalSnapshot } from '@sslm/canonical';
 import { LD_INSTANCES } from '@sslm/ld-client';
 import { countByStatus, describeLifecycle, describeStatus, DRIFTED, funnel, statusCsv, statusMarkdown, type Lifecycle, type MonitorAlert, type MonitorRow, type MonitorStatus } from '@sslm/monitoring';
 import type { SourceRecord, WorkspaceRecord } from '@sslm/store';
+import { PagerBar, usePager } from '../components/Pager.tsx';
 import { Badge, Button, Callout, Card, cx, Input, PageTitle, Select, Spinner, type Tone } from '../components/ui.tsx';
 import { demoTimeline, demoTimelineSteps, setDemoTimeline } from '../lib/demo.ts';
 import type { LdSession } from '../lib/ld.ts';
@@ -134,6 +135,8 @@ export function MonitoringPanel(p: MonitoringPanelProps) {
     const needle = q.trim().toLowerCase();
     return monitored.filter((r) => (env === 'all' || r.ldEnv === env) && (status === 'all' || (status === 'attention' ? DRIFTED.has(r.status) : r.status === status)) && (!needle || r.id.toLowerCase().includes(needle) || r.flagKey.toLowerCase().includes(needle)));
   }, [monitored, env, status, q]);
+  // A migrated project has thousands of (flag, environment) rows: one page of them at a time.
+  const pager = usePager(visible);
   const ldBase = p.ld.projectKey ? `${LD_INSTANCES[p.ld.instance ?? 'us'].origin}/projects/${p.ld.projectKey}/flags` : undefined;
   const now = new Date().toISOString();
   const spec = (r: MonitorRow) => r.checksPerHour === undefined;
@@ -252,6 +255,7 @@ export function MonitoringPanel(p: MonitoringPanelProps) {
           </tbody>
         </table>
       </Card>
+      <PagerBar pager={pager} label="items" className="mt-3" />
 
       <div className="flex flex-wrap items-center gap-2">
         <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter by StatSig ID or flag key" aria-label="Filter items" className="w-64 py-1" />
@@ -291,7 +295,7 @@ export function MonitoringPanel(p: MonitoringPanelProps) {
             </tr>
           </thead>
           <tbody>
-            {visible.map((r) => (
+            {pager.slice.map((r) => (
               <tr key={`${r.flagKey}|${r.ldEnv}`} className="border-t border-line align-top">
                 <td className="px-3 py-2">
                   <div className="flex flex-wrap items-center gap-1.5">

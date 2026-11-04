@@ -1,3 +1,4 @@
+import { indexByKey } from '../lib/indexByKey.ts';
 import { Fragment, useMemo, useState, type Dispatch, type SetStateAction } from 'react';
 import type { CanonicalSnapshot, NeutralFlag, NeutralSegment } from '@sslm/canonical';
 import { optionLabel, type DecisionType, type NeutralFlagMapResult, type NeutralSegmentMapResult } from '@sslm/mapper';
@@ -104,7 +105,8 @@ export function LdSourceSideBySide({
           const result = mapNeutralSegmentFor(snap, g, { statsig: env, ld: ldEnv ?? env }, m);
           // Segments carry no sync record: the strip says whether the target has one of ours in each environment.
           const strip = envPairs.map(({ le, se }) => {
-            const existing = m.ld.segments?.[le]?.find((x) => x.key === g.key);
+            const list = m.ld.segments?.[le];
+            const existing = list ? indexByKey(list).get(g.key) : undefined;
             const status: MigrationStatus = !se ? 'not_in_ld' : !existing ? 'not_in_ld' : ownsSegment({ key: existing.key, tags: existing.tags ?? [] }, snap.source.alias) ? 'in_sync' : 'foreign';
             return { ldEnv: le, status };
           });

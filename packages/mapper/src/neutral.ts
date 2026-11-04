@@ -25,6 +25,7 @@ import {
 import { dedupeRuleDescriptions, LIST_SEGMENT_MAX, SkipItem, unique } from './conditions.ts';
 import { DecisionCollector, DROP_CONDITION, DROP_RULE, SKIP, plannedContextKinds, plannedKindOptions } from './decisions.ts';
 import { provenanceProperties, report, type MapArgs, type MapOutcome } from './gate.ts';
+import { neutralFlagByKey, neutralSegmentByKey } from './lookup.ts';
 import { chooseMaintainer } from './maintainer.ts';
 import { configuredUnit, kindFromChoice, sanitizeTag } from './profile.ts';
 import type { CustomProperty, DecisionOption, DecisionSubject, Dependency, DesiredFlagEnv, DesiredFlagShell, DesiredRule, DesiredSegment, DesiredSegmentRule, DesiredTarget, FidelityNote, LdClause, LdOperator, VariationOrRollout } from './types.ts';
@@ -167,7 +168,7 @@ function translateClause(ctx: Ctx, c: NeutralClause, loc: Loc, env: string, inSe
   }
   if (c.op === 'segmentMatch') {
     const missing = c.values.map(String).filter((key) => {
-      const seg = ctx.snapshot.neutral?.segments.find((s) => s.key === key);
+      const seg = neutralSegmentByKey(ctx.snapshot).get(key);
       return !seg || !neutralSegmentEnvOf(seg, env);
     });
     if (missing.length) {
@@ -367,7 +368,7 @@ function translatePrerequisites(ctx: Ctx, source: NeutralFlagEnv, env: string): 
   }
   const out: DesiredFlagEnv['prerequisites'] = [];
   for (const p of source.prerequisites) {
-    const ref = ctx.snapshot.neutral?.flags.find((f) => f.key === p.key);
+    const ref = neutralFlagByKey(ctx.snapshot).get(p.key);
     if (!ref || ref.archived || !neutralEnvOf(ref, env)) {
       const choice = ctx.decisions.choose(
         {

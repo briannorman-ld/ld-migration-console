@@ -18,3 +18,4 @@ export { mapAutotune, percent as banditPercent, BANDIT_REALLOCATION_MS, type Aut
 export { mapNeutralFlag, mapNeutralSegment, resolveSourceKind, LD_OPERATORS, type NeutralFlagMapResult, type NeutralSegmentMapResult } from './neutral.ts';
 export { mapPrompt, type PromptMapResult } from './prompt.ts';
 export { chooseMaintainer, memberIdForEmail, memberOption, teamKeyFor, teamKeyForName, teamOption, type MaintainerAssignment } from './maintainer.ts';
+export { gateById, segmentById, neutralFlagByKey, neutralSegmentByKey, memberByEmail } from './lookup.ts';

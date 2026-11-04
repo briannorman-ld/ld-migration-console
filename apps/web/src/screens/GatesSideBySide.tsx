@@ -367,12 +367,16 @@ export function FlagSideBySide({
       for (const r of selectable) if (allSelected) n.delete(r.gate.uid); else n.add(r.gate.uid);
       return n;
     });
-  const clearOwn = () => setSelected((x) => new Set([...x].filter((uid) => !rows.some((r) => r.gate.uid === uid))));
+  const clearOwn = () => {
+    const own = new Set(rows.map((r) => r.gate.uid));
+    setSelected((x) => new Set([...x].filter((uid) => !own.has(uid))));
+  };
   // "Don't migrate" for the whole selection: the mark carries the usage reason when every item agrees.
   const setAsideSelected = async () => {
     const uids = selectedRows.map((r) => r.gate.uid);
     await m.exclude(uids, suggestedReason(selectedRows.map((r) => r.usage)));
-    setSelected((x) => new Set([...x].filter((uid) => !uids.includes(uid))));
+    const gone = new Set(uids);
+    setSelected((x) => new Set([...x].filter((uid) => !gone.has(uid))));
   };
 
   return (

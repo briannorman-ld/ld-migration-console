@@ -13,6 +13,7 @@
 import { normalizeCondition, toArray, type CanonicalSnapshot, type Condition, type Segment } from '@sslm/canonical';
 import { DROP_CONDITION, DROP_RULE, SKIP, type DecisionCollector, plannedContextKinds, plannedKindOptions } from './decisions.ts';
 import { attributeFor, attributeOption, configuredUnit, defaultKindFor, sanitizeKey, unitFromChoice, type UnitTarget } from './profile.ts';
+import { segmentById } from './lookup.ts';
 import type { DecisionOption, DecisionSubject, Dependency, DesiredRule, DesiredTarget, FidelityNote, IdListCoverages, IdLists, LdClause, LdDirectory, LdOperator, LdRollout, MapperCapabilities, MappingProfile } from './types.ts';
 
 export type Dnf = LdClause[][];
@@ -992,7 +993,7 @@ export function hashedListChoice(ctx: ConditionContext, seg: Segment, fragment: 
 function segmentCondition(ctx: ConditionContext, c: Condition, loc: Loc, ids: string[], negate: boolean): Dnf {
   const clauses: LdClause[] = [];
   for (const id of ids) {
-    const seg = ctx.snapshot.segments.find((s) => s.id === id);
+    const seg = segmentById(ctx.snapshot).get(id);
     const blocked = (type: 'missing_reference' | 'id_list_unavailable', title: string, explanation: string): Dnf => {
       const { choice, resolved } = ctx.decisions.chooseEx(
         { type, severity: 'blocking', subject: subjectAt(ctx, loc), path: `${path(ctx, loc)}:segment:${id}`, title, explanation, sourceFragment: c.raw, fingerprintOf: { segment: id, type }, options: [DROP_CONDITION, DROP_RULE, SKIP] },

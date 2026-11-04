@@ -20,6 +20,7 @@ import { parseFooter, type Alert, type CanonicalSnapshot, type EntityKind } from
 import { kindFor, teamKeyForName, type DecisionPoint } from '@sslm/mapper';
 import { migrationStatus, ownsSegment } from '@sslm/planner';
 import type { AccountAccess, SourceRecord } from '@sslm/store';
+import { indexByKey } from './indexByKey.ts';
 import { ldConnecting, type LdSession } from './ld.ts';
 import { ldFlagState, mapAutotuneFor, mapConfigFor, mapGateFor, mapPromptFor, mapSegmentFor, type DecisionInstance, type MappingInputs } from './migration.ts';
 
@@ -329,7 +330,8 @@ export function computeGuide(input: GuideInput): GuideModel {
       for (const p of snapshot.prompts ?? []) {
         if (p.archived) continue;
         const r = mapPromptFor(snapshot, p, m);
-        const existing = ldAiConfigs?.find((a) => a.key === r.key && ownsSegment({ key: a.key, tags: a.tags ?? [] }, snapshot.source.alias));
+        const hit = ldAiConfigs ? indexByKey(ldAiConfigs).get(r.key) : undefined;
+        const existing = hit && ownsSegment({ key: hit.key, tags: hit.tags ?? [] }, snapshot.source.alias) ? hit : undefined;
         const fp = existing ? parseFooter(existing.description)?.fp : undefined;
         add(prompts, p.uid, setAside(p.uid) ? 'set_aside' : classify(r, { status: !existing ? 'absent' : fp === r.statsigFingerprint ? 'in_sync' : 'changed' }));
       }
@@ -341,7 +343,8 @@ export function computeGuide(input: GuideInput): GuideModel {
         if (seg.archived) continue;
         const r = mapSegmentFor(snapshot, seg, target, m);
         noteDeps(r.dependencies);
-        const existing = ldSegments?.find((s) => s.key === r.segmentKey && ownsSegment({ key: s.key, tags: s.tags ?? [] }, snapshot.source.alias));
+        const hit = ldSegments ? indexByKey(ldSegments).get(r.segmentKey) : undefined;
+        const existing = hit && ownsSegment({ key: hit.key, tags: hit.tags ?? [] }, snapshot.source.alias) ? hit : undefined;
         const fp = existing ? parseFooter(existing.description)?.fp : undefined;
         add(segments, seg.uid, setAside(seg.uid) ? 'set_aside' : classify(r, { status: !existing ? 'absent' : fp === r.statsigFingerprint ? 'in_sync' : 'changed' }));
       }

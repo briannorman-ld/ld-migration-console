@@ -16,7 +16,7 @@ import {
   Input,
   Spinner,
 } from "../components/ui.tsx";
-import { FRESH_LD_LISTING_MS, ldSessionSnapshot, refreshLdState, useLdSession } from "../lib/ld.ts";
+import { ldSessionSnapshot, refreshLdState, useLdSession } from "../lib/ld.ts";
 import {
   buildPlan,
   cancelRun,
@@ -32,6 +32,7 @@ import {
   type MigrationSelection,
 } from "../lib/migration.ts";
 import { describeRemaining, formatDuration, runProgress } from "../lib/runProgress.ts";
+import { timeAgo } from "../lib/time.ts";
 import { groupRunErrors, runErrorCounts, runErrorCsv, runErrorReport } from "../lib/runErrors.ts";
 import type { MigrationContext } from "../lib/useMigration.ts";
 
@@ -62,9 +63,11 @@ type Phase =
   | { kind: "error"; message: string };
 
 /**
- * The background check that runs when the modal opens: a fresh read of the LD project and the
- * deferred ID lists. The plan shows at once from the session's current listing and rebuilds as
- * the check lands; Dry run and Migrate wait for `ready`, so a run never goes out on stale state.
+ * The background check that runs when the modal opens: the deferred StatSig ID lists, and the
+ * LaunchDarkly project when it has never been listed. The plan shows at once from the listing on
+ * hand (a cache, as old as the footer says) and rebuilds as the check lands; Dry run and Migrate
+ * wait for `ready`. A real run re-reads LaunchDarkly first, so a write never goes out on stale
+ * state; the user can also re-read from the footer at any time.
  */
 type Check = { kind: "checking"; message: string } | { kind: "ready" } | { kind: "error"; message: string };
 
@@ -90,7 +93,11 @@ export function MigrateModal({
   // With a listing in the session (live, or the copy saved on the last read) the plan shows at
   // once; only a workspace that has never read the project waits for the first read.
   const [phase, setPhase] = useState<Phase>(() => (m.ld.flags ? { kind: "plan" } : { kind: "loading", message: "Reading the LaunchDarkly project…" }));
-  const [check, setCheck] = useState<Check>({ kind: "checking", message: "Checking LaunchDarkly for the latest state…" });
+  const [check, setCheck] = useState<Check>({ kind: "checking", message: m.ld.flags ? "Checking the StatSig ID lists…" : "Reading the LaunchDarkly project…" });
+  // Migrate re-reads LaunchDarkly first; the run starts (below) once the plan has been rebuilt on
+  // the fresh listing, and only when that plan is still the one the user confirmed.
+  const [pendingRun, setPendingRun] = useState<{ steps: number; decisions: number }>();
+  const [notice, setNotice] = useState<string>();
   const [confirm, setConfirm] = useState("");
   const [showSteps, setShowSteps] = useState(false);
   const [lastDry, setLastDry] = useState<RunRecord>();
@@ -110,15 +117,32 @@ export function MigrateModal({
   // changes only when the listing itself does, so the plan is not rebuilt per page.
   const live = useLdSession(workspaceId);
 
-  // Load what a run needs: the latest LD state, segments in the target environments and the
-  // deferred ID lists. The plan on screen rebuilds as each part lands (the session changes).
+  /** Read the LaunchDarkly project with the segments of the chosen environments; `reread` reads the flags again, `keep` reuses the listing on hand. */
+  const readLd = async (flags: "keep" | "reread") => {
+    await refreshLdState(workspaceId, { segmentEnvs: ldEnvs, flags });
+    const ldError = ldSessionSnapshot(workspaceId).error;
+    if (ldError) throw new Error(ldError);
+  };
+  /** The footer's "Re-read", and the read before a run: the plan rebuilds as the listing lands. */
+  const reread = (message: string, onError?: () => void) => {
+    setCheck({ kind: "checking", message });
+    readLd("reread").then(
+      () => setCheck({ kind: "ready" }),
+      (e: Error) => {
+        onError?.();
+        setCheck({ kind: "error", message: e.message });
+      },
+    );
+  };
+  // Load what a plan needs and does not have: the LD project when it was never listed (the
+  // listing on hand is otherwise used as it is), and the deferred StatSig ID lists. The plan on
+  // screen rebuilds as each part lands (the session changes).
   const runCheck = (cancelled: () => boolean) => {
-    setCheck({ kind: "checking", message: "Checking LaunchDarkly for the latest state…" });
+    const listed = !!m.ld.flags;
+    setCheck({ kind: "checking", message: listed ? "Checking the StatSig ID lists…" : "Reading the LaunchDarkly project…" });
     (async () => {
       try {
-        await refreshLdState(workspaceId, { segmentEnvs: ldEnvs, reuseFlagsWithinMs: FRESH_LD_LISTING_MS });
-        const ldError = ldSessionSnapshot(workspaceId).error;
-        if (ldError) throw new Error(ldError);
+        if (!listed) await readLd("keep");
         await fetchDeferredIdLists(
           workspaceId,
           sources,
@@ -145,10 +169,10 @@ export function MigrateModal({
     };
   }, []);
 
-  // An environment added later needs its LD segments too; the plan rebuilds when they arrive.
+  // An environment added later needs its LD segments too (the flags are kept); the plan rebuilds when they arrive.
   useEffect(() => {
     const missing = ldEnvs.filter((e) => !m.ld.segments?.[e]);
-    if (missing.length) void refreshLdState(workspaceId, { segmentEnvs: missing, reuseFlagsWithinMs: FRESH_LD_LISTING_MS }).catch(() => undefined);
+    if (missing.length) void refreshLdState(workspaceId, { segmentEnvs: missing }).catch(() => undefined);
   }, [ldEnvs, m.ld.segments, workspaceId]);
 
   // Flags whose LaunchDarkly provenance matches StatSig and the decisions are left out by default:
@@ -174,11 +198,12 @@ export function MigrateModal({
       .sort((a, b) => Number(a.dependency) - Number(b.dependency));
   const groups = useMemo(() => {
     const g = new Map<string, DecisionPoint[]>();
-    for (const d of plan?.decisions ?? [])
-      g.set(`${d.type}|${d.fingerprint}`, [
-        ...(g.get(`${d.type}|${d.fingerprint}`) ?? []),
-        d,
-      ]);
+    for (const d of plan?.decisions ?? []) {
+      const key = `${d.type}|${d.fingerprint}`;
+      const xs = g.get(key);
+      if (xs) xs.push(d);
+      else g.set(key, [d]);
+    }
     return [...g.values()].sort(
       (a, b) =>
         ["blocking", "choice", "acknowledge"].indexOf(a[0]!.severity) -
@@ -203,8 +228,9 @@ export function MigrateModal({
     ? `${LD_INSTANCES[m.ld.instance ?? "us"].origin}/${m.ld.projectKey}`
     : undefined;
 
-  const run = async (dryRun: boolean) => {
+  const execute = async (dryRun: boolean) => {
     if (!plan) return;
+    setNotice(undefined);
     setPhase({ kind: "running", dryRun });
     try {
       const r = await executePlan(workspaceId, m.ld, plan, {
@@ -218,6 +244,34 @@ export function MigrateModal({
       setPhase({ kind: "error", message: (e as Error).message });
     }
   };
+  /**
+   * A dry run writes nothing and goes against the listing on hand. A real run re-reads LaunchDarkly
+   * first and starts from the effect below, once the plan has been rebuilt on the fresh listing.
+   */
+  const run = (dryRun: boolean) => {
+    if (!plan) return;
+    if (dryRun) return void execute(true);
+    setNotice(undefined);
+    setPendingRun({ steps: plan.steps.length, decisions: plan.decisions.length });
+    reread("Reading LaunchDarkly before writing…", () => setPendingRun(undefined));
+  };
+  useEffect(() => {
+    if (!pendingRun || check.kind !== "ready" || planning || !plan) return;
+    setPendingRun(undefined);
+    // The fresh listing changed the plan (a flag appeared, a collision, a decision): the user
+    // confirmed a different one, so it is shown again instead of run.
+    if (plan.steps.length !== pendingRun.steps || plan.decisions.length !== pendingRun.decisions) {
+      setNotice(
+        `LaunchDarkly changed since this plan was built: ${pendingRun.steps.toLocaleString()} operation${pendingRun.steps === 1 ? "" : "s"} before the read, ${plan.steps.length.toLocaleString()} now. Review the plan, then Migrate again.`,
+      );
+      return;
+    }
+    void execute(false);
+    // `execute` closes over the plan of this render, which is the one checked here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingRun, check.kind, planning, plan]);
+  /** When the listing the plan is built on was read (a cache: restored from the last visit, or read live in this tab). */
+  const asOf = m.ld.stale ?? m.ld.flags?.loadedAt;
 
   const undo = async (r: RunRecord) => {
     setPhase({ kind: "running", dryRun: false });
@@ -236,9 +290,9 @@ export function MigrateModal({
   const waiting = !plan
     ? undefined
     : check.kind === "checking"
-      ? "Waiting for the fresh read of LaunchDarkly to land"
+      ? "Waiting for the check to finish"
       : check.kind === "error"
-        ? "The latest LaunchDarkly read failed; retry above"
+        ? "The LaunchDarkly read failed; retry above"
         : !fresh
           ? "Reading the segments of the chosen environments"
           : planning
@@ -283,7 +337,7 @@ export function MigrateModal({
               {check.kind === "error" && (
                 <Callout tone="red">
                   <span className="flex flex-wrap items-center gap-3">
-                    <span>Could not read the latest LaunchDarkly state: {check.message} The plan below is from the last read; nothing runs until a fresh read succeeds.</span>
+                    <span>Could not read LaunchDarkly: {check.message} The plan below is from the listing on hand; nothing runs until a read succeeds.</span>
                     <Button
                       variant="secondary"
                       className="ml-auto py-1 text-xs"
@@ -294,6 +348,7 @@ export function MigrateModal({
                   </span>
                 </Callout>
               )}
+              {notice && <Callout tone="amber">{notice}</Callout>}
               {plan.errors.map((e) => (
                 <Callout key={e} tone="red">
                   {e}
@@ -492,7 +547,7 @@ export function MigrateModal({
                     <span>Dry run and Migrate enable once it lands.</span>
                   </span>
                 ) : check.kind === "error" ? (
-                  "The latest LaunchDarkly read failed; retry above."
+                  "The LaunchDarkly read failed; retry above."
                 ) : plan.ready ? (
                   "Ready."
                 ) : plan.steps.length ? (
@@ -504,6 +559,16 @@ export function MigrateModal({
                   "Resolve the decisions above to continue."
                 )}
               </span>
+              {check.kind !== "checking" && asOf && (
+                // The listing is a cache: say how old, offer the re-read, and say a run re-reads anyway.
+                <span className="flex flex-wrap items-center gap-1.5 text-xs text-fg-muted">
+                  LaunchDarkly as read {timeAgo(asOf)}.
+                  <button type="button" className="text-link hover:underline" disabled={busy} onClick={() => reread("Reading LaunchDarkly…")}>
+                    Re-read
+                  </button>
+                  <span>Migrate re-reads it before writing.</span>
+                </span>
+              )}
               {needsConfirm.length > 0 && plan.steps.length > 0 && (
                 // The typed confirmation for critical environments lives here, in the sticky footer,
                 // so a long plan never has to be scrolled to reach it.
@@ -947,17 +1012,21 @@ function StepList({ run, ldBase, showAll, onShowAll }: { run: RunRecord; ldBase?
   const above = steps.slice(0, start);
   const below = steps.slice(end);
   const attention = (s: StepRecord) => s.status === "failed" || s.status === "pending_approval";
-  const tally = (xs: StepRecord[]) => {
+  // What the folded steps hold beyond the expected status: earlier steps are done and later ones
+  // pending unless said otherwise, so "552 earlier steps (552 done)" is just "552 earlier steps",
+  // while "552 earlier steps (3 failed, 1 skipped)" says what to look at.
+  const tally = (xs: StepRecord[], expected: StepStatus) => {
     const n = new Map<StepStatus, number>();
-    for (const s of xs) n.set(s.status, (n.get(s.status) ?? 0) + 1);
-    return [...n.entries()].map(([k, v]) => `${v} ${k.replace("_", " ")}`).join(", ");
+    for (const s of xs) if (s.status !== expected) n.set(s.status, (n.get(s.status) ?? 0) + 1);
+    const parts = [...n.entries()].map(([k, v]) => `${v.toLocaleString()} ${k.replace("_", " ")}`);
+    return parts.length ? ` (${parts.join(", ")})` : "";
   };
   return (
     <ul className="space-y-1 text-xs">
       {above.length > 0 && (
         <li className="flex items-center gap-2 text-fg-muted">
           <span>
-            {above.length.toLocaleString()} earlier step{above.length === 1 ? "" : "s"} ({tally(above)})
+            {above.length.toLocaleString()} earlier step{above.length === 1 ? "" : "s"}{tally(above, "done")}
           </span>
           <button type="button" className="text-link hover:underline" onClick={onShowAll}>
             Show all {steps.length.toLocaleString()} steps
@@ -976,7 +1045,7 @@ function StepList({ run, ldBase, showAll, onShowAll }: { run: RunRecord; ldBase?
       {below.length > 0 && (
         <li className="flex items-center gap-2 text-fg-muted">
           <span>
-            {below.length.toLocaleString()} more step{below.length === 1 ? "" : "s"} ({tally(below)})
+            {below.length.toLocaleString()} more step{below.length === 1 ? "" : "s"}{tally(below, "pending")}
           </span>
           {above.length === 0 && (
             <button type="button" className="text-link hover:underline" onClick={onShowAll}>

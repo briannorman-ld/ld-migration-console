@@ -148,11 +148,11 @@ export function DecisionsView({
       g.xs.push(d);
       byUid.set(s.uid, g);
     }
-    const worst = (xs: DecisionInstance[]) =>
-      Math.min(...xs.map((x) => decisionRank(x.decision)));
+    // The worst rank per item once, not per comparison.
+    const worst = new Map([...byUid.values()].map((g) => [g, Math.min(...g.xs.map((x) => decisionRank(x.decision)))]));
     return [...byUid.values()].sort(
       (a, b) =>
-        worst(a.xs) - worst(b.xs) ||
+        worst.get(a)! - worst.get(b)! ||
         b.xs.length - a.xs.length ||
         a.id.localeCompare(b.id),
     );

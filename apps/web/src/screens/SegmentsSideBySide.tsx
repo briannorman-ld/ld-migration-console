@@ -1,3 +1,4 @@
+import { indexByKey } from "../lib/indexByKey.ts";
 import { Fragment, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
 import {
   describeSegmentUsers,
@@ -195,11 +196,15 @@ export function SegmentsSideBySide({
       for (const r of selectable) if (allSelected) n.delete(r.seg.uid); else n.add(r.seg.uid);
       return n;
     });
-  const clearOwn = () => setSelected((x) => new Set([...x].filter((uid) => !rows.some((r) => r.seg.uid === uid))));
+  const clearOwn = () => {
+    const own = new Set(rows.map((r) => r.seg.uid));
+    setSelected((x) => new Set([...x].filter((uid) => !own.has(uid))));
+  };
   const setAsideSelected = async () => {
     const uids = selectedRows.map((r) => r.seg.uid);
     await m.exclude(uids, selectedRows.every((r) => !r.used) ? UNUSED_REASON : undefined);
-    setSelected((x) => new Set([...x].filter((uid) => !uids.includes(uid))));
+    const gone = new Set(uids);
+    setSelected((x) => new Set([...x].filter((uid) => !gone.has(uid))));
   };
 
   return (
@@ -435,7 +440,7 @@ export function SegmentsSideBySide({
 /** Where a segment stands in one LD environment, from that environment's segment list and the provenance footer. */
 export function segmentStatus(list: { key: string; tags?: string[] | null; description?: string | null }[] | undefined, r: Pick<SegmentMapResult, "segmentKey" | "statsigFingerprint" | "decisionSetHash">, alias: string): SegmentStatus {
   if (!list) return "unknown";
-  const existing = list.find((s) => s.key === r.segmentKey);
+  const existing = indexByKey(list).get(r.segmentKey);
   if (!existing) return "not_in_ld";
   if (!ownsSegment({ key: existing.key, tags: existing.tags ?? [] }, alias)) return "foreign";
   const f = parseFooter(existing.description);

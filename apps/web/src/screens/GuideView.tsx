@@ -10,7 +10,7 @@ import { ACCESS_LABEL, ACCOUNT_WIDE_STEPS, computeGuide, describeTally, LOOP_STE
 const ENV_STEP = STEP_ORDER.indexOf('environment') + 1;
 import { KIND_LABEL } from '../lib/kinds.ts';
 import { timeAgo } from '../lib/time.ts';
-import { createLdEnvironment, createLdTeam, FRESH_LD_LISTING_MS, inviteLdMembers, refreshLdPeople, refreshLdState, reprobe, requireLdApprovals, setDefaultRandomizationUnit, useLdSession, type LdInviteRole } from '../lib/ld.ts';
+import { createLdEnvironment, createLdTeam, inviteLdMembers, refreshLdPeople, refreshLdState, reprobe, requireLdApprovals, setDefaultRandomizationUnit, useLdSession, type LdInviteRole } from '../lib/ld.ts';
 import { store } from '../lib/store.ts';
 import type { MigrationSelection } from '../lib/migration.ts';
 import type { MigrationContext } from '../lib/useMigration.ts';
@@ -62,7 +62,7 @@ export function GuideView({
     const missing = g.ldEnvs.filter((e) => !m.ld.segments?.[e] && !asked.current.has(e));
     if (!missing.length) return;
     missing.forEach((e) => asked.current.add(e));
-    void refreshLdState(workspaceId, { segmentEnvs: missing, reuseFlagsWithinMs: FRESH_LD_LISTING_MS }).catch(() => undefined);
+    void refreshLdState(workspaceId, { segmentEnvs: missing }).catch(() => undefined);
   }, [m, g.ldEnvs, workspaceId]);
 
   const doneCount = STEP_ORDER.filter((k) => g.done[k]).length;
@@ -101,7 +101,10 @@ export function GuideView({
                 noun="flag"
                 nav={nav}
                 onMigrate={onMigrate}
-                toSelection={(uids) => ({ gates: uids.filter((u) => g.gates.toMigrate.includes(u)), configs: uids.filter((u) => g.configs.toMigrate.includes(u)), prompts: uids.filter((u) => g.prompts.toMigrate.includes(u)), autotunes: [] })}
+                toSelection={(uids) => {
+                  const [gates, configs, prompts] = [g.gates, g.configs, g.prompts].map((t) => new Set(t.toMigrate));
+                  return { gates: uids.filter((u) => gates!.has(u)), configs: uids.filter((u) => configs!.has(u)), prompts: uids.filter((u) => prompts!.has(u)), autotunes: [] };
+                }}
               />
             )}
             {k === 'experiments' && <Experiments g={g} nav={nav} onMigrate={onMigrate} />}
@@ -893,10 +896,10 @@ function Items({ workspaceId, g, tallies, noun, nav, onMigrate, toSelection }: {
                 <>
                   LaunchDarkly as read {timeAgo(g.ldAsOf.at)}
                   {g.ldAsOf.failed ? '; the latest read failed (see step 1)' : ''}.
-                  <button type="button" className="text-link hover:underline" onClick={() => void refreshLdState(workspaceId, { segmentEnvs: g.ldEnvs }).catch(() => undefined)}>
+                  <button type="button" className="text-link hover:underline" onClick={() => void refreshLdState(workspaceId, { segmentEnvs: g.ldEnvs, flags: 'reread' }).catch(() => undefined)}>
                     Re-read
                   </button>
-                  <span>Plans read it afresh before a run.</span>
+                  <span>Plans use this listing; a migration re-reads it before writing.</span>
                 </>
               )}
             </p>

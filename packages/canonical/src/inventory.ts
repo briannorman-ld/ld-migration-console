@@ -71,10 +71,15 @@ export interface SegmentReference {
  */
 export function segmentReferences(snapshot: CanonicalSnapshot): Map<string, SegmentReference[]> {
   const out = new Map<string, SegmentReference[]>();
+  const seen = new Map<string, Set<string>>();
   const note = (segmentId: string, ref: SegmentReference) => {
-    const list = out.get(segmentId) ?? [];
-    if (!list.some((r) => r.uid === ref.uid)) list.push(ref);
-    out.set(segmentId, list);
+    let uids = seen.get(segmentId);
+    if (!uids) seen.set(segmentId, (uids = new Set()));
+    if (uids.has(ref.uid)) return;
+    uids.add(ref.uid);
+    const list = out.get(segmentId);
+    if (list) list.push(ref);
+    else out.set(segmentId, [ref]);
   };
   const scan = (ref: SegmentReference, rules: { conditions: { type: string; operator: unknown; targetValue: unknown }[] }[]) => {
     for (const rule of rules) {

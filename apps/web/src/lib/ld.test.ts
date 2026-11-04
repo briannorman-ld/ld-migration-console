@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { flagsFresh, ldConnecting, probeStartPatch, sessionDataChanged, type LdSession } from './ld.ts';
+import { keepsListing, ldConnecting, probeStartPatch, sessionDataChanged, type LdSession } from './ld.ts';
 
 const matrix = { capabilities: [], environments: [] } as unknown as NonNullable<LdSession['matrix']>;
 const connected: LdSession = { status: 'connected', projectKey: 'p1', matrix, flags: { items: [], loadedAt: 't' }, segments: { test: [] } };
@@ -40,16 +40,14 @@ describe('ldConnecting', () => {
   });
 });
 
-describe('flagsFresh', () => {
-  const now = Date.parse('2026-11-03T12:00:00Z');
-  it('is true only for a listing read live in this tab within the window', () => {
-    const fresh = { flags: { items: [], loadedAt: '2026-11-03T11:59:30Z' } };
-    expect(flagsFresh(fresh, 60_000, now)).toBe(true);
-    expect(flagsFresh(fresh, 20_000, now)).toBe(false);
-    expect(flagsFresh(fresh, undefined, now)).toBe(false);
-    expect(flagsFresh({ ...fresh, stale: '2026-11-02T00:00:00Z' }, 60_000, now)).toBe(false);
-    expect(flagsFresh({}, 60_000, now)).toBe(false);
-    expect(flagsFresh({ flags: { items: [], loadedAt: 'not a date' } }, 60_000, now)).toBe(false);
+describe('keepsListing', () => {
+  it('keeps the listing on hand, however old, unless a re-read is asked for; a project never listed is read', () => {
+    const listed = { flags: { items: [], loadedAt: '2026-11-02T00:00:00Z' } };
+    expect(keepsListing(listed, undefined)).toBe(true);
+    expect(keepsListing(listed, 'keep')).toBe(true);
+    expect(keepsListing(listed, 'reread')).toBe(false);
+    expect(keepsListing({}, undefined)).toBe(false);
+    expect(keepsListing({}, 'keep')).toBe(false);
   });
 });
 

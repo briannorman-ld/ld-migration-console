@@ -143,7 +143,10 @@ export function AutotunesSideBySide({
       for (const r of selectable) if (allSelected) n.delete(r.autotune.uid); else n.add(r.autotune.uid);
       return n;
     });
-  const clearOwn = () => setSelected((x) => new Set([...x].filter((uid) => !rows.some((r) => r.autotune.uid === uid))));
+  const clearOwn = () => {
+    const own = new Set(rows.map((r) => r.autotune.uid));
+    setSelected((x) => new Set([...x].filter((uid) => !own.has(uid))));
+  };
   const toggle = (uid: string) =>
     setSelected((x) => {
       const n = new Set(x);
