@@ -17,6 +17,8 @@ import {
   TYPE_LABEL,
 } from "../components/DecisionCard.tsx";
 import { PagerBar, usePager } from "../components/Pager.tsx";
+import { TagFilter } from "../components/TagFilter.tsx";
+import { matchesTags, pruneTags, tagOptions } from "../lib/tags.ts";
 import {
   MigrateButton,
   ReadinessLine,
@@ -165,6 +167,7 @@ export function FlagSideBySide({
   const [q, setQ] = useState("");
   const [showArchived, setShowArchived] = useState(false);
   const [filter, setFilter] = useState<StatusFilter>("all");
+  const [tags, setTags] = useState<Set<string>>(new Set());
   const [decisionType, setDecisionType] = useState<DecisionType | "all">("all");
   const [open, setOpen] = useState<string>();
   const [targetEnvs, setTargetEnvs] = useState<string[] | null>(null);
@@ -262,12 +265,17 @@ export function FlagSideBySide({
       setDecisionType("all");
   }, [decisionTypes, decisionType]);
 
+  // Tags in use, for the Tags filter; a chosen tag that vanished on re-sync is dropped, not left hiding everything.
+  const tagChoices = useMemo(() => tagOptions(rows.map((r) => r.gate)), [rows]);
+  const chosenTags = useMemo(() => pruneTags(tags, tagChoices), [tags, tagChoices]);
+
   const visible = useMemo(
     () =>
       rows.filter((r) => {
         if (!showArchived && r.gate.archived) return false;
         if (q && !r.gate.id.toLowerCase().includes(q.toLowerCase()))
           return false;
+        if (!matchesTags(r.gate.tags, chosenTags)) return false;
         if (
           decisionType !== "all" &&
           !r.result.unresolved.some((d) => d.type === decisionType)
@@ -293,7 +301,7 @@ export function FlagSideBySide({
             return true;
         }
       }),
-    [rows, showArchived, q, filter, decisionType],
+    [rows, showArchived, q, filter, decisionType, chosenTags],
   );
   const pager = usePager(visible);
 
@@ -430,6 +438,7 @@ export function FlagSideBySide({
               ))}
             </Select>
           )}
+          <TagFilter options={tagChoices} chosen={chosenTags} onChange={setTags} noun={words.many} />
           <label className="flex items-center gap-1.5 text-sm text-fg-muted">
             <input
               type="checkbox"

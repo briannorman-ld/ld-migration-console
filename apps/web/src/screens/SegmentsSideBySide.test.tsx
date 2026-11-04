@@ -18,7 +18,7 @@ const usesSegment = (id: string, segmentId: string, over: Partial<Gate> = {}): G
 function snapshot(): CanonicalSnapshot {
   const s = emptySnapshot(SRC, '2026-11-02T00:00:00Z');
   s.environments = [{ name: 'production', isProduction: true, inferred: false }];
-  s.segments = [segment('beta_testers'), segment('old_partners'), segment('retired', {}), segment('vip', { segmentType: 'id_list', idList: { count: 25 } })];
+  s.segments = [segment('beta_testers', { tags: ['checkout'] }), segment('old_partners'), segment('retired', {}), segment('vip', { segmentType: 'id_list', idList: { count: 25 }, tags: ['checkout', 'premium'] })];
   s.gates = [usesSegment('checkout', 'beta_testers'), usesSegment('vip_banner', 'vip'), usesSegment('legacy_gate', 'retired', { archived: true })];
   return s;
 }
@@ -75,6 +75,23 @@ describe('Segments explorer: who uses each segment, and leaving the unused behin
     expect(screen.getByText('old_partners')).toBeTruthy();
     expect(screen.getByText('retired')).toBeTruthy();
     expect(screen.getByText(/2 segments are not referenced by any gate/)).toBeTruthy();
+  });
+
+  it('filters by tag: any chosen tag keeps a segment, "No tag" shows the untagged ones, and the chip counts the choices', () => {
+    setup();
+    fireEvent.click(screen.getByRole('button', { name: 'Filter by tag' }));
+    const panel = screen.getByRole('dialog', { name: 'Tags' });
+    expect(within(panel).getAllByRole('checkbox').map((b) => b.getAttribute('aria-label'))).toEqual(['checkout (2)', 'premium (1)', 'No tag (2)']);
+    fireEvent.click(within(panel).getByLabelText('checkout (2)'));
+    expect(screen.getByText('beta_testers')).toBeTruthy();
+    expect(screen.getByText('vip')).toBeTruthy();
+    expect(screen.queryByText('old_partners')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Filter by tag' }).textContent).toContain('1');
+    fireEvent.click(within(panel).getByLabelText('No tag (2)'));
+    expect(screen.getByText('old_partners')).toBeTruthy();
+    fireEvent.click(within(panel).getByLabelText('checkout (2)'));
+    expect(screen.queryByText('beta_testers')).toBeNull();
+    expect(screen.getByText('old_partners')).toBeTruthy();
   });
 
   it('ticks segments into the shared selection and plans only those; "Don\'t migrate these" carries the unused reason', async () => {

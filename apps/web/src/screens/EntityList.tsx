@@ -4,6 +4,8 @@ import { coverageFor, guidanceFor, STATUS_LABEL, type CoverageStatus } from '@ss
 import type { SourceRecord } from '@sslm/store';
 import { PagerBar, usePager } from '../components/Pager.tsx';
 import { Badge, Callout, Card, Input, Select } from '../components/ui.tsx';
+import { TagFilter } from '../components/TagFilter.tsx';
+import { matchesTags, pruneTags, tagOptions } from '../lib/tags.ts';
 import { COVERAGE_TONE } from './coverageTone.ts';
 
 /**
@@ -26,16 +28,20 @@ export function EntityList({
 }) {
   const [q, setQ] = useState('');
   const [status, setStatus] = useState<CoverageStatus | 'all'>('all');
+  const [tags, setTags] = useState<Set<string>>(new Set());
   const rows = useMemo(
     () => sources.flatMap((s) => entitiesOf(snapshots[s.id]!, kind).map((e) => ({ s, e, g: guidanceFor(e) }))),
     [sources, snapshots, kind],
   );
+  const tagChoices = useMemo(() => tagOptions(rows.map((r) => r.e)), [rows]);
+  const chosenTags = useMemo(() => pruneTags(tags, tagChoices), [tags, tagChoices]);
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
     return rows
       .filter(({ g }) => status === 'all' || g.status === status)
+      .filter(({ e }) => matchesTags(e.tags, chosenTags))
       .filter(({ e }) => !needle || e.id.toLowerCase().includes(needle) || (e.description ?? '').toLowerCase().includes(needle));
-  }, [rows, q, status]);
+  }, [rows, q, status, chosenTags]);
   const pager = usePager(filtered);
   const coverage = coverageFor(kind);
   const counts = useMemo(() => {
@@ -57,6 +63,7 @@ export function EntityList({
             </option>
           ))}
         </Select>
+        <TagFilter options={tagChoices} chosen={chosenTags} onChange={setTags} noun={label.toLowerCase()} />
         <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder={`Search ${label.toLowerCase()}…`} aria-label={`Search ${label}`} className="ml-auto w-64 py-1" />
       </div>
       {coverage.length > 0 && (

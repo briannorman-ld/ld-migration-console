@@ -9,6 +9,8 @@ import { PagerBar, usePager } from '../components/Pager.tsx';
 import { MigrateButton, ReadinessLine, readinessSteps } from '../components/Readiness.tsx';
 import { LdTargeting } from '../components/Targeting.tsx';
 import { Badge, Button, Callout, Card, cx, Input, Select } from '../components/ui.tsx';
+import { TagFilter } from '../components/TagFilter.tsx';
+import { matchesTags, pruneTags, tagOptions } from '../lib/tags.ts';
 import { ldFlagState, mapNeutralFlagFor, mapNeutralSegmentFor } from '../lib/migration.ts';
 import type { MigrationContext } from '../lib/useMigration.ts';
 import type { ExplorerNav } from './AutotunesSideBySide.tsx';
@@ -75,6 +77,7 @@ export function LdSourceSideBySide({
   const [q, setQ] = useState('');
   const [showArchived, setShowArchived] = useState(false);
   const [filter, setFilter] = useState<Filter>('all');
+  const [tags, setTags] = useState<Set<string>>(new Set());
   const [open, setOpen] = useState<string>();
   const words = WORDS[resource];
   const ldSources = useMemo(() => sources.filter((s) => s.kind === 'launchdarkly' && snapshots[s.id]?.neutral), [sources, snapshots]);
@@ -118,11 +121,15 @@ export function LdSourceSideBySide({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on what the rows read of `m` (see GatesSideBySide)
   }, [ldSources, snapshots, env, m.inputs, m.connected, m.ldEnvs, m.ld.segments, ldFlags, resource]);
 
+  const tagChoices = useMemo(() => tagOptions(rows.map((r) => r.entity)), [rows]);
+  const chosenTags = useMemo(() => pruneTags(tags, tagChoices), [tags, tagChoices]);
+
   const visible = useMemo(
     () =>
       rows.filter((r) => {
         if (!showArchived && r.entity.archived) return false;
         if (q && !r.entity.key.toLowerCase().includes(q.toLowerCase()) && !r.entity.name.toLowerCase().includes(q.toLowerCase())) return false;
+        if (!matchesTags(r.entity.tags, chosenTags)) return false;
         const here = r.strip.find((s) => s.ldEnv === r.ldEnv)?.status;
         switch (filter) {
           case 'open':
@@ -139,7 +146,7 @@ export function LdSourceSideBySide({
             return true;
         }
       }),
-    [rows, showArchived, q, filter],
+    [rows, showArchived, q, filter, chosenTags],
   );
   const pager = usePager(visible);
   const selectable = visible.filter((r) => !r.entity.archived && !r.result.skipped);
@@ -192,6 +199,7 @@ export function LdSourceSideBySide({
             <option value="in_sync">In sync</option>
             <option value="changed">Changed since sync</option>
           </Select>
+          <TagFilter options={tagChoices} chosen={chosenTags} onChange={setTags} noun={words.many} />
           <label className="flex items-center gap-1.5 text-sm text-fg-muted">
             <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} /> archived
           </label>

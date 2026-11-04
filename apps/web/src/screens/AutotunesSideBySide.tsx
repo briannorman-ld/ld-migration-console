@@ -9,6 +9,8 @@ import { PagerBar, usePager } from '../components/Pager.tsx';
 import { MigrateButton, ReadinessLine, readinessSteps } from '../components/Readiness.tsx';
 import { LdTargeting } from '../components/Targeting.tsx';
 import { Badge, Button, Callout, Card, cx, Input, Select } from '../components/ui.tsx';
+import { TagFilter } from '../components/TagFilter.tsx';
+import { matchesTags, pruneTags, tagOptions } from '../lib/tags.ts';
 import { summarizeDecisions } from '../lib/decisionSummary.ts';
 import { ldFlagState, mapAutotuneFor, type DecisionInstance } from '../lib/migration.ts';
 import type { MigrationContext } from '../lib/useMigration.ts';
@@ -68,6 +70,7 @@ export function AutotunesSideBySide({
 }) {
   const [q, setQ] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
+  const [tags, setTags] = useState<Set<string>>(new Set());
   const [open, setOpen] = useState<string>();
   const [targetEnvs, setTargetEnvs] = useState<string[] | null>(null);
   const { ld } = m;
@@ -101,10 +104,14 @@ export function AutotunesSideBySide({
     [matched, snapshots, env, m.inputs, m.connected, m.ldEnvs, ldFlags],
   );
 
+  const tagChoices = useMemo(() => tagOptions(rows.map((r) => r.autotune)), [rows]);
+  const chosenTags = useMemo(() => pruneTags(tags, tagChoices), [tags, tagChoices]);
+
   const visible = useMemo(
     () =>
       rows.filter((r) => {
         if (q && !r.autotune.id.toLowerCase().includes(q.toLowerCase())) return false;
+        if (!matchesTags(r.autotune.tags, chosenTags)) return false;
         const here = r.strip.find((s) => s.ldEnv === r.ldEnv)?.status;
         switch (filter) {
           case 'open':
@@ -121,7 +128,7 @@ export function AutotunesSideBySide({
             return true;
         }
       }),
-    [rows, q, filter],
+    [rows, q, filter, chosenTags],
   );
   const pager = usePager(visible);
   const selectedRows = useMemo(() => rows.filter((r) => selected.has(r.autotune.uid)), [rows, selected]);
@@ -179,6 +186,7 @@ export function AutotunesSideBySide({
             <option value="in_sync">In sync</option>
             <option value="changed">Changed since sync</option>
           </Select>
+          <TagFilter options={tagChoices} chosen={chosenTags} onChange={setTags} noun="autotunes" />
           <Input placeholder="Filter by name" value={q} onChange={(e) => setQ(e.target.value)} className="w-48" aria-label="Filter autotunes" />
           {!readOnly && <MigrateButton steps={steps} onClick={migrate} label={selectedRows.length ? `Migrate ${selectedRows.length} autotune${selectedRows.length === 1 ? '' : 's'}…` : 'Migrate…'} />}
         </div>

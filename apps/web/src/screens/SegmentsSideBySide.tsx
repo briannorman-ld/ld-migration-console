@@ -18,6 +18,8 @@ import { PagerBar, usePager } from "../components/Pager.tsx";
 import { MigrateButton, ReadinessLine, readinessSteps } from "../components/Readiness.tsx";
 import { StatsigRules } from "../components/Targeting.tsx";
 import { Badge, Button, Callout, Card, cx, Input, Select } from "../components/ui.tsx";
+import { TagFilter } from "../components/TagFilter.tsx";
+import { matchesTags, pruneTags, tagOptions } from "../lib/tags.ts";
 import { summarizeDecisions } from "../lib/decisionSummary.ts";
 import { mapSegmentFor, type DecisionInstance } from "../lib/migration.ts";
 import { timeAgo } from "../lib/time.ts";
@@ -81,6 +83,7 @@ export function SegmentsSideBySide({
   const [q, setQ] = useState("");
   const [showArchived, setShowArchived] = useState(false);
   const [filter, setFilter] = useState<StatusFilter>("all");
+  const [tags, setTags] = useState<Set<string>>(new Set());
   const [decisionType, setDecisionType] = useState<DecisionType | "all">("all");
   const [open, setOpen] = useState<string>();
   const [targetEnvs, setTargetEnvs] = useState<string[] | null>(null);
@@ -127,11 +130,15 @@ export function SegmentsSideBySide({
     if (decisionType !== "all" && !decisionTypes.some(([t]) => t === decisionType)) setDecisionType("all");
   }, [decisionTypes, decisionType]);
 
+  const tagChoices = useMemo(() => tagOptions(rows.map((r) => r.seg)), [rows]);
+  const chosenTags = useMemo(() => pruneTags(tags, tagChoices), [tags, tagChoices]);
+
   const visible = useMemo(
     () =>
       rows.filter((r) => {
         if (!showArchived && r.seg.archived) return false;
         if (q && !r.seg.id.toLowerCase().includes(q.toLowerCase())) return false;
+        if (!matchesTags(r.seg.tags, chosenTags)) return false;
         if (decisionType !== "all" && !r.result.unresolved.some((d) => d.type === decisionType)) return false;
         const here = r.strip.find((s) => s.ldEnv === r.ldEnv)?.status;
         switch (filter) {
@@ -155,7 +162,7 @@ export function SegmentsSideBySide({
             return true;
         }
       }),
-    [rows, showArchived, q, filter, decisionType],
+    [rows, showArchived, q, filter, decisionType, chosenTags],
   );
   const pager = usePager(visible);
 
@@ -244,6 +251,7 @@ export function SegmentsSideBySide({
               ))}
             </Select>
           )}
+          <TagFilter options={tagChoices} chosen={chosenTags} onChange={setTags} noun="segments" />
           <label className="flex items-center gap-1.5 text-sm text-fg-muted">
             <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} /> archived
           </label>
