@@ -38,7 +38,7 @@ import {
 } from "../components/ui.tsx";
 import { ldFlagState, mapConfigFor, mapGateFor, type MappingInputs } from "../lib/migration.ts";
 import { describeUsage, isQuiet, suggestedReason, type UsageLevel, type UsageSummary } from "../lib/usage.ts";
-import { timeAgo } from "../lib/time.ts";
+import { formatDate, timeAgo } from "../lib/time.ts";
 import type { MigrationContext } from "../lib/useMigration.ts";
 import type { ExplorerNav } from "./AutotunesSideBySide.tsx";
 
@@ -75,6 +75,10 @@ export const STATUS: Record<
   },
 };
 
+/** The two StatSig resources that become plain LD flags: gates (boolean) and dynamic configs (JSON). */
+export type FlagKind = "gate" | "config";
+type FlagEntity = Gate | Config;
+
 type StatusFilter =
   | "all"
   | "open"
@@ -85,7 +89,31 @@ type StatusFilter =
   /** No exposure events in StatSig in the past 7 days (lib/usage.ts): candidates to set aside. */
   | "no_exposures"
   /** Marked "Don't migrate". */
-  | "set_aside";
+  | "set_aside"
+  /** The StatSig toggle is off (`isEnabled: false`, or a gate whose status is Disabled). */
+  | "disabled"
+  /** Off in the chosen environment: disabled, or no rule applies here and no override passes anyone. */
+  | "off_here";
+
+type CreatedSort = "none" | "asc" | "desc";
+
+/**
+ * Whether the item serves nothing but its "off" result in `env`: a disabled gate passes nobody, and
+ * so does an enabled one whose every rule is scoped to other environments (or has none) with no
+ * pass override here. A config in the same state serves only its default value.
+ */
+export function isOffIn(entity: FlagEntity, env: string): boolean {
+  if (isDisabled(entity)) return true;
+  if (resolveRulesForEnvironment(entity.rules, env).rules.length > 0) return false;
+  return !overridesForEnvironment(entity.overrides, env).some(
+    (o) => o.ids.length > 0 && (o.value.kind !== "gate" || o.value.pass),
+  );
+}
+
+/** The StatSig toggle, the way the mapper reads it (gate.ts): `isEnabled`, or a gate status of Disabled. */
+export function isDisabled(entity: FlagEntity): boolean {
+  return !entity.enabled || (entity.kind === "gate" && entity.status === "Disabled");
+}
 
 const USAGE_TONE: Record<UsageLevel, "slate" | "green" | "amber" | "red" | "blue" | "violet"> = {
   active: "green",
@@ -95,9 +123,6 @@ const USAGE_TONE: Record<UsageLevel, "slate" | "green" | "amber" | "red" | "blue
   needs_key: "slate",
 };
 
-/** The two StatSig resources that become plain LD flags: gates (boolean) and dynamic configs (JSON). */
-export type FlagKind = "gate" | "config";
-type FlagEntity = Gate | Config;
 type FlagMapResult = GateMapResult | ConfigMapResult;
 
 const LABEL: Record<FlagKind, { title: string; one: string; many: string }> = {
@@ -126,6 +151,8 @@ interface Row {
   strip: { ldEnv: string; status: MigrationStatus }[];
   /** Recent StatSig traffic (Console API sources). */
   usage: UsageSummary;
+  /** Serves only its "off" result in the chosen environment (isOffIn). */
+  offHere: boolean;
   /** The "Don't migrate" mark, when the user set this item aside. */
   setAside?: ExclusionRecord;
 }
@@ -171,6 +198,7 @@ export function FlagSideBySide({
   const [decisionType, setDecisionType] = useState<DecisionType | "all">("all");
   const [open, setOpen] = useState<string>();
   const [targetEnvs, setTargetEnvs] = useState<string[] | null>(null);
+  const [createdSort, setCreatedSort] = useState<CreatedSort>("none");
   const { ld } = m;
   const words = LABEL[kind];
   const snaps = useMemo(
@@ -235,6 +263,7 @@ export function FlagSideBySide({
             result,
             strip,
             usage: describeUsage(gate),
+            offHere: isOffIn(gate, env),
             ...(setAside ? { setAside } : {}),
           };
         }),
@@ -246,6 +275,8 @@ export function FlagSideBySide({
   );
   const quietCount = useMemo(() => rows.filter((r) => !r.gate.archived && isQuiet(r.usage)).length, [rows]);
   const setAsideCount = useMemo(() => rows.filter((r) => !r.gate.archived && r.setAside).length, [rows]);
+  const disabledCount = useMemo(() => rows.filter((r) => !r.gate.archived && isDisabled(r.gate)).length, [rows]);
+  const offHereCount = useMemo(() => rows.filter((r) => !r.gate.archived && r.offHere).length, [rows]);
 
   // Open decision types across all items, with how many items raise each: the "decision" filter.
   const decisionTypes = useMemo(() => {
@@ -297,13 +328,29 @@ export function FlagSideBySide({
             return isQuiet(r.usage);
           case "set_aside":
             return !!r.setAside;
+          case "disabled":
+            return isDisabled(r.gate);
+          case "off_here":
+            return r.offHere;
           default:
             return true;
         }
       }),
     [rows, showArchived, q, filter, decisionType, chosenTags],
   );
-  const pager = usePager(visible);
+  // Created-date sort over the filtered rows; items without a date (config-spec sources) stay last either way.
+  const ordered = useMemo(() => {
+    if (createdSort === "none") return visible;
+    const dir = createdSort === "asc" ? 1 : -1;
+    return [...visible].sort((a, b) => {
+      const ta = a.gate.createdTime, tb = b.gate.createdTime;
+      if (ta == null && tb == null) return 0;
+      if (ta == null) return 1;
+      if (tb == null) return -1;
+      return (ta - tb) * dir;
+    });
+  }, [visible, createdSort]);
+  const pager = usePager(ordered);
 
   // Bulk answers for the selection: the open decisions of the selected items, rolled up by type.
   // An item set aside after it was ticked drops out here, so it is never planned.
@@ -420,6 +467,11 @@ export function FlagSideBySide({
             <option value="changed">Changed since sync</option>
             <option value="no_exposures">No exposures in 7 days{quietCount ? ` (${quietCount.toLocaleString()})` : ""}</option>
             <option value="set_aside">Set aside{setAsideCount ? ` (${setAsideCount.toLocaleString()})` : ""}</option>
+            <option value="disabled">Disabled in StatSig{disabledCount ? ` (${disabledCount.toLocaleString()})` : ""}</option>
+            <option value="off_here">
+              {kind === "gate" ? `Passes nobody in ${env}` : `Default value only in ${env}`}
+              {offHereCount ? ` (${offHereCount.toLocaleString()})` : ""}
+            </option>
           </Select>
           {decisionTypes.length > 0 && (
             <Select
@@ -524,7 +576,25 @@ export function FlagSideBySide({
                   />
                 )}
               </th>
-              <th className="w-[34%] px-3 py-2">StatSig</th>
+              <th className="w-[30%] px-3 py-2">StatSig</th>
+              <th
+                className="w-[9%] px-3 py-2"
+                aria-sort={createdSort === "none" ? "none" : createdSort === "asc" ? "ascending" : "descending"}
+              >
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1 uppercase hover:text-fg"
+                  title="Created in StatSig (Console API sources; config specs carry no dates). Click to sort."
+                  onClick={() =>
+                    setCreatedSort((x) => (x === "none" ? "desc" : x === "desc" ? "asc" : "none"))
+                  }
+                >
+                  Created
+                  <span aria-hidden="true" className="text-fg-subtle">
+                    {createdSort === "asc" ? "↑" : createdSort === "desc" ? "↓" : "↕"}
+                  </span>
+                </button>
+              </th>
               <th className="w-[9%] px-3 py-2">In {env}</th>
               <th className="w-[12%] px-3 py-2" title="Exposure events StatSig received in the past 7 days, all environments together (Console API sources)">
                 Usage, 7 d
@@ -584,7 +654,19 @@ export function FlagSideBySide({
                             in {shared} sources
                           </Badge>
                         )}
-                        {!gate.enabled && <Badge tone="red">disabled</Badge>}
+                        {isDisabled(gate) && <Badge tone="red">disabled</Badge>}
+                        {!isDisabled(gate) && row.offHere && (
+                          <Badge
+                            tone="slate"
+                            title={
+                              gate.kind === "gate"
+                                ? `No rule applies in ${env} and no override passes anyone: the gate fails everyone here`
+                                : `No rule applies in ${env}: everyone gets the default value here`
+                            }
+                          >
+                            {gate.kind === "gate" ? "passes nobody" : "default only"}
+                          </Badge>
+                        )}
                         {gate.archived && <Badge tone="slate">archived</Badge>}
                         {row.setAside && (
                           <Badge
@@ -623,6 +705,9 @@ export function FlagSideBySide({
                         {gate.owner?.email ?? "no owner"}
                         {gate.tags.length > 0 && ` · ${gate.tags.join(", ")}`}
                       </div>
+                    </td>
+                    <td className="px-3 py-2 text-xs text-fg-muted">
+                      <CreatedCell entity={gate} />
                     </td>
                     <td className="px-3 py-2 text-xs text-fg-muted">
                       <div>
@@ -685,7 +770,7 @@ export function FlagSideBySide({
                   </tr>
                   {open === key && (
                     <tr className="bg-surface-2">
-                      <td colSpan={6} className="px-3 pb-4">
+                      <td colSpan={7} className="px-3 pb-4">
                         <Detail
                           row={row}
                           m={m}
@@ -818,6 +903,32 @@ export function FlagSideBySide({
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * When StatSig created the item, with the last change in the tooltip. Console API sources carry
+ * both (`createdTime`, `lastModifiedTime`); an uploaded config spec has neither, only its version.
+ */
+function CreatedCell({ entity }: { entity: FlagEntity }) {
+  if (entity.createdTime == null)
+    return (
+      <span
+        className="text-fg-subtle"
+        title={entity.source.sourceKind === "config_spec" ? "Config specs carry no timestamps" : "No creation date from StatSig"}
+      >
+        —
+      </span>
+    );
+  const created = new Date(entity.createdTime);
+  const modified = entity.lastModifiedTime != null ? new Date(entity.lastModifiedTime) : null;
+  return (
+    <time
+      dateTime={created.toISOString()}
+      title={`Created ${created.toLocaleString()}${modified ? `\nLast changed ${modified.toLocaleString()}` : ""}`}
+    >
+      {formatDate(created)}
+    </time>
   );
 }
 
