@@ -133,7 +133,7 @@ pulls in the segments and context kinds the flags depend on, and orders prerequi
 **Configure targeting in** says where rules are written. **Dry run**, then **Migrate**: steps run
 in parallel with a progress window, and a finished run shows the failed steps and distinct
 errors with **Download report** (Markdown or CSV). Open LaunchDarkly: the flags carry the
-`statsig-migrated` and `statsig-src-web` tags, `statsig.*` custom properties, maintainers, and
+`migrated-from-statsig` and `migration-src-web` tags, `migration.*` custom properties, maintainers, and
 audit-log comments naming the run. Production is still untouched.
 
 ## 8. Runs (1 min)
