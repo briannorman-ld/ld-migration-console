@@ -14,6 +14,7 @@ import {
   type ProfileRecord,
   type RunJournalRecord,
   type RunPreImageRecord,
+  type SnapshotMetaRecord,
   type SnapshotRecord,
   type SourceRecord,
   type SpecUploadRecord,
@@ -140,6 +141,7 @@ export class WorkspaceStore {
       this.db.workspaces,
       this.db.sources,
       this.db.snapshots,
+      this.db.snapshotBodies,
       this.db.specUploads,
       this.db.capabilities,
       this.db.profiles,
@@ -170,7 +172,7 @@ export class WorkspaceStore {
       await this.db.idLists.where("workspaceId").equals(id).delete();
       await this.db.idListHashes.where("workspaceId").equals(id).delete();
       await this.db.sources.where("workspaceId").equals(id).delete();
-      await this.db.snapshots.where("workspaceId").equals(id).delete();
+      await this.deleteSnapshots(await this.db.snapshots.where("workspaceId").equals(id).primaryKeys());
       await this.db.specUploads.where("workspaceId").equals(id).delete();
       await this.db.capabilities.delete(id);
       await this.db.workspaces.delete(id);
@@ -203,12 +205,13 @@ export class WorkspaceStore {
       [
         this.db.sources,
         this.db.snapshots,
+        this.db.snapshotBodies,
         this.db.specUploads,
         this.db.idLists,
         this.db.idListHashes,
       ],
       async () => {
-        await this.db.snapshots.where("sourceId").equals(sourceId).delete();
+        await this.deleteSnapshots(await this.db.snapshots.where("sourceId").equals(sourceId).primaryKeys());
         await this.db.specUploads.where("sourceId").equals(sourceId).delete();
         await this.db.idLists.where("sourceId").equals(sourceId).delete();
         await this.db.idListHashes.where("sourceId").equals(sourceId).delete();
@@ -221,14 +224,14 @@ export class WorkspaceStore {
   /** How many snapshots a source keeps by default; see pruneSnapshots. */
   static readonly DEFAULT_SNAPSHOT_RETENTION = 10;
 
-  /** Snapshots are immutable: each save is a new record. */
+  /** Snapshots are immutable: each save is a new record (metadata and payload in their own tables, see SnapshotMetaRecord). */
   async saveSnapshot(
     workspaceId: string,
     snapshot: CanonicalSnapshot,
   ): Promise<SnapshotRecord> {
     // No assertNoSecrets here: snapshots hold customer config values, which may legitimately
     // have keys like "token". Our credentials can only reach the records we shape ourselves.
-    const rec: SnapshotRecord = {
+    const meta: SnapshotMetaRecord = {
       id: crypto.randomUUID(),
       workspaceId,
       sourceId: snapshot.source.sourceId,
@@ -242,15 +245,31 @@ export class WorkspaceStore {
         warnings: snapshot.warnings.length,
       },
       bytes: approximateJsonBytes(snapshot),
-      canonical: snapshot,
     };
-    await this.db.snapshots.add(rec);
+    await this.db.transaction("rw", [this.db.snapshots, this.db.snapshotBodies], async () => {
+      await this.db.snapshotBodies.add({ id: meta.id, canonical: snapshot });
+      await this.db.snapshots.add(meta);
+    });
     await this.touch(workspaceId);
-    return rec;
+    return { ...meta, canonical: snapshot };
   }
 
-  getSnapshot(id: string): Promise<SnapshotRecord | undefined> {
-    return this.db.snapshots.get(id);
+  async getSnapshot(id: string): Promise<SnapshotRecord | undefined> {
+    return this.withBody(await this.db.snapshots.get(id));
+  }
+
+  /** The record with its payload; undefined when either is missing. */
+  private async withBody(meta: SnapshotMetaRecord | undefined): Promise<SnapshotRecord | undefined> {
+    if (!meta) return undefined;
+    const body = await this.db.snapshotBodies.get(meta.id);
+    return body ? { ...meta, canonical: body.canonical } : undefined;
+  }
+
+  /** Both halves of each snapshot. Inside a transaction that holds `snapshots` and `snapshotBodies`. */
+  private async deleteSnapshots(ids: string[]): Promise<void> {
+    if (!ids.length) return;
+    await this.db.snapshotBodies.bulkDelete(ids);
+    await this.db.snapshots.bulkDelete(ids);
   }
 
   /**
@@ -266,7 +285,7 @@ export class WorkspaceStore {
     if (!Number.isFinite(keep) || keep < 1) return [];
     return this.db.transaction(
       "rw",
-      [this.db.snapshots, this.db.specUploads, this.db.runs],
+      [this.db.snapshots, this.db.snapshotBodies, this.db.specUploads, this.db.runs],
       async () => {
         const runs = await this.db.runs
           .where("workspaceId")
@@ -290,29 +309,28 @@ export class WorkspaceStore {
         if (doomed.length === 0) return [];
         const ids = doomed.map((s) => s.id);
         await this.db.specUploads.where("snapshotId").anyOf(ids).delete();
-        await this.db.snapshots.bulkDelete(ids);
+        await this.deleteSnapshots(ids);
         return ids;
       },
     );
   }
 
   async latestSnapshot(sourceId: string): Promise<SnapshotRecord | undefined> {
-    return this.db.snapshots
-      .where("[sourceId+takenAt]")
-      .between([sourceId, ""], [sourceId, "￿"])
-      .last();
+    return this.withBody(
+      await this.db.snapshots
+        .where("[sourceId+takenAt]")
+        .between([sourceId, ""], [sourceId, "￿"])
+        .last(),
+    );
   }
 
-  /** Newest first, without the canonical payload. */
-  async listSnapshots(
-    sourceId: string,
-  ): Promise<Omit<SnapshotRecord, "canonical">[]> {
-    const all = await this.db.snapshots
+  /** Newest first, without the canonical payload: the metadata table alone is read. */
+  async listSnapshots(sourceId: string): Promise<SnapshotMetaRecord[]> {
+    return this.db.snapshots
       .where("[sourceId+takenAt]")
       .between([sourceId, ""], [sourceId, "￿"])
       .reverse()
       .toArray();
-    return all.map(({ canonical: _c, ...rest }) => rest);
   }
 
   async saveSpecUpload(

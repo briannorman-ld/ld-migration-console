@@ -299,9 +299,14 @@ export function WorkspaceScreen({
   );
   const hasLdSource = visibleSnaps.some((s) => s.neutral);
   const m = useMigration(workspaceId, visibleSnaps);
+  // The walks below map every entity (through the memo in lib/migration.ts) and key on the
+  // mapping inputs, not on `m`: the context is rebuilt on every LD session patch and exclusion
+  // change too, and on a large project each walk is tens of milliseconds on the main thread.
+  const inputs = m?.inputs;
+  const connected = m?.connected ?? false;
   const allDecisions = useMemo(
-    () => (m ? collectDecisions(visibleSnaps, m.profile, m.connected, m) : []),
-    [m, visibleSnaps],
+    () => (inputs ? collectDecisions(visibleSnaps, inputs.profile, connected, inputs) : []),
+    [inputs, connected, visibleSnaps],
   );
   const openDecisions = useMemo(
     () => allDecisions.filter((d) => !d.resolvedWith),
@@ -311,31 +316,34 @@ export function WorkspaceScreen({
     (d) => d.decision.severity === "blocking",
   ).length;
   // Unit types still on their default while LD lacks the kind: each item asks (Unit types page).
+  const profile = m?.profile;
+  const resolutionList = m?.resolutionList;
+  const existingContextKinds = m?.capabilities.existingContextKinds;
   const unsettledKinds = useMemo(
     () =>
-      m
+      profile && resolutionList && existingContextKinds
         ? visibleSnaps.reduce(
             (n, snap) =>
               n +
               unsettledUnitTypes(
-                m.profile,
-                m.resolutionList,
+                profile,
+                resolutionList,
                 snap.source.sourceId,
                 unitTypeUsage(snap).map((u) => u.name),
-                m.capabilities.existingContextKinds,
+                existingContextKinds,
               ).length,
             0,
           )
         : 0,
-    [m, visibleSnaps],
+    [profile, resolutionList, existingContextKinds, visibleSnaps],
   );
   const interrupted = (runs ?? []).filter((r) => isInterrupted(r, workspaceId));
 
   // Monitoring (PLAN §14): a read-only LD check on connect and every 15 minutes while the tab is
   // open; drift rows come from the same memoized mapping results the explorers use.
   const monitorItems = useMemo(
-    () => (m ? monitoredItems(visibleSnaps, m, m.connected) : []),
-    [m, visibleSnaps],
+    () => (inputs ? monitoredItems(visibleSnaps, inputs, connected) : []),
+    [inputs, connected, visibleSnaps],
   );
   const monitoring = useMonitoring(workspaceId, monitorItems, ld, runs);
   useMonitorSchedule(workspaceId, ld, visibleSnaps, !viewingPast);
@@ -344,8 +352,9 @@ export function WorkspaceScreen({
   // Load deferred ID lists (≤15k IDs) once per snapshot, so small list segments don't sit behind an
   // "ID list not loaded" decision. Bigger lists (big segments) load on request from Source warnings.
   const fetchedFor = useRef(new Set<string>());
+  const idLists = m?.idLists;
   useEffect(() => {
-    if (!m || !sources) return;
+    if (!idLists || !sources) return;
     const pending = visibleSnaps.filter(
       (sn) => !fetchedFor.current.has(`${sn.source.sourceId}@${sn.takenAt}`),
     );
@@ -353,10 +362,10 @@ export function WorkspaceScreen({
     pending.forEach((sn) =>
       fetchedFor.current.add(`${sn.source.sourceId}@${sn.takenAt}`),
     );
-    void fetchDeferredIdLists(workspaceId, sources, pending, m.idLists).catch(
+    void fetchDeferredIdLists(workspaceId, sources, pending, idLists).catch(
       () => undefined,
     );
-  }, [m, visibleSnaps, sources, workspaceId]);
+  }, [idLists, visibleSnaps, sources, workspaceId]);
 
   // One object per change, so the guide recomputes its model only when something in it moved.
   const guideInput: GuideInput = useMemo(

@@ -115,7 +115,8 @@ export function LdSourceSideBySide({
       }
     }
     return out;
-  }, [ldSources, snapshots, env, m, ldFlags, resource]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on what the rows read of `m` (see GatesSideBySide)
+  }, [ldSources, snapshots, env, m.inputs, m.connected, m.ldEnvs, m.ld.segments, ldFlags, resource]);
 
   const visible = useMemo(
     () =>

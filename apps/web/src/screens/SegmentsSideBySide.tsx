@@ -112,7 +112,8 @@ export function SegmentsSideBySide({
           return { sourceId, seg, shared: Object.keys(mr.bySource).length, ldEnv, result, strip, refs, used: refs.some((r) => !r.archived), ...(setAside ? { setAside } : {}) };
         }),
       ),
-    [matched, snapshots, env, m, references, ld.segments],
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on what the rows read of `m` (see GatesSideBySide)
+    [matched, snapshots, env, m.inputs, m.connected, m.ldEnvs, m.exclusions, references, ld.segments],
   );
   const unusedCount = useMemo(() => rows.filter((r) => !r.seg.archived && !r.used && !r.setAside).length, [rows]);
   const setAsideCount = useMemo(() => rows.filter((r) => !r.seg.archived && r.setAside).length, [rows]);

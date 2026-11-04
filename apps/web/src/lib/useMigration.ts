@@ -9,6 +9,12 @@ import { ensureProfile, ldDirectory, mapperCapabilities, type MappingInputs } fr
 import { store } from './store.ts';
 
 export interface MigrationContext extends MappingInputs {
+  /**
+   * The mapping inputs as one object that keeps its identity until one of them changes: what a
+   * memo that only maps (the decision list, the monitored items, an explorer's rows) keys on,
+   * instead of the context, which is rebuilt on every LD session patch and exclusion too.
+   */
+  inputs: MappingInputs;
   ld: LdSession;
   /** LD connected with a project chosen and probed: environment mapping is meaningful. */
   connected: boolean;
@@ -56,21 +62,20 @@ export function useMigration(workspaceId: string, snapshots: CanonicalSnapshot[]
   const directory = useStable(useMemo(() => ldDirectory(ld), [ld.members, ld.teams, ld.matrix]))!;
   const idLists = useStableIdLists(idListRecs);
   const coverage = useStable(useMemo(() => (idListRecs ? Object.fromEntries(idListRecs.flatMap((r) => (r.coverage ? [[r.uid, r.coverage] as const] : []))) : undefined), [idListRecs]));
+  const inputs = useMemo<MappingInputs | undefined>(
+    () => (profile && resolutions && idLists && coverage ? { profile, resolutions, capabilities, directory, idLists, coverage, now } : undefined),
+    [profile, resolutions, capabilities, directory, idLists, coverage, now],
+  );
 
   return useMemo(() => {
-    if (!profile || !resolutionList || !resolutions || !exclusions || !idLists || !coverage) return null;
+    if (!profile || !resolutionList || !resolutions || !exclusions || !idLists || !coverage || !inputs) return null;
     return {
+      ...inputs,
+      inputs,
       ld,
       connected: ld.status === 'connected' && !!ld.matrix,
       ldEnvs,
-      profile,
-      resolutions,
       resolutionList,
-      capabilities,
-      directory,
-      idLists,
-      coverage,
-      now,
       resolve: (decisions, optionKey) => store.saveResolutions(workspaceId, resolutionsFor(decisions, optionKey, new Date().toISOString())),
       saveResolutions: (rs) => store.saveResolutions(workspaceId, rs),
       setPolicy: async (type, optionKey) => {
@@ -85,15 +90,16 @@ export function useMigration(workspaceId: string, snapshots: CanonicalSnapshot[]
       exclude: (uids, reason) => store.setExclusions(workspaceId, uids.map((uid) => (reason ? { uid, reason } : { uid }))),
       include: (uids) => store.deleteExclusions(workspaceId, uids),
     };
-  }, [profile, resolutionList, resolutions, exclusions, capabilities, directory, idLists, coverage, ld, ldEnvs, now, workspaceId]);
+  }, [profile, resolutionList, resolutions, exclusions, idLists, coverage, inputs, ld, ldEnvs, workspaceId]);
 }
 
 /**
  * `value`, keeping the previous one while its content (as JSON) is unchanged. For small inputs
- * whose source object is rebuilt more often than it changes.
+ * whose source object is rebuilt more often than it changes. The JSON is taken once per new
+ * object, not per render: the LD directory (every account member) goes through here.
  */
 export function useStable<T>(value: T): T {
-  const key = value === undefined ? '' : JSON.stringify(value);
+  const key = useMemo(() => (value === undefined ? '' : JSON.stringify(value)), [value]);
   // The key is the identity that matters here: the same JSON means the same input to the mapper.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   return useMemo(() => value, [key]);

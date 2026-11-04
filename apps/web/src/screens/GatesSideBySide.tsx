@@ -236,7 +236,10 @@ export function FlagSideBySide({
           };
         }),
       ),
-    [matched, snapshots, env, m, ldFlags],
+    // Keyed on what the rows read of the context, not on `m`: it is rebuilt on every LD session
+    // patch, and these rows map every item in every environment.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [matched, snapshots, env, m.inputs, m.connected, m.ldEnvs, m.exclusions, ldFlags],
   );
   const quietCount = useMemo(() => rows.filter((r) => !r.gate.archived && isQuiet(r.usage)).length, [rows]);
   const setAsideCount = useMemo(() => rows.filter((r) => !r.gate.archived && r.setAside).length, [rows]);

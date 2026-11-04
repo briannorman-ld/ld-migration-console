@@ -44,6 +44,7 @@ import { STATSIG_CONSOLE_BASE_URL, StatsigConsoleClient } from "@sslm/statsig-cl
 import type { SourceRecord, RunJournalRecord } from "@sslm/store";
 import { demoKey, startDemoMock } from "./demo.ts";
 import { coalescedJournal } from "./journal.ts";
+import { readsHold, trackReads, type ProfileRead } from "./profileReads.ts";
 import { learnCapability, ldClient, ldSessionSnapshot, mergeLdFlags, mergeLdSegments, refreshLdLists, type LdSession } from "./ld.ts";
 import { latestChanges, listsTouchedByRun, staleAfterRun } from "./reconcile.ts";
 import { secrets } from "./secrets.ts";
@@ -61,11 +62,13 @@ export async function ensureProfile(
   hints?: Record<string, string>,
 ): Promise<MappingProfile> {
   const stored = await store.getProfile(workspaceId);
-  const base: MappingProfile = stored ?? {
-    version: 1,
-    sources: {},
-    attributes: {},
-    policies: {},
+  // `maintainers` and `teams` are kept present: the mapping memo tracks the profile entries a
+  // mapping read (lib/profileReads.ts), and the first People-step choice must be a new entry in
+  // an object every mapping saw, not an object where every mapping saw nothing.
+  const base: MappingProfile = {
+    maintainers: {},
+    teams: {},
+    ...(stored ?? { version: 1, sources: {}, attributes: {}, policies: {} }),
   };
   const next = ldEnvs.length
     ? reconcileProfile(base, snapshots, ldEnvs, hints)
@@ -174,20 +177,25 @@ export function ldDirectory(ld: Pick<LdSession, 'members' | 'teams' | 'matrix'>)
  * the same entities with the same inputs, and React re-renders on every click, so without this the
  * whole project was re-mapped (0.15 ms per gate per environment: half a second on a real project)
  * for each selection, filter keystroke or nav change. Results are keyed on the identity of what the
- * mapper reads: the profile, the ID lists and their coverage, the capabilities and the LD
- * directory (each a new object only when it changed; useMigration keeps them stable), then the
- * snapshot (a new object after a sync), then entity, environment and `now`. The MigrationContext
- * that carries them changes identity on every LD session patch (a probe step, a flag refresh, a
- * monitoring check), which must not throw the whole project's mapping away.
+ * mapper reads: the ID lists' coverage, the capabilities and the LD directory (each a new object
+ * only when it changed; useMigration keeps them stable), then the snapshot (a new object after a
+ * sync), then entity, environment and `now`. The MigrationContext that carries them changes
+ * identity on every LD session patch (a probe step, a flag refresh, a monitoring check), which
+ * must not throw the whole project's mapping away.
  *
- * Resolutions are not a key: the map is rebuilt whenever one decision is saved, and remapping
- * every entity of a large project then froze the page for seconds. The mapper consults a
- * resolution only by the id of a decision it raised (`lookupResolution`), so each result remembers
- * the decision ids it met (applied, unresolved and stale) and stays valid while those entries are
- * unchanged in the new map. Results are treated as immutable by callers.
+ * Resolutions, ID lists and the profile are not keys: each is one object rebuilt whenever one
+ * part of it changes (a decision saved, a list fetched, a policy or maintainer chosen), and
+ * remapping every entity of a large project then froze the page for seconds. The mapper consults a
+ * resolution only by the id of a decision it raised (`lookupResolution`), a list only by the uid
+ * of a segment it uses, and the profile only at a handful of paths (lib/profileReads.ts), so each
+ * result remembers what it read and stays valid while those entries are unchanged in the new
+ * object. Results are treated as immutable by callers.
  */
 interface MemoEntry {
   value: unknown;
+  /** The profile the value was computed (or last validated) against, and the paths it read in it (undefined: only the same object is a hit). */
+  profile: MappingProfile;
+  profileReads: ProfileRead[] | undefined;
   /** The resolutions map the value was computed (or last validated) against. */
   resolutions: ReadonlyMap<string, Resolution>;
   /** Decision ids the mapping looked up; undefined when the value does not say (then only the same map is a hit). */
@@ -202,7 +210,7 @@ interface MemoEntry {
   consultedLists: string[] | undefined;
 }
 type MemoLeaf = Map<string, MemoEntry>;
-const mapMemo = new WeakMap<object, WeakMap<object, WeakMap<object, WeakMap<object, WeakMap<CanonicalSnapshot, MemoLeaf>>>>>();
+const mapMemo = new WeakMap<object, WeakMap<object, WeakMap<object, WeakMap<CanonicalSnapshot, MemoLeaf>>>>();
 
 /** The decision ids a mapping result looked up, from its applied, unresolved and stale decisions. */
 function consultedDecisionIds(value: unknown): string[] | undefined {
@@ -215,6 +223,8 @@ function consultedDecisionIds(value: unknown): string[] | undefined {
 const sameResolution = (a: Resolution | undefined, b: Resolution | undefined): boolean => a === b || (!!a && !!b && a.optionKey === b.optionKey && a.scope === b.scope && a.fingerprint === b.fingerprint);
 
 function stillValid(e: MemoEntry, i: MappingInputs): boolean {
+  const profile = e.profile === i.profile || (!!e.profileReads && isObject(i.profile) && readsHold(e.profileReads, i.profile));
+  if (!profile) return false;
   const resolutions = e.resolutions === i.resolutions || (!!e.consulted && e.consulted.every((id) => sameResolution(e.resolutions.get(id), i.resolutions.get(id))));
   if (!resolutions) return false;
   const idLists = i.idLists ?? NO_LISTS;
@@ -257,12 +267,15 @@ function nested<K extends object, V extends object>(map: WeakMap<K, V>, key: K, 
 
 /** Stands in for an input a caller left out (tests build partial contexts), so it still keys the memo. */
 const MISSING = {};
-const part = (v: unknown): object => (v !== null && typeof v === 'object' ? v : MISSING);
+const isObject = (v: unknown): v is object => v !== null && typeof v === 'object';
+const part = (v: unknown): object => (isObject(v) ? v : MISSING);
 
-/** `compute` receives the ID lists to hand the mapper: a tracked view, so the entry knows which lists it depends on. */
-function memoized<T>(i: MappingInputs, snapshot: CanonicalSnapshot, key: string, compute: (idLists: IdLists) => T): T {
-  const byCoverage = nested(mapMemo, part(i.profile), () => new WeakMap());
-  const byCapabilities = nested(byCoverage, part(i.coverage), () => new WeakMap());
+/**
+ * `compute` receives the ID lists and the profile to hand the mapper: tracked views, so the entry
+ * knows which lists and which profile entries it depends on.
+ */
+function memoized<T>(i: MappingInputs, snapshot: CanonicalSnapshot, key: string, compute: (idLists: IdLists, profile: MappingProfile) => T): T {
+  const byCapabilities = nested(mapMemo, part(i.coverage), () => new WeakMap());
   const byDirectory = nested(byCapabilities, part(i.capabilities), () => new WeakMap());
   const bySnapshot = nested(byDirectory, part(i.directory), () => new WeakMap());
   const byKey = nested(bySnapshot, snapshot, () => new Map<string, MemoEntry>());
@@ -270,13 +283,15 @@ function memoized<T>(i: MappingInputs, snapshot: CanonicalSnapshot, key: string,
   const idLists = i.idLists ?? NO_LISTS;
   const hit = byKey.get(full);
   if (hit && stillValid(hit, i)) {
+    hit.profile = i.profile;
     hit.resolutions = i.resolutions;
     hit.idLists = idLists;
     return hit.value as T;
   }
-  const tracked = trackedIdLists(idLists);
-  const value = compute(tracked.lists);
-  byKey.set(full, { value, resolutions: i.resolutions, consulted: consultedDecisionIds(value), idLists, consultedLists: tracked.consulted() });
+  const lists = trackedIdLists(idLists);
+  const profile = isObject(i.profile) ? trackReads(i.profile) : undefined;
+  const value = compute(lists.lists, profile ? profile.value : i.profile);
+  byKey.set(full, { value, profile: i.profile, profileReads: profile?.reads(), resolutions: i.resolutions, consulted: consultedDecisionIds(value), idLists, consultedLists: lists.consulted() });
   return value;
 }
 
@@ -288,11 +303,11 @@ export function mapGateFor(
   env: EnvTarget,
   i: MappingInputs,
 ): GateMapResult {
-  return memoized(i, snapshot, memoKey("gate", gate.uid, env), (idLists) =>
+  return memoized(i, snapshot, memoKey("gate", gate.uid, env), (idLists, profile) =>
     mapGate({
       canonical: { snapshot, idLists, coverage: i.coverage },
       entity: gate,
-      profile: i.profile,
+      profile,
       resolutions: i.resolutions,
       capabilities: i.capabilities,
       env,
@@ -308,11 +323,11 @@ export function mapSegmentFor(
   env: EnvTarget,
   i: MappingInputs,
 ): SegmentMapResult {
-  return memoized(i, snapshot, memoKey("segment", segment.uid, env), (idLists) =>
+  return memoized(i, snapshot, memoKey("segment", segment.uid, env), (idLists, profile) =>
     mapSegment({
       canonical: { snapshot, idLists, coverage: i.coverage },
       entity: segment,
-      profile: i.profile,
+      profile,
       resolutions: i.resolutions,
       capabilities: i.capabilities,
       env,
@@ -323,30 +338,30 @@ export function mapSegmentFor(
 }
 
 export function mapConfigFor(snapshot: CanonicalSnapshot, config: Config, env: EnvTarget, i: MappingInputs): ConfigMapResult {
-  return memoized(i, snapshot, memoKey("config", config.uid, env), (idLists) =>
-    mapConfig({ canonical: { snapshot, idLists, coverage: i.coverage }, entity: config, profile: i.profile, resolutions: i.resolutions, capabilities: i.capabilities, env, now: i.now, directory: i.directory }),
+  return memoized(i, snapshot, memoKey("config", config.uid, env), (idLists, profile) =>
+    mapConfig({ canonical: { snapshot, idLists, coverage: i.coverage }, entity: config, profile, resolutions: i.resolutions, capabilities: i.capabilities, env, now: i.now, directory: i.directory }),
   );
 }
 
 export function mapAutotuneFor(snapshot: CanonicalSnapshot, autotune: Autotune, env: EnvTarget, i: MappingInputs): AutotuneMapResult {
-  return memoized(i, snapshot, memoKey("autotune", autotune.uid, env), (idLists) =>
-    mapAutotune({ canonical: { snapshot, idLists, coverage: i.coverage }, entity: autotune, profile: i.profile, resolutions: i.resolutions, capabilities: i.capabilities, env, now: i.now, directory: i.directory }),
+  return memoized(i, snapshot, memoKey("autotune", autotune.uid, env), (idLists, profile) =>
+    mapAutotune({ canonical: { snapshot, idLists, coverage: i.coverage }, entity: autotune, profile, resolutions: i.resolutions, capabilities: i.capabilities, env, now: i.now, directory: i.directory }),
   );
 }
 
 /** Neutral (LD-source) flag → desired LD flag (PLAN §20), memoized like the StatSig mappers. */
 export function mapNeutralFlagFor(snapshot: CanonicalSnapshot, flag: NeutralFlag, env: EnvTarget, i: MappingInputs): NeutralFlagMapResult {
-  return memoized(i, snapshot, memoKey("flag", flag.uid, env), () => mapNeutralFlag({ canonical: { snapshot }, entity: flag, profile: i.profile, resolutions: i.resolutions, capabilities: i.capabilities, env, now: i.now, directory: i.directory }));
+  return memoized(i, snapshot, memoKey("flag", flag.uid, env), (_lists, profile) => mapNeutralFlag({ canonical: { snapshot }, entity: flag, profile, resolutions: i.resolutions, capabilities: i.capabilities, env, now: i.now, directory: i.directory }));
 }
 
 /** StatSig prompt → LD AI Config shell (PLAN §6). Project-level: the environment only keys the memo. */
 export function mapPromptFor(snapshot: CanonicalSnapshot, prompt: Prompt, i: MappingInputs): PromptMapResult {
   const env = { statsig: "", ld: "" };
-  return memoized(i, snapshot, memoKey("prompt", prompt.uid, env), () => mapPrompt({ canonical: { snapshot }, entity: prompt, profile: i.profile, resolutions: i.resolutions, capabilities: i.capabilities, env, now: i.now, directory: i.directory }));
+  return memoized(i, snapshot, memoKey("prompt", prompt.uid, env), (_lists, profile) => mapPrompt({ canonical: { snapshot }, entity: prompt, profile, resolutions: i.resolutions, capabilities: i.capabilities, env, now: i.now, directory: i.directory }));
 }
 
 export function mapNeutralSegmentFor(snapshot: CanonicalSnapshot, segment: NeutralSegment, env: EnvTarget, i: MappingInputs): NeutralSegmentMapResult {
-  return memoized(i, snapshot, memoKey("nsegment", segment.uid, env), () => mapNeutralSegment({ canonical: { snapshot }, entity: segment, profile: i.profile, resolutions: i.resolutions, capabilities: i.capabilities, env, now: i.now, directory: i.directory }));
+  return memoized(i, snapshot, memoKey("nsegment", segment.uid, env), (_lists, profile) => mapNeutralSegment({ canonical: { snapshot }, entity: segment, profile, resolutions: i.resolutions, capabilities: i.capabilities, env, now: i.now, directory: i.directory }));
 }
 
 export interface DecisionInstance {

@@ -67,6 +67,19 @@ export interface SnapshotRecord {
   canonical: CanonicalSnapshot;
 }
 
+/**
+ * A snapshot as the `snapshots` table holds it: everything but the canonical payload, which sits
+ * in `snapshotBodies` under the same id (IndexedDB reads whole records, and the snapshots view
+ * lists a source's history on every change; the payloads are megabytes each).
+ */
+export type SnapshotMetaRecord = Omit<SnapshotRecord, "canonical">;
+
+export interface SnapshotBodyRecord {
+  /** The snapshot's id. */
+  id: string;
+  canonical: CanonicalSnapshot;
+}
+
 /** Raw spec uploads, versioned per source (PLAN §4.2 "Every upload becomes a new immutable snapshot"). */
 export interface SpecUploadRecord {
   id: string;
@@ -233,7 +246,8 @@ export interface LdStateRecord {
 export class MigratorDb extends Dexie {
   workspaces!: EntityTable<WorkspaceRecord, "id">;
   sources!: EntityTable<SourceRecord, "id">;
-  snapshots!: EntityTable<SnapshotRecord, "id">;
+  snapshots!: EntityTable<SnapshotMetaRecord, "id">;
+  snapshotBodies!: EntityTable<SnapshotBodyRecord, "id">;
   specUploads!: EntityTable<SpecUploadRecord, "id">;
   capabilities!: EntityTable<CapabilityRecord, "workspaceId">;
   profiles!: EntityTable<ProfileRecord, "workspaceId">;
@@ -313,6 +327,23 @@ export class MigratorDb extends Dexie {
             }
           });
         if (parts.length) await tx.table<RunPreImageRecord, string>("runPreImages").bulkPut(parts);
+      });
+    // The canonical payload moves out of the snapshot records into its own table (see
+    // SnapshotMetaRecord), one record at a time: a workspace may hold tens of megabytes of them.
+    this.version(10)
+      .stores({
+        snapshotBodies: "id",
+      })
+      .upgrade(async (tx) => {
+        const snapshots = tx.table<SnapshotMetaRecord & { canonical?: CanonicalSnapshot }, string>("snapshots");
+        const bodies = tx.table<SnapshotBodyRecord, string>("snapshotBodies");
+        for (const id of await snapshots.toCollection().primaryKeys()) {
+          const rec = await snapshots.get(id);
+          if (!rec || rec.canonical === undefined) continue;
+          await bodies.put({ id, canonical: rec.canonical });
+          delete rec.canonical;
+          await snapshots.put(rec);
+        }
       });
   }
 }

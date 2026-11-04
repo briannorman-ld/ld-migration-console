@@ -38,6 +38,16 @@ function key(name: string): string {
  * compared case-insensitively, as StatSig does.
  */
 export function unitTypeUsage(snapshot: CanonicalSnapshot): UnitTypeUsage[] {
+  let usage = usageCache.get(snapshot);
+  if (!usage) usageCache.set(snapshot, (usage = computeUnitTypeUsage(snapshot)));
+  return usage;
+}
+
+// Snapshots are immutable, so the walk over every item runs once per snapshot (the guide counts
+// re-read it on every decision). Callers read the result and never change it.
+const usageCache = new WeakMap<CanonicalSnapshot, UnitTypeUsage[]>();
+
+function computeUnitTypeUsage(snapshot: CanonicalSnapshot): UnitTypeUsage[] {
   const out = new Map<string, UnitTypeUsage>();
   const get = (name: string): UnitTypeUsage => {
     const k = key(name);

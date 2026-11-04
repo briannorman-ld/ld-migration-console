@@ -395,3 +395,50 @@ describe("run journal: pre-images kept apart", () => {
     expect(await s.db.runPreImages.count()).toBe(1);
   });
 });
+
+describe("snapshots: payloads kept apart", () => {
+  const desc = { sourceId: "web", sourceKind: "console_api" as const, alias: "web" };
+
+  it("lists a source's history from the metadata table alone and joins the payload on a read", async () => {
+    const s = store();
+    const ws = await s.createWorkspace({ name: "x" });
+    await s.addSource(ws.id, source("web"));
+    const snap = { ...emptySnapshot(desc, "2026-01-01T00:00:00Z"), warnings: [{ code: "x", message: "y" } as never] };
+    const saved = await s.saveSnapshot(ws.id, snap);
+    expect(saved.canonical).toBe(snap);
+    const listed = await s.listSnapshots("web");
+    expect(listed).toHaveLength(1);
+    expect(listed[0]).not.toHaveProperty("canonical");
+    expect(listed[0]!.summary.warnings).toBe(1);
+    expect(await s.db.snapshots.get(saved.id)).not.toHaveProperty("canonical");
+    expect((await s.getSnapshot(saved.id))?.canonical).toEqual(snap);
+    expect((await s.latestSnapshot("web"))?.canonical).toEqual(snap);
+    // Pruning, removing the source and deleting the workspace take both halves.
+    await s.saveSnapshot(ws.id, { ...snap, takenAt: "2026-01-02T00:00:00Z" });
+    await s.pruneSnapshots(ws.id, "web", 1);
+    expect(await s.db.snapshotBodies.count()).toBe(1);
+    expect(await s.db.snapshotBodies.get(saved.id)).toBeUndefined();
+    await s.removeSource("web");
+    expect(await s.db.snapshotBodies.count()).toBe(0);
+    await s.addSource(ws.id, source("web"));
+    await s.saveSnapshot(ws.id, snap);
+    await s.deleteWorkspace(ws.id);
+    expect(await s.db.snapshotBodies.count()).toBe(0);
+    expect(await s.db.snapshots.count()).toBe(0);
+  });
+
+  it("moves the payloads of snapshots saved before version 10 into their own table on upgrade", async () => {
+    const name = `upgrade-${crypto.randomUUID()}`;
+    const { default: Dexie } = await import("dexie");
+    const old = new Dexie(name);
+    old.version(9).stores({ snapshots: "id, workspaceId, sourceId, [sourceId+takenAt]" });
+    const canonical = emptySnapshot(desc, "2026-01-01T00:00:00Z");
+    await old.table("snapshots").put({ id: "s1", workspaceId: "w", sourceId: "web", takenAt: canonical.takenAt, sourceKind: "console_api", summary: { gates: 0, configs: 0, segments: 0, experiments: 0, warnings: 0 }, bytes: 10, canonical });
+    old.close();
+    const s = new WorkspaceStore(new MigratorDb(name));
+    expect((await s.listSnapshots("web")).map((x) => x.id)).toEqual(["s1"]);
+    expect(await s.db.snapshots.get("s1")).not.toHaveProperty("canonical");
+    expect((await s.getSnapshot("s1"))?.canonical).toEqual(canonical);
+    expect((await s.latestSnapshot("web"))?.canonical).toEqual(canonical);
+  });
+});

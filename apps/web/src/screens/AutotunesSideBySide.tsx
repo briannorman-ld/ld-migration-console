@@ -97,7 +97,8 @@ export function AutotunesSideBySide({
           return { sourceId, autotune, shared: Object.keys(mr.bySource).length, ldEnv, result, strip };
         }),
       ),
-    [matched, snapshots, env, m, ldFlags],
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on what the rows read of `m` (see GatesSideBySide)
+    [matched, snapshots, env, m.inputs, m.connected, m.ldEnvs, ldFlags],
   );
 
   const visible = useMemo(

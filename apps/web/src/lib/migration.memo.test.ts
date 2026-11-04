@@ -2,6 +2,7 @@ import 'fake-indexeddb/auto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { acmeSnapshot, CAPS, NOW } from '../../../../packages/mapper/test/fixtures.ts';
 import { server } from '../../../../packages/mapper/test/fixtures.ts';
+import type { DecisionType } from '@sslm/mapper';
 import { buildPlan, collectDecisions, envTargets, mapGateFor, type MappingInputs } from './migration.ts';
 
 /**
@@ -27,11 +28,10 @@ describe('mapping memo', () => {
 
     // The MigrationContext is rebuilt on every LD session patch; made of the same parts, it still hits.
     expect(mapGateFor(web, gate, env, { ...inputs })).toBe(first);
-    // A different environment, a new profile, new ID lists, a different `now` or a new snapshot (a
-    // sync) each miss.
+    // A different environment, a different `now` or a new snapshot (a sync) each miss; a new
+    // profile or new ID lists miss only where they changed what this gate read (below).
     const other = envTargets(profile, web, false)[1]!;
     expect(mapGateFor(web, gate, other, inputs)).not.toBe(first);
-    expect(mapGateFor(web, gate, env, { ...inputs, profile: { ...profile } })).not.toBe(first);
     // Saving a decision rebuilds the resolutions map. A map that changes nothing this gate looked up
     // (another entity's decision, or an unrelated id) still hits; one that answers or alters one of
     // this gate's own decisions misses.
@@ -63,6 +63,24 @@ describe('mapping memo', () => {
     expect(mapGateFor(web, wholesale, env, { ...inputs, idLists: { [partners.uid]: list, other: ['y'] } })).toBe(a);
     expect(mapGateFor(web, gate, env, { ...inputs, now: '2026-01-01T00:00:00.000Z' })).not.toBe(first);
     expect(mapGateFor({ ...web }, gate, env, inputs)).not.toBe(first);
+    // The profile is tracked like the resolutions (lib/profileReads.ts): a new object with the same
+    // entries hits, one that changes an entry this gate read (the policy for a decision it raised,
+    // its source's env mapping) misses, and one that changes an entry it never read (another
+    // type's policy) still hits. Nothing of the tracked profile may end up in the result: results
+    // are cloned into plans and runs.
+    const withPeople = { ...profile, maintainers: {}, teams: {} };
+    const tracked = mapGateFor(web, gate, env, { ...inputs, profile: withPeople });
+    expect(mapGateFor(web, gate, env, { ...inputs, profile: { ...withPeople } })).toBe(tracked);
+    // A choice for another owner (the People step) touches nothing this gate read. (ensureProfile
+    // keeps `maintainers` and `teams` present, so the first choice is not a change from "absent".)
+    expect(mapGateFor(web, gate, env, { ...inputs, profile: { ...withPeople, maintainers: { 'nobody@example.com': 'unassigned' } } })).toBe(tracked);
+    expect(() => structuredClone(tracked)).not.toThrow();
+    const raisedTypes = new Set([...tracked.unresolved, ...tracked.applied.map((a) => a.decision)].map((d) => d.type));
+    const unrelatedType = (['maintainer_unknown', 'unit_type_kind', 'client_side_availability', 'any_case_sensitivity'] as DecisionType[]).find((t) => !raisedTypes.has(t))!;
+    expect(mapGateFor(web, gate, env, { ...inputs, profile: { ...withPeople, policies: { [unrelatedType]: 'x' } } })).toBe(tracked);
+    const raised = tracked.unresolved[0] ?? tracked.applied[0]!.decision;
+    expect(mapGateFor(web, gate, env, { ...inputs, profile: { ...withPeople, policies: { [raised.type]: raised.options[0]!.key } } })).not.toBe(tracked);
+    expect(mapGateFor(web, gate, env, { ...inputs, profile: { ...withPeople, sources: { [web.source.sourceId]: { envMapping: { staging: 'test' }, unitTypeKinds: {} } } } })).not.toBe(tracked);
     // Equal content either way.
     expect(mapGateFor(web, gate, env, { ...inputs, resolutions: new Map() })).toEqual(first);
   });
