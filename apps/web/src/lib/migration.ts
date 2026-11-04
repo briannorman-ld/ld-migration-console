@@ -556,8 +556,8 @@ export interface MigrationSelection {
   flags?: string[];
   /** Segment uids chosen on their own (LD-source segments). */
   segments?: string[];
-  /** Context kinds to create on their own (guide step 3). */
-  contextKinds?: { key: string; unitType: string }[];
+  /** Context kinds to create on their own (the guide's Context kinds step), or to enable for experiments. */
+  contextKinds?: { key: string; unitType: string; availableForExperiments?: boolean }[];
   /** Prompt uids → LD AI Configs (project-level). */
   prompts?: string[];
 }

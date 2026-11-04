@@ -101,8 +101,12 @@ export interface PlanRequest {
   prompts?: string[];
   /** Segment uids to migrate on their own (neutral or StatSig); segments a flag needs are pulled in regardless. */
   segments?: string[];
-  /** Context kinds to create on their own (the guide's "create the kinds first"); kinds an item needs are pulled in regardless. */
-  contextKinds?: { key: string; unitType: string }[];
+  /**
+   * Context kinds to create on their own (the guide's "create the kinds first"); kinds an item
+   * needs are pulled in regardless. `availableForExperiments` also enables the kind as a
+   * randomization unit (an existing kind may be listed for that alone).
+   */
+  contextKinds?: { key: string; unitType: string; availableForExperiments?: boolean }[];
   ldEnvs: string[];
   snapshots: CanonicalSnapshot[];
   idLists?: IdLists;
@@ -682,6 +686,9 @@ export function planMigration(req: PlanRequest): Plan {
     }
     return id;
   };
+  // Kinds the guide asked to make "available for experiments" (profile.contextKinds), whether the
+  // kind is created in this run or already exists.
+  for (const k of req.contextKinds ?? []) if (k.availableForExperiments && k.key !== 'user') ensureRandomizationUnit(k.key);
 
   const planAutotune = (a: Autotune, ldEnv: string): void => {
     const itemKey = `${a.uid}|${ldEnv}`;
@@ -1052,7 +1059,7 @@ export function planMigration(req: PlanRequest): Plan {
   // A step is kept while something still depends on it; dropping it may free its own dependencies.
   const requestedSegmentSteps = new Set([...items.values()].filter((i) => i.kind === 'segment' && !i.dependency && i.status === 'ready').map((i) => `segment:${i.ldEnv}:${i.ldKey}`));
   // Context kinds asked for on their own (guide step 3) are wanted even with nothing depending on them.
-  const requestedKindSteps = new Set((req.contextKinds ?? []).map((k) => `context_kind:${k.key}`));
+  const requestedKindSteps = new Set((req.contextKinds ?? []).flatMap((k) => [`context_kind:${k.key}`, ...(k.availableForExperiments ? [`randomization_unit:${k.key}`] : [])]));
   const wanted = (s: PlanStep) => s.op === 'update_flag_env' || s.op === 'create_bandit' || s.op === 'upsert_ai_config' || requestedSegmentSteps.has(s.id) || requestedKindSteps.has(s.id);
   const dependentCount = new Map<string, number>();
   for (const s of steps.values()) for (const d of new Set(s.deps)) dependentCount.set(d, (dependentCount.get(d) ?? 0) + 1);

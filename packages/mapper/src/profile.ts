@@ -125,7 +125,7 @@ export function configuredValue(profile: MappingProfile, sourceId: string, unitT
 }
 
 /**
- * Where the profile (the Unit types page) sends a unit type: a context kind key, or
+ * Where the profile (the guide's Context kinds step) sends a unit type: a context kind key, or
  * `attribute:<name>` / `attribute:<kind>/<name>` to keep it as an attribute of the `user` context
  * or of another kind. A value LD would not accept counts as not configured, so the mapper falls
  * back to the default and asks.

@@ -36,7 +36,7 @@ export type Lookup = { status: 'resolved'; optionKey: string; via: AppliedDecisi
 /**
  * Whether an answer is one this decision takes: a listed option, or, for `unit_type_kind`, a
  * `create:<key>` the user typed for a kind under a valid LD key (the card's free-text answer) or
- * an `attribute:` target the Unit types page can set (an attribute of `user` or of any kind).
+ * an `attribute:` target the guide's Context kinds step can set (an attribute of `user` or of any kind).
  */
 export function acceptsOption(dp: Pick<DecisionPoint, 'type' | 'options'>, optionKey: string): boolean {
   if (dp.options.some((o) => o.key === optionKey)) return true;

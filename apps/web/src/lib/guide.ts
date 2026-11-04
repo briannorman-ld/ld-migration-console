@@ -11,18 +11,20 @@
  * environment steps: a flag whose owner is not in LD yet is created without a maintainer, and the
  * maintainer is part of the decision-set hash, so the flag shows as changed and takes the
  * maintainer on the next sync once the person (or team) exists. Everything from the environment
- * on repeats per environment. Context kinds come first in that loop because every rule, rollout and target refers to them; segments before
+ * on repeats per environment. Context kinds come first in that loop because every rule, rollout and target refers to them: every unit type
+ * must be given a LaunchDarkly context kind (the mapping profile) and the kinds LD lacks created before anything else; segments before
  * flags because flags reference segments; experiments and bandits after the flags they wrap. The
  * model here is pure: it tallies what each step still needs from the mapping results and LD
  * state, and the view renders it. Nothing is written.
  */
 import { parseFooter, type Alert, type CanonicalSnapshot, type EntityKind } from '@sslm/canonical';
-import { kindFor, teamKeyForName, type DecisionPoint } from '@sslm/mapper';
+import { defaultKindFor, kindFor, teamKeyForName, type DecisionPoint } from '@sslm/mapper';
 import { migrationStatus, ownsSegment } from '@sslm/planner';
 import type { AccountAccess, SourceRecord } from '@sslm/store';
 import { indexByKey } from './indexByKey.ts';
 import { ldConnecting, type LdSession } from './ld.ts';
 import { ldFlagState, mapAutotuneFor, mapConfigFor, mapGateFor, mapPromptFor, mapSegmentFor, type DecisionInstance, type MappingInputs } from './migration.ts';
+import { availableForExperiments, unitTypeStanding, unitTypeUsage, type UnitTypeStanding } from './unitTypes.ts';
 
 export type StepKey = 'connect' | 'environment' | 'teams' | 'people' | 'contexts' | 'segments' | 'flags' | 'experiments' | 'cutover';
 export const STEP_ORDER: StepKey[] = ['connect', 'teams', 'people', 'environment', 'contexts', 'segments', 'flags', 'experiments', 'cutover'];
@@ -115,6 +117,14 @@ export interface TeamRow {
   ldMemberIds: string[];
 }
 
+/** A unit type of a source taking part in the environment, and where the profile sends it. */
+export interface UnitTypeRow {
+  sourceId: string;
+  label: string;
+  unitType: string;
+  standing: UnitTypeStanding;
+}
+
 /** One LD environment at cut over: does StatSig require reviews there, and does LD require approvals? */
 export interface ApprovalRow {
   ldEnv: string;
@@ -156,7 +166,7 @@ export interface GuideInput {
   access?: AccountAccess;
   /** Uids the user set aside ("Don't migrate"): left out of every tally's work. */
   exclusions?: ReadonlySet<string>;
-  /** Every decision in the workspace, open and decided. */
+  /** Every decision in the workspace, open and decided (the Decisions page's list; the guide tallies items, not decisions). */
   decisions: DecisionInstance[];
   monitoring: { attention: number; rows: number; loaded: boolean };
   interruptedRuns: number;
@@ -199,11 +209,20 @@ export interface GuideModel {
   contexts: {
     /** Unit types seen in sources that take part in this environment. */
     unitTypes: string[];
-    open: DecisionInstance[];
-    decided: DecisionInstance[];
-    /** Context kinds the items in this environment need and LD does not have yet. */
-    toCreate: { key: string; unitType: string }[];
-    /** Whether this token may create them (capability matrix); false shows the admin instructions instead. */
+    /** One row per unit type of each source taking part: where it goes, from the profile (the step's table edits it). */
+    rows: UnitTypeRow[];
+    /** Rows with no choice yet. Every unit type but userID needs one before the step is done. */
+    unmapped: number;
+    /**
+     * Context kinds the chosen mappings (and the environment's items) need and LD does not have
+     * yet, with whether each is to be a randomization unit as well (profile.contextKinds).
+     */
+    toCreate: { key: string; unitType: string; availableForExperiments: boolean }[];
+    /** Kinds LD already has that the profile marks "available for experiments" and the project's experimentation settings do not list yet. */
+    toEnable: { key: string; unitTypes: string[] }[];
+    /** The experimentation settings were readable (without them nothing is enabled from here). */
+    experimentsReadable: boolean;
+    /** Whether this token may create kinds (capability matrix); false shows the admin instructions instead. */
     canCreate: boolean;
     /** StatSig's default unit type (project settings) and the LD context kind that should be the default randomization unit. */
     defaultUnit?: { unitType: string; kind: string; isDefault: boolean; readable: boolean };
@@ -269,7 +288,7 @@ export function currentStep(done: Record<StepKey, boolean>): StepKey {
 }
 
 export function computeGuide(input: GuideInput): GuideModel {
-  const { sources, snapshots, m, env, decisions } = input;
+  const { sources, snapshots, m, env } = input;
   const setAside = (uid: string) => input.exclusions?.has(uid) ?? false;
   const connected = !!m?.connected;
   const connecting = !connected && ldConnecting(m?.ld);
@@ -285,22 +304,45 @@ export function computeGuide(input: GuideInput): GuideModel {
   }
   const ldEnvs = [...new Set(envBySource.flatMap((x) => (x.ldEnv ? [x.ldEnv] : [])))];
   const taking = envBySource.filter((x) => x.ldEnv) as (GuideModel['envBySource'][number] & { ldEnv: string })[];
-  const takingIds = new Set(taking.map((x) => x.source.id));
 
-  // Contexts: the unit types of the sources that take part, and their kind decisions.
-  const unitTypes = [...new Set(taking.flatMap((x) => x.snapshot.unitTypes.map((u) => u.name)))];
-  const kindDecisions = decisions.filter((d) => d.decision.type === 'unit_type_kind' && (takingIds.size === 0 || takingIds.has(d.decision.subject.sourceId)));
+  // Contexts: the unit types of the sources that take part, and where each goes (the profile).
+  // Every unit type but userID needs an explicit choice; the kinds chosen (or needed by the
+  // environment's items) and missing in LD are created from the step, and kinds marked
+  // "available for experiments" are enabled as randomization units with them.
+  const existingKinds = m?.capabilities.existingContextKinds ?? ['user'];
+  const rows: UnitTypeRow[] = [];
+  for (const { source, snapshot } of taking) {
+    for (const u of unitTypeUsage(snapshot)) rows.push({ sourceId: source.id, label: source.label, unitType: u.name, standing: m ? unitTypeStanding(m.profile, m.resolutions.values(), source.id, u.name, existingKinds) : { kind: 'unmapped', target: { contextKind: defaultKindFor(u.name), attribute: 'key' } } });
+  }
+  const unitTypes = [...new Set(rows.map((r) => r.unitType))];
   const toCreate = new Map<string, string>();
+  const noteKind = (kind: string, unitType: string) => {
+    if (kind !== 'user' && !toCreate.has(kind) && !existingKinds.includes(kind)) toCreate.set(kind, unitType);
+  };
+  for (const r of rows) {
+    if (r.standing.kind === 'creates' || (r.standing.kind === 'attribute' && !r.standing.kindExists)) noteKind(r.standing.target.contextKind, r.unitType);
+  }
   const noteDeps = (deps: { kind: string; key: string; entityId?: string }[]) => {
-    for (const d of deps) if (d.kind === 'context_kind' && !toCreate.has(d.key) && !(m?.ld.contextKinds ?? []).includes(d.key)) toCreate.set(d.key, d.entityId ?? d.key);
+    for (const d of deps) if (d.kind === 'context_kind') noteKind(d.key, d.entityId ?? d.key);
   };
   const cap = (k: string) => m?.ld.matrix?.capabilities.find((c) => c.key === k)?.status;
   const denied = (k: string) => cap(k) === 'not_permitted' || cap(k) === 'unavailable';
+  const ldUnits = m?.ld.randomizationUnits;
+  const toEnable = new Map<string, string[]>();
+  if (m && ldUnits) {
+    for (const r of rows) {
+      const kind = r.standing.target.contextKind;
+      if (r.standing.kind !== 'exists' || kind === 'user' || !m.profile.contextKinds?.[kind]?.availableForExperiments || ldUnits.includes(kind)) continue;
+      toEnable.set(kind, [...(toEnable.get(kind) ?? []), r.unitType]);
+    }
+  }
   const contexts: GuideModel['contexts'] = {
     unitTypes,
-    open: kindDecisions.filter((d) => !d.resolvedWith),
-    decided: kindDecisions.filter((d) => d.resolvedWith),
-    toCreate: [] as { key: string; unitType: string }[],
+    rows,
+    unmapped: rows.filter((r) => r.standing.kind === 'unmapped').length,
+    toCreate: [],
+    toEnable: [...toEnable.entries()].map(([key, uts]) => ({ key, unitTypes: [...new Set(uts)] })).sort((a, b) => a.key.localeCompare(b.key)),
+    experimentsReadable: !!ldUnits,
     canCreate: !!m && m.capabilities.contextKinds !== 'not_permitted' && m.capabilities.contextKinds !== 'unavailable',
   };
   // StatSig's default unit type → LD's default randomization unit (project settings; coverage `structure.project_settings`).
@@ -365,7 +407,9 @@ export function computeGuide(input: GuideInput): GuideModel {
     }
   }
 
-  contexts.toCreate = [...toCreate.entries()].map(([key, unitType]) => ({ key, unitType })).sort((a, b) => a.key.localeCompare(b.key));
+  contexts.toCreate = [...toCreate.entries()]
+    .map(([key, unitType]) => ({ key, unitType, availableForExperiments: !!m && availableForExperiments(m.profile, key, ldUnits) }))
+    .sort((a, b) => a.key.localeCompare(b.key));
 
   // Cut over: StatSig "requires review" (per environment, or project-wide for configs) → LD required approvals.
   const approvals: ApprovalRow[] = ldEnvs.map((ldEnv) => {
@@ -384,7 +428,7 @@ export function computeGuide(input: GuideInput): GuideModel {
     environment: ldEnvs.length > 0,
     teams: connected && people.teams.every((t) => t.status !== 'missing'),
     people: connected && people.owners.every((o) => o.status !== 'missing'),
-    contexts: ldEnvs.length > 0 && contexts.open.length === 0 && contexts.toCreate.length === 0,
+    contexts: ldEnvs.length > 0 && contexts.unmapped === 0 && contexts.toCreate.length === 0 && contexts.toEnable.length === 0,
     segments: ldEnvs.length > 0 && tallyDone(segments),
     flags: ldEnvs.length > 0 && tallyDone(gates) && tallyDone(configs) && (tallyDone(prompts) || !aiConfigsAvailable),
     experiments: ldEnvs.length > 0 && tallyDone(autotunes),

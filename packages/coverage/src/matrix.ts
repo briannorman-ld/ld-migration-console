@@ -75,7 +75,7 @@ export const COVERAGE: CoverageEntry[] = [
     ld: 'Context kinds',
     status: 'decisions',
     how: 'userID → user, stableID → device, a custom unit type → a context kind of the same name, created on first use.',
-    detail: 'Custom unit IDs are never collapsed into user. The Unit types page sets, once per unit type, which context kind its IDs key (created by the migration if LaunchDarkly lacks it) or which attribute of which context kind carries them (user, an existing kind, or one the migration creates), and warns when two unit types share a kind. A unit type left on its default whose kind is missing in LaunchDarkly raises a unit_type_kind decision per item (create it under the proposed key or a key you type, keep the unit type as an attribute of the user context, or pick an existing kind; never the user key).',
+    detail: 'Custom unit IDs are never collapsed into user. The guide’s Context kinds step requires a choice per unit type before the environment migrates: an existing context kind, a kind another unit type creates, a new kind under a typed key (created from the step), or an attribute of a context kind (user, an existing kind, or one the migration creates); it warns when two unit types share a kind, and asks per kind whether it is available for experiments (a randomization unit, enabled in the same run). A unit type with no choice yet whose kind is missing in LaunchDarkly raises a unit_type_kind decision per item on the Decisions page (create it under the proposed key or a key you type, keep the unit type as an attribute of the user context, or pick an existing kind; never the user key).',
     decisions: ['unit_type_kind'],
     edgeCases: ['3.1', '3.2', '3.4', '3.5'],
     docs: { statsig: `${SS}/guides/experiment-on-custom-id-types`, ld: `${LD}/home/observability/contexts` },
@@ -134,7 +134,7 @@ export const COVERAGE: CoverageEntry[] = [
     statsig: 'Project settings: default unit type, visibility',
     ld: 'Experimentation settings: default randomization unit',
     status: 'guided',
-    how: 'The default unit type’s context kind is offered as the default randomization unit for LaunchDarkly experiments (one click on the Context kinds step). Project visibility has no LaunchDarkly equivalent.',
+    how: 'Each context kind the Context kinds step maps a unit type to can be made available for experiments (a randomization unit), and the default unit type’s kind is offered as the default randomization unit (one click on the same step). Project visibility has no LaunchDarkly equivalent.',
     docs: { ld: `${LD}/home/experimentation/randomization-units` },
   },
   {

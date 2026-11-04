@@ -51,7 +51,7 @@ export function readinessSteps(i: ReadinessInput): ReadinessStep[] {
       label: `${i.env || 'environment'} mapped to LaunchDarkly`,
       done: i.mappedHere.length > 0,
       detail: i.env ? `Map StatSig “${i.env}” to a LaunchDarkly environment.` : 'Pick a StatSig environment in the header.',
-      action: { label: 'Mapping', onClick: i.nav.mapping },
+      action: { label: 'Guide', onClick: i.nav.mapping },
     },
     {
       key: 'decisions',

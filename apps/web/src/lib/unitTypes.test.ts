@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { emptySnapshot, type CanonicalSnapshot, type Config, type Gate, type Segment } from '@sslm/canonical';
 import type { MappingProfile, Resolution } from '@sslm/mapper';
-import { acrossSources, choiceError, choiceValue, describeUsage, knownKinds, parseChoice, sharedKinds, unitTypeStanding, unitTypeUsage, unsettledUnitTypes } from './unitTypes.ts';
+import { acrossSources, availableForExperiments, choiceError, choiceValue, describeUsage, knownKinds, parseChoice, sharedKinds, unitTypeStanding, unitTypeUsage, unmappedUnitTypes } from './unitTypes.ts';
 
 const src = { sourceId: 's-mobile', sourceKind: 'console_api' as const, alias: 'mobile' };
 const base = { source: src, completeness: { missing: [] }, tags: [], environments: null, passPercentage: 100, archived: false };
@@ -77,27 +77,39 @@ describe('unit types: the choice', () => {
 describe('unit types: standing', () => {
   const res = (unitType: string, optionKey: string): Resolution => ({ id: `unit_type_kind:s-mobile/unit_type/${unitType}:kind`, type: 'unit_type_kind', optionKey, scope: 'resource', decidedAt: '2026-11-02T00:00:00Z' });
 
-  it('exists for user and for kinds LaunchDarkly has; otherwise asks per item unless configured', () => {
+  it('userID is user; every other unit type is unmapped until chosen, even when its default kind exists in LaunchDarkly', () => {
     expect(unitTypeStanding(profile(), [], 's-mobile', 'userID', EXISTING)).toEqual({ kind: 'exists', target: { contextKind: 'user', attribute: 'key' } });
-    expect(unitTypeStanding(profile(), [], 's-mobile', 'stableID', EXISTING)).toEqual({ kind: 'exists', target: { contextKind: 'device', attribute: 'key' } });
-    expect(unitTypeStanding(profile(), [], 's-mobile', 'companyID', EXISTING)).toEqual({ kind: 'asks', target: { contextKind: 'company', attribute: 'key' } });
-    expect(unitTypeStanding(profile(), [res('companyID', 'create:account')], 's-mobile', 'companyID', EXISTING)).toMatchObject({ kind: 'asks', decided: 'account' });
-    expect(unitTypeStanding(profile(), [res('companyID', 'attribute:companyID')], 's-mobile', 'companyID', EXISTING)).toMatchObject({ kind: 'asks', decided: 'attribute:companyID' });
+    // stableID's default (device) exists in LD, but the step still wants the choice made.
+    expect(unitTypeStanding(profile(), [], 's-mobile', 'stableID', EXISTING)).toEqual({ kind: 'unmapped', target: { contextKind: 'device', attribute: 'key' } });
+    expect(unitTypeStanding(profile(), [], 's-mobile', 'companyID', EXISTING)).toEqual({ kind: 'unmapped', target: { contextKind: 'company', attribute: 'key' } });
+    // An answer given on items through the per-item decision is offered as the suggestion.
+    expect(unitTypeStanding(profile(), [res('companyID', 'create:account')], 's-mobile', 'companyID', EXISTING)).toMatchObject({ kind: 'unmapped', decided: 'account' });
+    expect(unitTypeStanding(profile(), [res('companyID', 'attribute:companyID')], 's-mobile', 'companyID', EXISTING)).toMatchObject({ kind: 'unmapped', decided: 'attribute:companyID' });
+    expect(unitTypeStanding(profile(), [res('companyID', 'attribute:account/companyID')], 's-mobile', 'companyID', EXISTING)).toMatchObject({ kind: 'unmapped', decided: 'attribute:account/companyID' });
+    // Chosen: an existing kind, a new kind, or an attribute of a kind (existing or created).
+    expect(unitTypeStanding(profile({ stableID: 'device' }), [], 's-mobile', 'stableID', EXISTING)).toEqual({ kind: 'exists', target: { contextKind: 'device', attribute: 'key' } });
     expect(unitTypeStanding(profile({ companyID: 'account' }), [], 's-mobile', 'companyID', EXISTING)).toEqual({ kind: 'creates', target: { contextKind: 'account', attribute: 'key' } });
     expect(unitTypeStanding(profile({ companyID: 'device' }), [], 's-mobile', 'companyID', EXISTING)).toEqual({ kind: 'exists', target: { contextKind: 'device', attribute: 'key' } });
     expect(unitTypeStanding(profile({ companyID: 'attribute:companyID' }), [], 's-mobile', 'companyID', EXISTING)).toEqual({ kind: 'attribute', target: { contextKind: 'user', attribute: 'companyID' }, kindExists: true });
-    // An attribute of another kind: the kind exists in LD, or the migration creates it.
     expect(unitTypeStanding(profile({ companyID: 'attribute:device/companyID' }), [], 's-mobile', 'companyID', EXISTING)).toEqual({ kind: 'attribute', target: { contextKind: 'device', attribute: 'companyID' }, kindExists: true });
     expect(unitTypeStanding(profile({ companyID: 'attribute:account/companyID' }), [], 's-mobile', 'companyID', EXISTING)).toEqual({ kind: 'attribute', target: { contextKind: 'account', attribute: 'companyID' }, kindExists: false });
-    expect(unitTypeStanding(profile(), [res('companyID', 'attribute:account/companyID')], 's-mobile', 'companyID', EXISTING)).toMatchObject({ kind: 'asks', decided: 'attribute:account/companyID' });
     // The profile matches unit types case-insensitively, like StatSig.
     expect(unitTypeStanding(profile({ COMPANYID: 'account' }), [], 's-mobile', 'companyID', EXISTING)).toMatchObject({ kind: 'creates' });
   });
 
-  it('counts the unit types that still ask, for the nav badge', () => {
+  it('counts the unit types with no choice yet, for the guide step', () => {
     const names = ['userID', 'stableID', 'companyID', 'deviceID', 'orgID'];
-    expect(unsettledUnitTypes(profile(), [], 's-mobile', names, EXISTING)).toEqual(['companyID', 'orgID']);
-    expect(unsettledUnitTypes(profile({ companyID: 'company' }), [res('orgID', 'create:org')], 's-mobile', names, EXISTING)).toEqual([]);
+    expect(unmappedUnitTypes(profile(), 's-mobile', names)).toEqual(['stableID', 'companyID', 'deviceID', 'orgID']);
+    expect(unmappedUnitTypes(profile({ stableID: 'device', companyID: 'company', deviceID: 'attribute:deviceID', ORGID: 'org' }), 's-mobile', names)).toEqual([]);
+  });
+
+  it('"available for experiments": the profile first, then LaunchDarkly\'s experimentation settings; user always is', () => {
+    const p: MappingProfile = { ...profile(), contextKinds: { company: { availableForExperiments: true }, device: { availableForExperiments: false } } };
+    expect(availableForExperiments(p, 'user', undefined)).toBe(true);
+    expect(availableForExperiments(p, 'company', undefined)).toBe(true);
+    expect(availableForExperiments(p, 'device', ['user', 'device'])).toBe(false);
+    expect(availableForExperiments(p, 'org', ['user', 'org'])).toBe(true);
+    expect(availableForExperiments(p, 'org', undefined)).toBe(false);
   });
 });
 

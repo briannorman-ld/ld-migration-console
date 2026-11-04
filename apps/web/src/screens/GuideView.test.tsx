@@ -64,7 +64,7 @@ function setup(over: { canCreateTeams?: boolean; access?: WorkspaceRecord['accou
     saveProfile,
   } as unknown as MigrationContext;
   const input: GuideInput = { sources: [], snapshots: [snapshot], m, env: '', decisions: [], monitoring: { attention: 0, rows: 0, loaded: false }, interruptedRuns: 0 };
-  const nav = { connections: vi.fn(), ld: vi.fn(), mapping: vi.fn(), unitTypes: vi.fn(), decisions: vi.fn(), resource: vi.fn(), runs: vi.fn(), monitoring: vi.fn(), coverage: vi.fn() } as never;
+  const nav = { connections: vi.fn(), ld: vi.fn(), decisions: vi.fn(), resource: vi.fn(), runs: vi.fn(), monitoring: vi.fn(), coverage: vi.fn() } as never;
   render(<GuideView workspaceId="w1" workspace={{ id: 'w1', name: 'Shop', ...(over.access ? { accountAccess: over.access } : {}) } as WorkspaceRecord} m={m} input={input} onEnvChange={vi.fn()} onMigrate={vi.fn()} nav={nav} />);
   return { saveProfile };
 }
@@ -230,5 +230,80 @@ describe('GuideView: teams and people', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(inviteLdMembers).not.toHaveBeenCalled();
+  });
+});
+
+describe('GuideView: context kinds (the required mapping)', () => {
+  afterEach(cleanup);
+  const source = { id: 'src-a', workspaceId: 'w1', alias: 'a', label: 'acme-web', kind: 'console_api', createdAt: '2026-10-22T10:00:00Z' } as never;
+  const envSnapshot = { ...(snapshot as object), environments: [{ name: 'staging' }], unitTypes: [{ name: 'userID' }, { name: 'stableID' }, { name: 'companyID' }], gates: [], configs: [], teams: [] } as never;
+
+  function setupContexts(kinds: Record<string, string>, over: { contextKinds?: Record<string, { availableForExperiments?: boolean }>; randomizationUnits?: string[] } = {}) {
+    const saveProfile = vi.fn(() => Promise.resolve());
+    const onMigrate = vi.fn();
+    const profile = { version: 1, attributes: {}, policies: {}, sources: { 'src-a': { envMapping: { staging: 'test' }, unitTypeKinds: kinds } }, ...(over.contextKinds ? { contextKinds: over.contextKinds } : {}) };
+    const m = {
+      ld: { status: 'connected', projectKey: 'shop', contextKinds: ['user', 'device'], randomizationUnits: over.randomizationUnits ?? ['user'], members: [], teams: [] },
+      ldEnvs: [{ key: 'test' }, { key: 'production' }],
+      connected: true,
+      capabilities: { prerequisites: 'unknown', contextKinds: 'unknown', existingContextKinds: ['user', 'device'] },
+      profile,
+      directory: { members: [], teams: [], membersReadable: true, teamsReadable: true },
+      resolutions: new Map(),
+      resolutionList: [],
+      saveProfile,
+    } as unknown as MigrationContext;
+    const input: GuideInput = { sources: [source], snapshots: [envSnapshot], m, env: 'staging', decisions: [], monitoring: { attention: 0, rows: 0, loaded: false }, interruptedRuns: 0 };
+    const nav = { connections: vi.fn(), ld: vi.fn(), decisions: vi.fn(), resource: vi.fn(), runs: vi.fn(), monitoring: vi.fn(), coverage: vi.fn() } as never;
+    render(<GuideView workspaceId="w1" workspace={{ id: 'w1', name: 'Shop', accountAccess: 'launchdarkly' } as WorkspaceRecord} m={m} input={input} onEnvChange={vi.fn()} onMigrate={onMigrate} nav={nav} />);
+    return { saveProfile, onMigrate };
+  }
+
+  it('is the current step while a unit type has no context kind, and shows the mapping table instead of per-item decisions', () => {
+    const { saveProfile } = setupContexts({});
+    const step = screen.getByRole('button', { name: /Context kinds/ });
+    expect(step.getAttribute('aria-expanded')).toBe('true');
+    expect(step.textContent).toMatch(/2 unit types need a context kind/);
+    expect(screen.queryByText(/Create context kind/)).toBeNull();
+    // An existing kind is picked from the list and saved into the profile.
+    fireEvent.change(screen.getByLabelText('Context kind for stableID'), { target: { value: 'device' } });
+    expect(saveProfile).toHaveBeenLastCalledWith(expect.objectContaining({ sources: { 'src-a': { envMapping: { staging: 'test' }, unitTypeKinds: { stableID: 'device' } } } }));
+    // A new kind takes the suggested key, then a typed one.
+    fireEvent.change(screen.getByLabelText('Context kind for companyID'), { target: { value: '__new' } });
+    const key = screen.getByLabelText('Key of the new context kind for companyID') as HTMLInputElement;
+    expect(key.value).toBe('company');
+    fireEvent.change(key, { target: { value: 'account' } });
+    fireEvent.keyDown(key, { key: 'Enter' });
+    expect(saveProfile).toHaveBeenLastCalledWith(expect.objectContaining({ sources: { 'src-a': { envMapping: { staging: 'test' }, unitTypeKinds: { companyID: 'account' } } } }));
+  });
+
+  it('once every unit type is mapped, creates the missing kinds and enables the experiments choices in one run', () => {
+    const { saveProfile, onMigrate } = setupContexts({ stableID: 'device', companyID: 'company' }, { contextKinds: { company: { availableForExperiments: true } } });
+    const step = screen.getByRole('button', { name: /Context kinds/ });
+    expect(step.textContent).toMatch(/3 unit types mapped · 1 context kind to create/);
+    // The experiments choice is per kind, saved in the profile.
+    fireEvent.click(screen.getByLabelText('stableID: available for experiments'));
+    expect(saveProfile).toHaveBeenLastCalledWith(expect.objectContaining({ contextKinds: { company: { availableForExperiments: true }, device: { availableForExperiments: true } } }));
+    expect(screen.getByText(/for companyID: create and enable for experiments/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Create 1 context kind in LaunchDarkly/ }));
+    expect(onMigrate).toHaveBeenCalledWith({ gates: [], autotunes: [], contextKinds: [{ key: 'company', unitType: 'companyID', availableForExperiments: true }] }, ['test']);
+  });
+
+  it('a kind LaunchDarkly has but experiments cannot randomize by yet is enabled on its own', () => {
+    const { onMigrate } = setupContexts({ stableID: 'device', companyID: 'device' }, { contextKinds: { device: { availableForExperiments: true } } });
+    expect(screen.getByRole('button', { name: /Context kinds/ }).textContent).toMatch(/1 to enable for experiments/);
+    fireEvent.click(screen.getByRole('button', { name: /enable 1 for experiments in LaunchDarkly/ }));
+    expect(onMigrate).toHaveBeenCalledWith({ gates: [], autotunes: [], contextKinds: [{ key: 'device', unitType: 'stableID', availableForExperiments: true }] }, ['test']);
+  });
+
+  it('the environment step maps every source environment, not just the one being migrated', () => {
+    setupContexts({ stableID: 'device', companyID: 'device' }, { randomizationUnits: ['user', 'device'] });
+    openStep(/Choose an environment/);
+    const sel = screen.getByLabelText('LaunchDarkly environment for acme-web staging') as HTMLSelectElement;
+    expect(sel.value).toBe('test');
+    expect([...sel.options].map((o) => o.value)).toEqual(['', 'test', 'production']);
+    // The Flag names setting lives on the Flags step now.
+    openStep(/Flags and AI Configs/);
+    expect((screen.getByLabelText('Flag names') as HTMLSelectElement).value).toBe('source');
   });
 });

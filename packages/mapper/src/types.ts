@@ -372,6 +372,20 @@ export interface MappingProfile {
    * shows migrated flags as changed and the next sync renames them.
    */
   flagNames?: 'source' | 'readable';
+  /**
+   * LD context kind key → what the guide's Context kinds step chose for that kind. Keyed by the
+   * *target* kind, not the unit type: two unit types sent to one kind share the setting.
+   */
+  contextKinds?: Record<string, ContextKindSettings>;
+}
+
+/** Settings for a target context kind, chosen once on the guide's Context kinds step. */
+export interface ContextKindSettings {
+  /**
+   * Make the kind a randomization unit of the project's experimentation settings (LaunchDarkly's
+   * "Available for experiments"): the plan adds an `ensure_randomization_unit` step for it.
+   */
+  availableForExperiments?: boolean;
 }
 
 /**

@@ -128,7 +128,7 @@ describe('operator pitfalls (CLAUDE.md, PLAN §10.3)', () => {
     expect(r.dependencies).toContainEqual({ kind: 'context_kind', key: 'account', entityId: 'companyID' });
   });
 
-  it('the Unit types page can keep a unit type as a user attribute for every item (profile `attribute:<name>`)', () => {
+  it('the Context kinds step can keep a unit type as a user attribute for every item (profile `attribute:<name>`)', () => {
     const profile = profileFor(web, MAPPING);
     profile.sources[web.source.sourceId]!.unitTypeKinds.companyID = attributeOption('account_id');
     const r = mapGate(args('b2b_bulk_ordering', { profile }));

@@ -65,8 +65,8 @@ Neither step blocks the environment work. A flag whose owner is still missing is
 
 These settings change the shape of every flag, so settle them before the first plan.
 
-1. **Unit types** (left nav). One row per unit ID type the sources use: `userID`, `stableID`, every custom ID. Choose where each lands: its own context kind, or an attribute of a kind. A custom unit ID is never mapped onto the `user` context's key. Settling this here means no per-item `unit_type_kind` decision later, and the multi-context shape your SDK calls will need is fixed from the start.
-2. **Mapping**: the environment table (tier → LaunchDarkly environment, or *not migrated*), key prefixes for consolidated sources, and whether flag names are derived from IDs.
+1. **Guide → Choose an environment**: the environment table (tier → LaunchDarkly environment, or *not migrated*), with *Create in LaunchDarkly* for tiers the project lacks.
+2. **Guide → Context kinds**. One row per unit ID type the sources use: `userID`, `stableID`, every custom ID. Each must be given a LaunchDarkly context kind before the environment migrates: an existing kind, a kind another unit type creates, a new kind under the key you choose, or an attribute of a kind. A custom unit ID is never mapped onto the `user` context's key. Per kind, tick *available for experiments* when experiments will randomize by it. Settling this here means no per-item `unit_type_kind` decision later, and the multi-context shape your SDK calls will need is fixed from the start. Whether flag names are derived from IDs is set on the Flags step.
 3. **Decisions → by type → Set a policy.** Answer the workspace-wide questions once: case-insensitive matching, numeric-versus-string values, client-side availability, version formats, regex dialect. **Use recommended** clears the rest. Blocking decisions and acknowledgements (a 20,000-ID list, an `is_null` condition, a deleted segment, re-bucketing of a percentage rollout) still need a per-item answer; that is deliberate.
 4. **Set aside** what will not migrate: unused segments (*Used by* is empty), gates without exposures, anything the team has agreed to retire. Set-aside items stay listed, drop out of every count and are never planned.
 5. **What migrates** shows the coverage matrix with your inventory counted against it. Anything in *No LaunchDarkly equivalent* (contextual bandits, composite metrics, switchback experiments, JSON-schema validation, topline alerts) needs an owner and a plan outside the console. Write those down now.
@@ -110,7 +110,7 @@ Flags reference segments, so segments go first.
 This is the only step the console cannot do for you, and it is where the time goes.
 
 1. **Switch the SDK** in the applications that run in this environment. The code work:
-   - Build contexts the way the Unit types page decided: one context per kind, multi-contexts where a flag needs several.
+   - Build contexts the way the Context kinds step decided: one context per kind, multi-contexts where a flag needs several.
    - Send the attributes StatSig used to derive (browser, OS, device model, country). LaunchDarkly SDKs derive nothing; the `derived_attribute` decisions list exactly which attributes which flags need.
    - Replace `getConfig("x").get("p", default)` with one JSON variation read and a field access. Replace gate checks with boolean variation calls using the same key.
    - Re-send the events behind migrated metrics through the LaunchDarkly SDK.

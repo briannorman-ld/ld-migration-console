@@ -145,7 +145,7 @@ export function resolveKind(ctx: ConditionContext, unitType: string): string {
 /**
  * Where a unit type's IDs live in LD, raising `unit_type_kind` for kinds the LD project lacks:
  * create the kind (proposed, or under a key the user typed), keep the unit type as an attribute
- * of the `user` context (the Unit types page can also put it on any other kind), use a kind
+ * of the `user` context (the guide's Context kinds step can also put it on any other kind), use a kind
  * another unit type's answer creates, or an existing kind. A custom unit ID is never the key of
  * the `user` context (CLAUDE.md). A kind that only carries an attribute is created all the same.
  */
@@ -183,7 +183,7 @@ export function resolveUnit(ctx: ConditionContext, unitType: string): UnitTarget
         subject: { sourceId: ctx.sourceId, kind: 'unit_type', uid: `${ctx.sourceId}/unit_type/${unitType}`, id: unitType },
         path: 'kind',
         title: `Context kind for unit type ${unitType}`,
-        explanation: `StatSig buckets and targets by ${unitType}. LaunchDarkly needs somewhere for it: its own context kind, or an attribute of another context (the user context here; the Unit types page offers any kind). A custom unit ID is never the key of the user context.`,
+        explanation: `StatSig buckets and targets by ${unitType}. LaunchDarkly needs somewhere for it: its own context kind, or an attribute of another context (the user context here; the guide's Context kinds step offers any kind). A custom unit ID is never the key of the user context.`,
         sourceFragment: { unitType },
         options,
         recommended: options[0]!.key,

@@ -85,6 +85,17 @@ describe('planMigration', () => {
     expect(planMigration(request([], { contextKinds: [{ key: 'user', unitType: 'userID' }] })).steps).toEqual([]);
   });
 
+  it('a kind marked "available for experiments" is also enabled as a randomization unit, after it is created; an existing kind is enabled alone', () => {
+    const plan = planMigration(request([], { contextKinds: [{ key: 'company', unitType: 'companyID', availableForExperiments: true }, { key: 'plan', unitType: 'planKey' }] }));
+    expect(plan.steps.map((s) => s.id).sort()).toEqual(['context_kind:company', 'context_kind:plan', 'randomization_unit:company']);
+    expect(plan.steps.find((s) => s.id === 'randomization_unit:company')).toMatchObject({ op: 'ensure_randomization_unit', key: 'company', deps: ['context_kind:company'] });
+    const existing = planMigration(request([], { contextKinds: [{ key: 'company', unitType: 'companyID', availableForExperiments: true }], ld: { ...EMPTY_LD, contextKinds: ['user', 'company'] } }));
+    expect(existing.steps.map((s) => s.id)).toEqual(['randomization_unit:company']);
+    expect(existing.steps[0]).toMatchObject({ deps: [] });
+    // Already a randomization unit: nothing to do.
+    expect(planMigration(request([], { contextKinds: [{ key: 'company', unitType: 'companyID', availableForExperiments: true }], ld: { ...EMPTY_LD, contextKinds: ['user', 'company'], randomizationUnits: ['user', 'company'] } })).steps).toEqual([]);
+  });
+
   it('blocks until decisions are made, then orders shells → segments → environments', () => {
     const blocked = planMigration(request(['new_checkout_flow']));
     expect(blocked.ready).toBe(false);

@@ -68,17 +68,21 @@ project.
 ## 4. Guide step 4, Choose an environment (1 min)
 
 **Source environment** `staging` (also the selector in the header) maps to LaunchDarkly `test`;
-`production` → `production`; `development` and the custom `qa` tier stay *not migrated*. For an
-unmapped environment the step offers **Create "qa" in LaunchDarkly**. The full table, and the unit
-types, are on the **Mapping** page.
+`production` → `production`; `development` and the custom `qa` tier stay *not migrated*. The step
+shows every source environment of every source, so all of them are settled before anything
+migrates; for an unmapped environment it offers **Create "qa" in LaunchDarkly**. **Migrate now**
+picks the one the steps below work on.
 
 ## 5. Guide step 5, Context kinds (1 min)
 
-Unit types in this environment → LaunchDarkly context kinds: `userID` → `user`, `stableID` →
-`device`, `companyID` → `company` (`acme-mobile` adds `deviceID`). Each is a decision (own context
-kind, or an attribute of a kind). **Context kinds to create in LaunchDarkly** lists the kinds the
-rules need and the project lacks; one click creates them, or the step shows the admin
-instructions when the token may not.
+Unit types in this environment → LaunchDarkly context kinds, one row each: `userID` is fixed to
+`user`; `stableID`, `companyID` (and `acme-mobile`'s `deviceID`) each need a choice from the
+list: an existing kind (`device`), a kind another unit type creates, **New context kind…** with a
+typed key (suggested `company`), or an attribute of a kind. **Accept N suggested** takes the
+suggestions in one click. Per kind, tick **available for experiments** when experiments should
+randomize by it. The step blocks until every row has a kind, then **Context kinds to set up in
+LaunchDarkly** lists what the project lacks; one click creates the kinds and enables the
+experiments choices, or the step shows the admin instructions when the token may not.
 
 ## 6. Guide step 6, Segments (2 min)
 

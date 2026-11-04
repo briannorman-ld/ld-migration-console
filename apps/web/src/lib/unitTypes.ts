@@ -1,10 +1,13 @@
 /**
- * The Unit types page (PLAN §9, §10.3): every StatSig unit type a source declares or uses, where
- * it is used, and where it goes in LaunchDarkly. The choice is kept in the mapping profile
- * (`SourceProfile.unitTypeKinds`): a context kind key, or `attribute:<name>` / `attribute:<kind>/<name>`
- * to keep the unit type as an attribute of the `user` context or of any other kind (existing, or
- * created by the migration). A configured unit type raises no `unit_type_kind` decision (the
- * mapper reads the same entry through `configuredUnit`).
+ * Unit types → LaunchDarkly context kinds (PLAN §9, §10.3), the guide's Context kinds step: every
+ * StatSig unit type a source declares or uses, where it is used, and where it goes in
+ * LaunchDarkly. The choice is kept in the mapping profile (`SourceProfile.unitTypeKinds`): a
+ * context kind key (existing, or created by the migration), or `attribute:<name>` /
+ * `attribute:<kind>/<name>` to keep the unit type as an attribute of the `user` context or of any
+ * other kind. Every unit type but `userID` needs an explicit choice before the step is done; a
+ * configured unit type raises no `unit_type_kind` decision (the mapper reads the same entry
+ * through `configuredUnit`). Per target kind, `MappingProfile.contextKinds` says whether it is
+ * "available for experiments" (a randomization unit).
  */
 import type { CanonicalSnapshot, EntityKind, Rule } from '@sslm/canonical';
 import { attributeOption, attributeTarget, configuredUnit, defaultKindFor, isValidAttributeName, isValidContextKindKey, kindFromChoice, type MappingProfile, type Resolution, type UnitTarget } from '@sslm/mapper';
@@ -157,18 +160,25 @@ export function choiceError(mode: UnitTypeMode, key: string, unitType: string, c
 }
 
 export type UnitTypeStanding =
-  /** Maps to `user`, or to a kind LD already has. */
+  /** Chosen: `user` (userID), or a kind LD already has. */
   | { kind: 'exists'; target: UnitTarget }
-  /** Maps to a kind the migration creates on its first run. */
+  /** Chosen: a kind the migration creates on its first run. */
   | { kind: 'creates'; target: UnitTarget }
-  /** Kept as an attribute of a context kind; `kindExists` is false when the migration must create that kind first. */
+  /** Chosen: an attribute of a context kind; `kindExists` is false when the migration must create that kind first. */
   | { kind: 'attribute'; target: UnitTarget; kindExists: boolean }
-  /** Not configured here and its kind is missing: the mapper asks a `unit_type_kind` decision per item (answer so far, if any). */
-  | { kind: 'asks'; target: UnitTarget; decided?: string };
+  /**
+   * No choice yet: the step waits for one. `target` is the suggestion (the default kind); `decided`
+   * is the answer already given on items through `unit_type_kind` decisions, if any, offered as the
+   * suggestion instead.
+   */
+  | { kind: 'unmapped'; target: UnitTarget; decided?: string };
+
+/** `userID` is always the `user` context's key: the only unit type that needs no choice. */
+export const isUserId = (unitType: string): boolean => /^userid$/i.test(unitType.trim());
 
 /**
- * Where a unit type stands for a source: configured on this page, else answered as a decision,
- * else the default (which asks per item when the kind is missing from LD).
+ * Where a unit type stands for a source: chosen on the Context kinds step (the profile), or
+ * unmapped, with the default kind (or the answer given per item so far) as the suggestion.
  */
 export function unitTypeStanding(profile: MappingProfile, resolutions: Iterable<Resolution>, sourceId: string, unitType: string, existingKinds: readonly string[]): UnitTypeStanding {
   const configured = configuredUnit(profile, sourceId, unitType);
@@ -178,16 +188,16 @@ export function unitTypeStanding(profile: MappingProfile, resolutions: Iterable<
     return existingKinds.includes(configured.contextKind) || configured.contextKind === 'user' ? { kind: 'exists', target: configured } : { kind: 'creates', target: configured };
   }
   const target: UnitTarget = { contextKind: proposed, attribute: 'key' };
-  if (proposed === 'user' || existingKinds.includes(proposed)) return { kind: 'exists', target };
+  if (proposed === 'user') return { kind: 'exists', target };
   const prefix = `unit_type_kind:${sourceId}/unit_type/`;
   for (const r of resolutions) {
     if (r.type !== 'unit_type_kind' || r.scope !== 'resource' || !r.id.startsWith(prefix)) continue;
     const ut = r.id.slice(prefix.length).replace(/:kind$/, '');
     if (key(ut) !== key(unitType)) continue;
     const attr = attributeTarget(r.optionKey);
-    return { kind: 'asks', target, decided: attr ? attributeOption(attr.attribute, attr.contextKind) : kindFromChoice(r.optionKey, proposed) };
+    return { kind: 'unmapped', target, decided: attr ? attributeOption(attr.attribute, attr.contextKind) : kindFromChoice(r.optionKey, proposed) };
   }
-  return { kind: 'asks', target };
+  return { kind: 'unmapped', target };
 }
 
 /**
@@ -238,11 +248,18 @@ export function knownKinds(profile: MappingProfile, perSource: { sourceId: strin
   return ['user', ...[...kinds].sort()];
 }
 
-/** Unit types of a source that still ask per item: the nav badge and the guide's nudge. */
-export function unsettledUnitTypes(profile: MappingProfile, resolutions: Iterable<Resolution>, sourceId: string, unitTypes: readonly string[], existingKinds: readonly string[]): string[] {
-  const rs = [...resolutions];
-  return unitTypes.filter((ut) => {
-    const s = unitTypeStanding(profile, rs, sourceId, ut, existingKinds);
-    return s.kind === 'asks' && !s.decided;
-  });
+/** Unit types of a source with no choice yet (every one but `userID` needs one): the guide's count. */
+export function unmappedUnitTypes(profile: MappingProfile, sourceId: string, unitTypes: readonly string[]): string[] {
+  return unitTypes.filter((ut) => !isUserId(ut) && !configuredUnit(profile, sourceId, ut));
+}
+
+/**
+ * Whether a target context kind is to be "available for experiments" (a randomization unit): the
+ * profile's choice first, else what LaunchDarkly's experimentation settings say (`ldUnits`,
+ * undefined when unreadable). `user` always is.
+ */
+export function availableForExperiments(profile: MappingProfile, kind: string, ldUnits: readonly string[] | undefined): boolean {
+  if (kind === 'user') return true;
+  const chosen = profile.contextKinds?.[kind]?.availableForExperiments;
+  return chosen ?? ldUnits?.includes(kind) ?? false;
 }

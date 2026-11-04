@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { EntityKind } from '@sslm/canonical';
-import { optionLabel, sanitizeKey, teamKeyFor, type MappingProfile } from '@sslm/mapper';
+import { sanitizeKey, teamKeyFor, type MappingProfile } from '@sslm/mapper';
 import type { AccountAccess, SourceRecord, WorkspaceRecord } from '@sslm/store';
-import { DecisionCard } from '../components/DecisionCard.tsx';
+import { UnitTypeMapping } from '../components/UnitTypeMapping.tsx';
 import { Badge, Button, Callout, Card, cx, Input, Modal, Select, Spinner } from '../components/ui.tsx';
 import { ACCESS_LABEL, ACCOUNT_WIDE_STEPS, computeGuide, describeTally, LOOP_STEP, provisionedBy, STEP_ORDER, STEP_TITLE, teamKeysFor, type GuideInput, type GuideModel, type OwnerRow, type StepKey, type Tally, type TeamRow } from '../lib/guide.ts';
 
@@ -21,8 +21,6 @@ const RUNBOOK_URL = 'https://github.com/briannorman-ld/ld-migration-console/blob
 export interface GuideNav {
   connections: () => void;
   ld: () => void;
-  mapping: () => void;
-  unitTypes: () => void;
   decisions: () => void;
   resource: (kind: EntityKind) => void;
   runs: () => void;
@@ -88,10 +86,10 @@ export function GuideView({
           <Step key={k} n={i + 1} title={STEP_TITLE[k]} done={g.done[k]} current={g.current === k} open={isOpen(k)} onToggle={() => setOpened((o) => ({ ...o, [k]: !isOpen(k) }))} summary={summaryFor(k, g, input)} accountWide={ACCOUNT_WIDE_STEPS.has(k) && !provider} {...(provider ? { waitingFor: provider } : {})}>
             {ACCOUNT_WIDE_STEPS.has(k) && (provider ? <ProvisionedBy provider={provider} what={k === 'teams' ? 'Teams' : 'Members'} /> : <AccountWide projectKey={input.m?.ld.projectKey} what={k === 'teams' ? 'Teams' : 'Members and invitations'} />)}
             {k === 'connect' && <Connect workspaceId={workspaceId} workspace={workspace} g={g} input={input} nav={nav} />}
-            {k === 'environment' && <Environment workspaceId={workspaceId} g={g} m={m} onEnvChange={onEnvChange} nav={nav} />}
+            {k === 'environment' && <Environment workspaceId={workspaceId} g={g} m={m} input={input} onEnvChange={onEnvChange} />}
             {k === 'teams' && <Teams workspaceId={workspaceId} g={g} m={m} />}
             {k === 'people' && <People workspaceId={workspaceId} g={g} m={m} nav={nav} />}
-            {k === 'contexts' && <Contexts workspaceId={workspaceId} g={g} m={m} nav={nav} onMigrate={onMigrate} />}
+            {k === 'contexts' && <Contexts workspaceId={workspaceId} g={g} m={m} input={input} onMigrate={onMigrate} />}
             {k === 'segments' && <Items workspaceId={workspaceId} g={g} tallies={[g.segments]} noun="segment" nav={nav} onMigrate={onMigrate} toSelection={(uids) => ({ gates: [], autotunes: [], segments: uids })} />}
             {k === 'flags' && (
               <Items
@@ -99,6 +97,7 @@ export function GuideView({
                 g={g}
                 tallies={g.aiConfigsAvailable ? [g.gates, g.configs, g.prompts] : [g.gates, g.configs]}
                 noun="flag"
+                m={m}
                 nav={nav}
                 onMigrate={onMigrate}
                 toSelection={(uids) => {
@@ -139,8 +138,13 @@ function summaryFor(k: StepKey, g: GuideModel, input: GuideInput): string {
       const provider = provisionedBy('people', g.people.access);
       return provider ? `${total} · ${missing} waiting for ${provider}` : `${total} (${missing} not in LaunchDarkly)`;
     }
-    case 'contexts':
-      return g.contexts.unitTypes.length === 0 ? 'No unit types in this environment' : g.contexts.open.length ? `${g.contexts.open.length} unit type${g.contexts.open.length === 1 ? '' : 's'} need${g.contexts.open.length === 1 ? 's' : ''} a context kind` : `${g.contexts.unitTypes.length} unit type${g.contexts.unitTypes.length === 1 ? '' : 's'} mapped`;
+    case 'contexts': {
+      const c = g.contexts;
+      if (c.unitTypes.length === 0) return 'No unit types in this environment';
+      if (c.unmapped) return `${c.unmapped} unit type${c.unmapped === 1 ? '' : 's'} need${c.unmapped === 1 ? 's' : ''} a context kind`;
+      const work = [c.toCreate.length ? `${c.toCreate.length} context kind${c.toCreate.length === 1 ? '' : 's'} to create` : '', c.toEnable.length ? `${c.toEnable.length} to enable for experiments` : ''].filter(Boolean);
+      return work.length ? `${c.unitTypes.length} unit type${c.unitTypes.length === 1 ? '' : 's'} mapped · ${work.join(' · ')}` : `${c.unitTypes.length} unit type${c.unitTypes.length === 1 ? '' : 's'} mapped`;
+    }
     case 'segments':
       return describeTally(g.segments, 'segment');
     case 'flags':
@@ -265,7 +269,8 @@ function Connect({ workspaceId, workspace, g, input, nav }: { workspaceId: strin
   );
 }
 
-function Environment({ workspaceId, g, m, onEnvChange, nav }: { workspaceId: string; g: GuideModel; m: MigrationContext | null; onEnvChange: (env: string) => void; nav: GuideNav }) {
+function Environment({ workspaceId, g, m, input, onEnvChange }: { workspaceId: string; g: GuideModel; m: MigrationContext | null; input: GuideInput; onEnvChange: (env: string) => void }) {
+  // "Create in LD": one in flight at a time, with the outcome shown under the table.
   const [creating, setCreating] = useState<string>();
   const [error, setError] = useState<string>();
   const save = (fn: (p: MappingProfile) => void) => {
@@ -274,25 +279,121 @@ function Environment({ workspaceId, g, m, onEnvChange, nav }: { workspaceId: str
     fn(next);
     void m.saveProfile(next);
   };
-  const create = async (sourceId: string, isProduction: boolean) => {
-    const key = sanitizeKey(g.env).toLowerCase();
-    setCreating(sourceId);
+  const setEnv = (sourceId: string, sourceEnv: string, ldEnv: string | null) => save((p) => void ((p.sources[sourceId] ??= { envMapping: {}, unitTypeKinds: {} }).envMapping[sourceEnv] = ldEnv));
+  const create = async (sourceId: string, sourceEnv: string, isProduction: boolean) => {
+    const key = sanitizeKey(sourceEnv).toLowerCase();
+    setCreating(`${sourceId}|${sourceEnv}`);
     setError(undefined);
     try {
-      await createLdEnvironment(workspaceId, { key, name: g.env, critical: isProduction });
-      save((p) => void ((p.sources[sourceId] ??= { envMapping: {}, unitTypeKinds: {} }).envMapping[g.env] = key));
+      await createLdEnvironment(workspaceId, { key, name: sourceEnv, critical: isProduction });
+      setEnv(sourceId, sourceEnv, key);
     } catch (e) {
-      setError((e as Error).message);
+      setError(`Could not create LaunchDarkly environment “${key}”: ${(e as Error).message}`);
     } finally {
       setCreating(undefined);
     }
   };
   const prod = g.envBySource.some((x) => x.isProduction);
+  const withSnap = input.sources.flatMap((s) => {
+    const snapshot = input.snapshots.find((x) => x.source.sourceId === s.id);
+    return snapshot ? [{ source: s, snapshot }] : [];
+  });
   return (
     <>
-      <p className="text-fg-muted">Pick the source environment to migrate and the LaunchDarkly environment it lands in. Start with a non-production environment; production last, once the SDKs are switched there.</p>
+      <p className="text-fg-muted">
+        Every source environment needs a LaunchDarkly environment before anything migrates, or “not migrated” to leave it behind: the environments define where flags, segments and
+        rules land. Map them all here, then pick the one to migrate now. Start with a non-production environment; production last, once the SDKs are switched there.
+      </p>
+      {!g.connected && (
+        <Callout tone="blue">
+          {g.connecting ? (
+            <span className="inline-flex items-center gap-2">
+              <Spinner /> Connecting to LaunchDarkly… the LaunchDarkly environments appear when the connection is up.
+            </span>
+          ) : (
+            'Connect LaunchDarkly (step 1) to map source environments to LaunchDarkly environments.'
+          )}
+        </Callout>
+      )}
+      {g.connected &&
+        m &&
+        withSnap.map(({ source: s, snapshot }) => {
+          const sp = m.profile.sources[s.id] ?? { envMapping: {}, unitTypeKinds: {} };
+          const used = Object.values(sp.envMapping).filter(Boolean) as string[];
+          const dup = used.filter((v, i) => used.indexOf(v) !== i);
+          return (
+            <div key={s.id} className="space-y-2">
+              {withSnap.length > 1 && (
+                <h4 className="flex items-center gap-2 text-sm font-semibold">
+                  {s.label} <Badge>{s.alias}</Badge>
+                </h4>
+              )}
+              <table className="w-full text-sm">
+                <thead className="text-left text-xs font-semibold tracking-wide text-fg-muted uppercase">
+                  <tr>
+                    <th className="py-1.5 pr-3 font-semibold">Source environment</th>
+                    <th className="py-1.5 pr-3 font-semibold" colSpan={2}>
+                      LaunchDarkly environment
+                    </th>
+                    <th className="py-1.5 font-semibold"></th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-line-soft">
+                  {snapshot.environments.map((e) => {
+                    const key = sanitizeKey(e.name).toLowerCase();
+                    return (
+                      <tr key={e.name} className={e.name === g.env ? 'bg-surface-hover' : ''}>
+                        <td className="py-1.5 pr-3">
+                          <span className="font-mono">{e.name}</span>
+                          {e.isProduction && (
+                            <Badge tone="red" title="Production environment in the source">
+                              prod
+                            </Badge>
+                          )}
+                          {e.inferred && <Badge tone="amber">inferred</Badge>}
+                        </td>
+                        <td className="py-1.5 pr-1 text-fg-subtle">→</td>
+                        <td className="py-1.5 pr-3">
+                          <Select aria-label={`LaunchDarkly environment for ${s.label} ${e.name}`} value={sp.envMapping[e.name] ?? ''} onChange={(ev) => setEnv(s.id, e.name, ev.target.value || null)}>
+                            <option value="">not migrated</option>
+                            {m.ldEnvs.map((l) => (
+                              <option key={l.key} value={l.key}>
+                                {l.key}
+                              </option>
+                            ))}
+                          </Select>
+                        </td>
+                        <td className="py-1.5 text-xs">
+                          {!sp.envMapping[e.name] && !m.ldEnvs.some((l) => l.key === key) && (
+                            <Button
+                              variant="ghost"
+                              className="py-1 text-xs"
+                              disabled={!!creating}
+                              title={`Create LaunchDarkly environment “${key}” in project ${m.ld.projectKey} through the LaunchDarkly API, then map ${e.name} to it`}
+                              onClick={() => void create(s.id, e.name, !!e.isProduction)}
+                            >
+                              {creating === `${s.id}|${e.name}` ? <Spinner /> : null} Create “{key}” in LaunchDarkly
+                            </Button>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              {dup.length > 0 && <Callout tone="red">Two source environments map to LaunchDarkly “{dup[0]}”. Within one source, map at most one environment to each LaunchDarkly environment.</Callout>}
+            </div>
+          );
+        })}
+      {error && <Callout tone="red">{error}</Callout>}
+      {g.connected && (
+        <p className="text-xs text-fg-muted">
+          Environments marked “not migrated” keep LaunchDarkly's default (off, serving false) and keep calling StatSig. A source environment with no LaunchDarkly counterpart can be created in the
+          LaunchDarkly project from here (POST /environments; production tiers are created as critical).
+        </p>
+      )}
       <label className="flex items-center gap-2">
-        Source environment
+        Migrate now
         <Select value={g.env} onChange={(e) => onEnvChange(e.target.value)} aria-label="Source environment">
           {g.envs.map((e) => (
             <option key={e} value={e}>
@@ -301,61 +402,8 @@ function Environment({ workspaceId, g, m, onEnvChange, nav }: { workspaceId: str
           ))}
         </Select>
         {prod && <Badge tone="red">production</Badge>}
+        <span className="text-xs text-fg-muted">{g.ldEnvs.length ? `→ LaunchDarkly ${g.ldEnvs.join(', ')}. The steps below work on this environment; repeat them for the next one.` : 'Not mapped yet: the steps below wait for a LaunchDarkly environment.'}</span>
       </label>
-      {!g.connected && (
-        <Callout tone="blue">
-          {g.connecting ? (
-            <span className="inline-flex items-center gap-2">
-              <Spinner /> Connecting to LaunchDarkly… the LaunchDarkly environments appear when the connection is up.
-            </span>
-          ) : (
-            'Connect LaunchDarkly (step 1) to map it to a LaunchDarkly environment.'
-          )}
-        </Callout>
-      )}
-      {g.connected && m && (
-        <table className="w-full text-sm">
-          <tbody className="divide-y divide-line-soft">
-            {g.envBySource.map(({ source, ldEnv, isProduction }) => (
-              <tr key={source.id}>
-                <td className="py-1.5 pr-3">
-                  {source.label} <span className="font-mono text-xs text-fg-muted">{g.env}</span>
-                </td>
-                <td className="py-1.5 text-fg-subtle">→</td>
-                <td className="py-1.5">
-                  <Select
-                    aria-label={`LaunchDarkly environment for ${source.label} ${g.env}`}
-                    value={ldEnv ?? ''}
-                    onChange={(ev) => save((p) => void ((p.sources[source.id] ??= { envMapping: {}, unitTypeKinds: {} }).envMapping[g.env] = ev.target.value || null))}
-                  >
-                    <option value="">not migrated</option>
-                    {m.ldEnvs.map((l) => (
-                      <option key={l.key} value={l.key}>
-                        {l.key}
-                      </option>
-                    ))}
-                  </Select>
-                </td>
-                <td className="py-1.5 pl-2 text-xs">
-                  {!ldEnv && !m.ldEnvs.some((l) => l.key === sanitizeKey(g.env).toLowerCase()) && (
-                    <Button variant="ghost" className="py-1 text-xs" disabled={!!creating} onClick={() => void create(source.id, isProduction)}>
-                      {creating === source.id ? <Spinner /> : null} Create “{sanitizeKey(g.env).toLowerCase()}” in LaunchDarkly
-                    </Button>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-      {error && <Callout tone="red">{error}</Callout>}
-      <p className="text-xs text-fg-muted">
-        Every environment's mapping, and the unit types, are on the{' '}
-        <button type="button" className="text-link hover:underline" onClick={nav.mapping}>
-          Mapping
-        </button>{' '}
-        page.
-      </p>
     </>
   );
 }
@@ -751,18 +799,27 @@ function TeamLine({ t, canCreate, busy, onCreate, onSkip, onUnskip }: { t: TeamR
   );
 }
 
-function Contexts({ workspaceId, g, m, nav, onMigrate }: { workspaceId: string; g: GuideModel; m: MigrationContext | null; nav: GuideNav; onMigrate: (selection: MigrationSelection, ldEnvs: string[]) => void }) {
+function Contexts({ workspaceId, g, m, input, onMigrate }: { workspaceId: string; g: GuideModel; m: MigrationContext | null; input: GuideInput; onMigrate: (selection: MigrationSelection, ldEnvs: string[]) => void }) {
   const [probing, setProbing] = useState(false);
   const [settingDefault, setSettingDefault] = useState(false);
   const [defaultError, setDefaultError] = useState<string>();
-  const kinds = g.contexts.toCreate;
+  const { toCreate, toEnable } = g.contexts;
   const du = g.contexts.defaultUnit;
+  const taking = g.envBySource.filter((x) => x.ldEnv);
+  const sources = taking.map((x) => x.source);
+  const snapshots = Object.fromEntries(taking.map((x) => [x.source.id, x.snapshot]));
+  // The run that creates the missing kinds also enables, for experiments, the kinds marked so (existing ones included).
+  const request = [...toCreate, ...toEnable.map((k) => ({ key: k.key, unitType: k.unitTypes[0]!, availableForExperiments: true }))];
+  const work = [toCreate.length ? `Create ${toCreate.length} context kind${toCreate.length === 1 ? '' : 's'}` : '', toEnable.length ? `enable ${toEnable.length} for experiments` : ''].filter(Boolean).join(' and ');
   return (
     <>
       <p className="text-fg-muted">
-        StatSig buckets and targets by unit types; LaunchDarkly by context kinds. Decide where each unit type goes before anything else, because every rule, rollout and target refers
-        to it: a new context kind (created on the first migration), an attribute of the user context, or a kind another unit type already uses.
+        StatSig buckets and targets by unit types; LaunchDarkly by context kinds. Give every unit type a LaunchDarkly context kind before anything else, because every rule, rollout
+        and target refers to it: a kind the project already has, a kind another unit type creates, or a new kind under the key you choose (created from this step). A custom unit ID is
+        never the key of the <code className="font-mono">user</code> context; it can be kept as an attribute of a kind instead. Per kind, say whether experiments may randomize by it.
       </p>
+      {!g.ldEnvs.length && <Callout tone="blue">Map the environment first (step {ENV_STEP}).</Callout>}
+      {g.ldEnvs.length > 0 && m && <UnitTypeMapping sources={sources} snapshots={snapshots} m={m} />}
       {du && g.connected && (
         <div className="flex flex-wrap items-center gap-2 text-xs">
           <Mark ok={du.isDefault} /> StatSig's default unit type is <code className="font-mono">{du.unitType}</code>
@@ -796,44 +853,28 @@ function Contexts({ workspaceId, g, m, nav, onMigrate }: { workspaceId: string; 
           {defaultError && <span className="text-error">{defaultError}</span>}
         </div>
       )}
-      {g.contexts.unitTypes.length === 0 && <Callout tone="blue">{g.ldEnvs.length ? 'The sources in this environment declare no unit types; userID maps to the user context.' : `Map the environment first (step ${ENV_STEP}).`}</Callout>}
-      {g.contexts.open.length > 0 && (
-        <p className="text-xs text-fg-muted">
-          Answer here per item, or set every unit type once on the{' '}
-          <button type="button" className="text-link hover:underline" onClick={nav.unitTypes}>
-            Unit types
-          </button>{' '}
-          page.
-        </p>
+      {g.ldEnvs.length > 0 && g.connected && !g.contexts.experimentsReadable && g.contexts.unitTypes.length > 0 && (
+        <p className="text-xs text-fg-muted">The project's experimentation settings could not be read (no Experimentation add-on, or the token may not), so nothing is enabled for experiments from here; the choice is kept in the profile.</p>
       )}
-      {g.contexts.open.map((d) => (
-        <DecisionCard key={d.decision.id} decision={d.decision} onChoose={(o) => m && void m.resolve([d.decision], o)} />
-      ))}
-      {g.contexts.decided.length > 0 && (
-        <ul className="space-y-1 text-xs">
-          {g.contexts.decided.map((d) => (
-            <li key={d.decision.id} className="flex items-center gap-2">
-              <Mark ok /> <span className="font-mono">{d.decision.subject.id}</span> <span className="text-fg-muted">{optionLabel(d.decision, d.resolvedWith!.optionKey)}</span>
-            </li>
-          ))}
-        </ul>
-      )}
-      {kinds.length > 0 && g.contexts.open.length === 0 && (
+      {request.length > 0 && g.contexts.unmapped === 0 && (
         <div className="space-y-2 rounded-md border border-line p-3">
-          <div className="text-xs font-semibold tracking-wide text-fg-muted uppercase">Context kinds to create in LaunchDarkly</div>
+          <div className="text-xs font-semibold tracking-wide text-fg-muted uppercase">Context kinds to set up in LaunchDarkly</div>
           <ul className="space-y-0.5 text-xs">
-            {kinds.map((k) => (
+            {toCreate.map((k) => (
               <li key={k.key} className="flex items-center gap-2">
-                <code className="font-mono">{k.key}</code> <span className="text-fg-muted">for {k.unitType}</span>
+                <code className="font-mono">{k.key}</code> <span className="text-fg-muted">for {k.unitType}: create{k.availableForExperiments ? ' and enable for experiments' : ''}</span>
+              </li>
+            ))}
+            {toEnable.map((k) => (
+              <li key={k.key} className="flex items-center gap-2">
+                <code className="font-mono">{k.key}</code> <span className="text-fg-muted">for {k.unitTypes.join(', ')}: enable for experiments</span>
               </li>
             ))}
           </ul>
-          {g.contexts.canCreate ? (
+          {g.contexts.canCreate || toCreate.length === 0 ? (
             <div className="flex items-center gap-3">
-              <Button onClick={() => onMigrate({ gates: [], autotunes: [], contextKinds: kinds }, g.ldEnvs)}>
-                Create {kinds.length} context kind{kinds.length === 1 ? '' : 's'} in LaunchDarkly…
-              </Button>
-              <span className="text-xs text-fg-muted">A small run of its own, so the kinds exist before any segment or flag refers to them. Needs the createContextKind role.</span>
+              <Button onClick={() => onMigrate({ gates: [], autotunes: [], contextKinds: request }, g.ldEnvs)}>{work} in LaunchDarkly…</Button>
+              <span className="text-xs text-fg-muted">A small run of its own, so the kinds exist before any segment or flag refers to them.{toCreate.length ? ' Needs the createContextKind role.' : ''}</span>
             </div>
           ) : (
             <Callout tone="amber">
@@ -854,20 +895,15 @@ function Contexts({ workspaceId, g, m, nav, onMigrate }: { workspaceId: string; 
           )}
         </div>
       )}
-      {g.contexts.unitTypes.length > 0 && g.contexts.open.length === 0 && g.contexts.decided.length === 0 && kinds.length === 0 && (
-        <p className="text-xs text-fg-muted">
-          Every unit type here already has a context kind in LaunchDarkly, or is userID. Change a mapping on the{' '}
-          <button type="button" className="text-link hover:underline" onClick={nav.unitTypes}>
-            Unit types
-          </button>{' '}
-          page.
-        </p>
+      {g.ldEnvs.length > 0 && g.contexts.unitTypes.length > 0 && g.contexts.unmapped === 0 && request.length === 0 && (
+        <p className="text-xs text-fg-muted">Every unit type has its context kind in LaunchDarkly. Your application must send a context of each kind (or the attribute) on every evaluation; the mapper's fidelity notes say which.</p>
       )}
+      {!!input.sources.length && !m && <Spinner />}
     </>
   );
 }
 
-function Items({ workspaceId, g, tallies, noun, nav, onMigrate, toSelection }: { workspaceId: string; g: GuideModel; tallies: Tally[]; noun: string; nav: GuideNav; onMigrate: (selection: MigrationSelection, ldEnvs: string[]) => void; toSelection: (uids: string[]) => MigrationSelection }) {
+function Items({ workspaceId, g, tallies, noun, m, nav, onMigrate, toSelection }: { workspaceId: string; g: GuideModel; tallies: Tally[]; noun: string; m?: MigrationContext | null; nav: GuideNav; onMigrate: (selection: MigrationSelection, ldEnvs: string[]) => void; toSelection: (uids: string[]) => MigrationSelection }) {
   // Whether a read is in flight comes from the live session: the guide model is built from the
   // session's data view, which does not follow a read's progress.
   const refreshing = !!useLdSession(workspaceId).refreshing;
@@ -882,6 +918,7 @@ function Items({ workspaceId, g, tallies, noun, nav, onMigrate, toSelection }: {
           ? 'Segments go first: flags reference them, so a flag migrated later finds its segments already in place. Big ID lists import as big segments where the plan allows. Not every segment has to come: open Segments (View) to see which gates and configs use each one, tick the ones to bring, and set aside the rest; a migrated flag still brings the segments it needs.'
           : 'Gates become boolean flags and dynamic configs become JSON flags, with rules, rollouts and overrides translated. A gate used as a prerequisite migrates before the flags that depend on it. StatSig prompts become AI Configs: the shell only, because the Console API does not expose prompt versions.'}
       </p>
+      {noun === 'flag' && m && <FlagNames m={m} />}
       {noun === 'flag' && !g.aiConfigsAvailable && g.prompts.total > 0 && <Callout tone="amber">{g.prompts.total} StatSig prompt{g.prompts.total === 1 ? '' : 's'} cannot be written: AI Configs are not available to this LaunchDarkly project or token. Recreate them in LaunchDarkly by hand.</Callout>}
       {!g.ldEnvs.length && <Callout tone="blue">Map the environment first (step {ENV_STEP}).</Callout>}
       {g.ldEnvs.length > 0 && (
@@ -933,6 +970,32 @@ function Items({ workspaceId, g, tallies, noun, nav, onMigrate, toSelection }: {
         </>
       )}
     </>
+  );
+}
+
+/** How LD flags are named (edge case 1.13): a workspace setting, kept with the Flags step that it shapes. */
+function FlagNames({ m }: { m: MigrationContext }) {
+  return (
+    <label className="flex flex-wrap items-center gap-2 text-xs text-fg-muted">
+      Name flags
+      <Select
+        aria-label="Flag names"
+        className="py-1 text-xs"
+        value={m.profile.flagNames ?? 'source'}
+        onChange={(e) => {
+          const next: MappingProfile = structuredClone(m.profile);
+          if (e.target.value === 'readable') next.flagNames = 'readable';
+          else delete next.flagNames;
+          void m.saveProfile(next);
+        }}
+      >
+        <option value="source">as in StatSig (display name, else the ID)</option>
+        <option value="readable">readable, derived from the ID when the display name is the ID</option>
+      </Select>
+      <span title="Most StatSig items are created with an ID-like name (“ds_paint_props_shaders”), so the display name is the ID; the readable option derives a name from it (“Ds paint props shaders”). The ID stays on the flag key and in migration.id. Changing this marks migrated flags as changed; the next sync renames them.">
+        The key and migration.id keep the StatSig ID either way.
+      </span>
+    </label>
   );
 }
 

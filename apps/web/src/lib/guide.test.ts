@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { DecisionPoint } from '@sslm/mapper';
+import type { MappingProfile } from '@sslm/mapper';
 import { classify, computeGuide, computePeople, currentStep, describeTally, STEP_ORDER, teamKeysFor, type GuideInput, type Tally, provisionedBy } from './guide.ts';
 
 const blocking = { severity: 'blocking' } as DecisionPoint;
@@ -185,5 +186,74 @@ describe('guide: the saved LaunchDarkly listing', () => {
     expect(computeGuide(m({ flags: { items: [], loadedAt: '2026-11-02T11:00:00Z' } })).ldAsOf).toEqual({ at: '2026-11-02T11:00:00Z', refreshing: false, failed: false });
     expect(computeGuide(m({})).ldAsOf).toBeUndefined();
     expect(computeGuide(base).ldAsOf).toBeUndefined();
+  });
+});
+
+describe('guide: context kinds (the required mapping)', () => {
+  const source = { id: 'src-a', workspaceId: 'w', alias: 'a', label: 'acme-web', kind: 'console_api', createdAt: '2026-10-22T10:00:00Z' } as GuideInput['sources'][number];
+  const snapshot = {
+    source: { sourceId: 'src-a', sourceKind: 'console_api', alias: 'a' },
+    environments: [{ name: 'staging' }],
+    unitTypes: [{ name: 'userID' }, { name: 'stableID' }, { name: 'companyID' }],
+    gates: [],
+    configs: [],
+    segments: [],
+    experiments: [],
+    layers: [],
+    holdouts: [],
+    autotunes: [],
+    prompts: [],
+    teams: [],
+    alerts: [],
+  } as unknown as GuideInput['snapshots'][number];
+  const input = (kinds: Record<string, string>, over: { contextKinds?: MappingProfile['contextKinds']; randomizationUnits?: string[] } = {}): GuideInput => {
+    const profile: MappingProfile = { version: 1, attributes: {}, policies: {}, sources: { 'src-a': { envMapping: { staging: 'test' }, unitTypeKinds: kinds } }, ...(over.contextKinds ? { contextKinds: over.contextKinds } : {}) };
+    const m = {
+      ld: { status: 'connected', projectKey: 'shop', contextKinds: ['user', 'device'], ...('randomizationUnits' in over ? { randomizationUnits: over.randomizationUnits } : { randomizationUnits: ['user'] }) },
+      connected: true,
+      capabilities: { prerequisites: 'unknown', contextKinds: 'unknown', existingContextKinds: ['user', 'device'] },
+      profile,
+      resolutions: new Map(),
+    } as unknown as NonNullable<GuideInput['m']>;
+    return { sources: [source], snapshots: [snapshot], m, env: 'staging', access: 'launchdarkly', decisions: [], monitoring: { attention: 0, rows: 0, loaded: false }, interruptedRuns: 0 };
+  };
+
+  it('every unit type but userID needs a choice before the step is done, even one whose default kind exists', () => {
+    const g = computeGuide(input({}));
+    expect(g.contexts.unitTypes).toEqual(['userID', 'stableID', 'companyID']);
+    expect(g.contexts.rows.map((r) => [r.unitType, r.standing.kind])).toEqual([
+      ['userID', 'exists'],
+      ['stableID', 'unmapped'],
+      ['companyID', 'unmapped'],
+    ]);
+    expect(g.contexts.unmapped).toBe(2);
+    expect(g.contexts.toCreate).toEqual([]);
+    expect(g.done.contexts).toBe(false);
+    expect(g.current).toBe('contexts');
+  });
+
+  it('chosen kinds LaunchDarkly lacks are created, with whether each is to be a randomization unit; kinds it has are enabled alone', () => {
+    const g = computeGuide(input({ stableID: 'device', companyID: 'company' }, { contextKinds: { company: { availableForExperiments: true }, device: { availableForExperiments: true } } }));
+    expect(g.contexts.unmapped).toBe(0);
+    expect(g.contexts.toCreate).toEqual([{ key: 'company', unitType: 'companyID', availableForExperiments: true }]);
+    expect(g.contexts.toEnable).toEqual([{ key: 'device', unitTypes: ['stableID'] }]);
+    expect(g.contexts.experimentsReadable).toBe(true);
+    expect(g.done.contexts).toBe(false);
+    // An attribute on a kind the migration creates needs that kind too.
+    const attr = computeGuide(input({ stableID: 'device', companyID: 'attribute:account/companyID' }));
+    expect(attr.contexts.toCreate).toEqual([{ key: 'account', unitType: 'companyID', availableForExperiments: false }]);
+  });
+
+  it('is done once every unit type has a kind that exists and every experiments choice is in effect', () => {
+    const g = computeGuide(input({ stableID: 'device', companyID: 'device' }, { contextKinds: { device: { availableForExperiments: true } }, randomizationUnits: ['user', 'device'] }));
+    expect(g.contexts.toCreate).toEqual([]);
+    expect(g.contexts.toEnable).toEqual([]);
+    expect(g.done.contexts).toBe(true);
+    expect(g.current).toBe('segments');
+    // Unreadable experimentation settings enable nothing from here and do not hold the step.
+    const unreadable = computeGuide(input({ stableID: 'device', companyID: 'device' }, { contextKinds: { device: { availableForExperiments: true } }, randomizationUnits: undefined }));
+    expect(unreadable.contexts.experimentsReadable).toBe(false);
+    expect(unreadable.contexts.toEnable).toEqual([]);
+    expect(unreadable.done.contexts).toBe(true);
   });
 });

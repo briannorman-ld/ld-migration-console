@@ -46,7 +46,6 @@ import { ConnectionsView } from "./ConnectionsView.tsx";
 import { EntityList } from "./EntityList.tsx";
 import { LdPanel } from "./LdPanel.tsx";
 import type { LdSourceResource } from "./LdSourceSideBySide.tsx";
-import { unitTypeUsage, unsettledUnitTypes } from "../lib/unitTypes.ts";
 import { SelectionBar, viewFor } from "../components/SelectionBar.tsx";
 import { loadSelection, saveSelection, toSelection } from "../lib/selection.ts";
 import { loadEnv, saveEnv } from "../lib/envChoice.ts";
@@ -63,8 +62,6 @@ const SegmentsSideBySide = lazyNamed(() => import("./SegmentsSideBySide.tsx"), "
 const AutotunesSideBySide = lazyNamed(() => import("./AutotunesSideBySide.tsx"), "AutotunesSideBySide");
 const LdSourceSideBySide = lazyNamed(() => import("./LdSourceSideBySide.tsx"), "LdSourceSideBySide");
 const DecisionsView = lazyNamed(() => import("./DecisionsView.tsx"), "DecisionsView");
-const MappingView = lazyNamed(() => import("./MappingView.tsx"), "MappingView");
-const UnitTypesView = lazyNamed(() => import("./UnitTypesView.tsx"), "UnitTypesView");
 const RunsView = lazyNamed(() => import("./RunsView.tsx"), "RunsView");
 const MonitoringView = lazyNamed(() => import("./MonitoringView.tsx"), "MonitoringView");
 const SnapshotsView = lazyNamed(() => import("./SnapshotsView.tsx"), "SnapshotsView");
@@ -82,8 +79,6 @@ export type View =
   | { kind: "warnings" }
   | { kind: "add-source" }
   | { kind: "decisions" }
-  | { kind: "mapping" }
-  | { kind: "unit-types" }
   | { kind: "runs" }
   | { kind: "monitoring" }
   | { kind: "snapshots"; sourceId?: string }
@@ -315,28 +310,6 @@ export function WorkspaceScreen({
   const blockingCount = openDecisions.filter(
     (d) => d.decision.severity === "blocking",
   ).length;
-  // Unit types still on their default while LD lacks the kind: each item asks (Unit types page).
-  const profile = m?.profile;
-  const resolutionList = m?.resolutionList;
-  const existingContextKinds = m?.capabilities.existingContextKinds;
-  const unsettledKinds = useMemo(
-    () =>
-      profile && resolutionList && existingContextKinds
-        ? visibleSnaps.reduce(
-            (n, snap) =>
-              n +
-              unsettledUnitTypes(
-                profile,
-                resolutionList,
-                snap.source.sourceId,
-                unitTypeUsage(snap).map((u) => u.name),
-                existingContextKinds,
-              ).length,
-            0,
-          )
-        : 0,
-    [profile, resolutionList, existingContextKinds, visibleSnaps],
-  );
   const interrupted = (runs ?? []).filter((r) => isInterrupted(r, workspaceId));
 
   // Monitoring (PLAN §14): a read-only LD check on connect and every 15 minutes while the tab is
@@ -385,8 +358,9 @@ export function WorkspaceScreen({
   const explorerNav = {
     connections: () => setView({ kind: "connections" }),
     ld: () => setView({ kind: "ld" }),
-    mapping: () => setView({ kind: "mapping" }),
-    unitTypes: () => setView({ kind: "unit-types" }),
+    // The environment and unit-type mapping live on the guide's steps.
+    mapping: () => setView({ kind: "guide" }),
+    unitTypes: () => setView({ kind: "guide" }),
     decisions: () => setView({ kind: "decisions" }),
   };
 
@@ -643,19 +617,6 @@ export function WorkspaceScreen({
             )}
           </NavItem>
           <NavItem
-            active={view.kind === "mapping"}
-            onClick={() => setView({ kind: "mapping" })}
-          >
-            <span>Mapping</span>
-          </NavItem>
-          <NavItem
-            active={view.kind === "unit-types"}
-            onClick={() => setView({ kind: "unit-types" })}
-          >
-            <span>Unit types</span>
-            {unsettledKinds > 0 && <Badge tone="amber">{unsettledKinds}</Badge>}
-          </NavItem>
-          <NavItem
             active={view.kind === "runs"}
             onClick={() => setView({ kind: "runs" })}
           >
@@ -818,8 +779,6 @@ export function WorkspaceScreen({
             (view.kind === "resource" ||
               view.kind === "ld-source" ||
               view.kind === "decisions" ||
-              view.kind === "mapping" ||
-              view.kind === "unit-types" ||
               view.kind === "monitoring") && (
               <Callout tone="blue">
                 {(sources ?? []).length === 0 ? (
@@ -874,7 +833,7 @@ export function WorkspaceScreen({
                       ldEnvs,
                     })
                   }
-                  onOpenMapping={() => setView({ kind: "mapping" })}
+                  onOpenMapping={() => setView({ kind: "guide" })}
                   nav={explorerNav}
                   selected={selected}
                   setSelected={setSelected}
@@ -891,7 +850,7 @@ export function WorkspaceScreen({
                   onMigrate={(uids, ldEnvs) =>
                     setMigrate({ selection: { gates: [], autotunes: [], segments: uids }, ldEnvs })
                   }
-                  onOpenMapping={() => setView({ kind: "mapping" })}
+                  onOpenMapping={() => setView({ kind: "guide" })}
                   nav={explorerNav}
                   selected={selected}
                   setSelected={setSelected}
@@ -940,8 +899,6 @@ export function WorkspaceScreen({
           )}
           {viewingPast &&
             (view.kind === "decisions" ||
-              view.kind === "mapping" ||
-              view.kind === "unit-types" ||
               view.kind === "runs" ||
               view.kind === "monitoring") && (
               <Callout>
@@ -965,31 +922,6 @@ export function WorkspaceScreen({
                 m={m}
                 workspaceName={workspace.name}
                 env={env}
-              />
-            )}
-          {!viewingPast &&
-            view.kind === "mapping" &&
-            m &&
-            visible.length > 0 && (
-              <MappingView
-                workspaceId={workspaceId}
-                sources={visible}
-                snapshots={snapshots ?? {}}
-                m={m}
-                onConnect={() => setView({ kind: "ld" })}
-                onUnitTypes={() => setView({ kind: "unit-types" })}
-              />
-            )}
-          {!viewingPast &&
-            view.kind === "unit-types" &&
-            m &&
-            visible.length > 0 && (
-              <UnitTypesView
-                sources={visible}
-                snapshots={snapshots ?? {}}
-                m={m}
-                onConnect={() => setView({ kind: "ld" })}
-                onDecisions={() => setView({ kind: "decisions" })}
               />
             )}
           {!viewingPast && view.kind === "runs" && m && (
