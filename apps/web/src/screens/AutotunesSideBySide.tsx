@@ -8,8 +8,9 @@ import { DecisionCard, FIDELITY_TONE, TYPE_LABEL } from '../components/DecisionC
 import { PagerBar, usePager } from '../components/Pager.tsx';
 import { MigrateButton, ReadinessLine, readinessSteps } from '../components/Readiness.tsx';
 import { LdTargeting } from '../components/Targeting.tsx';
-import { Badge, Button, Callout, Card, cx, Input, Select } from '../components/ui.tsx';
+import { Badge, Button, Card, cx, Input, Select } from '../components/ui.tsx';
 import { TagFilter } from '../components/TagFilter.tsx';
+import { MappingExplainer } from '../components/MappingExplainer.tsx';
 import { matchesTags, pruneTags, tagOptions } from '../lib/tags.ts';
 import { summarizeDecisions } from '../lib/decisionSummary.ts';
 import { ldFlagState, mapAutotuneFor, type DecisionInstance } from '../lib/migration.ts';
@@ -39,6 +40,8 @@ export interface ExplorerNav {
   mapping: () => void;
   unitTypes: () => void;
   decisions: () => void;
+  /** The "What migrates" page, opened at a coverage row. */
+  coverage?: (focus: string) => void;
 }
 
 /**
@@ -192,10 +195,7 @@ export function AutotunesSideBySide({
         </div>
       </div>
       {!readOnly && <ReadinessLine steps={steps} />}
-      <Callout tone="blue">
-        An autotune becomes a JSON flag (one variation per arm), a custom metric for its success event and a LaunchDarkly <b>multi-armed bandit</b> created as a draft (PLAN §11). Nothing is moved mid-flight: a
-        running autotune waits for its winner unless you choose to pre-stage it, and a concluded one becomes a flag serving the winner.
-      </Callout>
+      <MappingExplainer resource="autotune" onOpenCoverage={nav.coverage} />
       <PagerBar pager={pager} label="autotunes" className="my-2" />
       <Card className="overflow-hidden">
         <table className="w-full table-fixed text-sm">

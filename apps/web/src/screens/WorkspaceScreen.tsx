@@ -362,6 +362,7 @@ export function WorkspaceScreen({
     mapping: () => setView({ kind: "guide" }),
     unitTypes: () => setView({ kind: "guide" }),
     decisions: () => setView({ kind: "decisions" }),
+    coverage: (focus: string) => setView({ kind: "coverage", focus }),
   };
 
   if (!workspace)

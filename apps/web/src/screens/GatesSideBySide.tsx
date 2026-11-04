@@ -18,6 +18,7 @@ import {
 } from "../components/DecisionCard.tsx";
 import { PagerBar, usePager } from "../components/Pager.tsx";
 import { TagFilter } from "../components/TagFilter.tsx";
+import { MappingExplainer } from "../components/MappingExplainer.tsx";
 import { matchesTags, pruneTags, tagOptions } from "../lib/tags.ts";
 import {
   MigrateButton,
@@ -519,6 +520,7 @@ export function FlagSideBySide({
           )}
         </div>
       </div>
+      <MappingExplainer resource={kind} onOpenCoverage={nav?.coverage} className="mb-3" />
       {!readOnly && <ReadinessLine steps={steps} />}
       {ld.status !== "connected" && (
         <div className="mb-3">

@@ -19,6 +19,7 @@ import { MigrateButton, ReadinessLine, readinessSteps } from "../components/Read
 import { StatsigRules } from "../components/Targeting.tsx";
 import { Badge, Button, Callout, Card, cx, Input, Select } from "../components/ui.tsx";
 import { TagFilter } from "../components/TagFilter.tsx";
+import { MappingExplainer } from "../components/MappingExplainer.tsx";
 import { matchesTags, pruneTags, tagOptions } from "../lib/tags.ts";
 import { summarizeDecisions } from "../lib/decisionSummary.ts";
 import { mapSegmentFor, type DecisionInstance } from "../lib/migration.ts";
@@ -259,6 +260,7 @@ export function SegmentsSideBySide({
           {!readOnly && <MigrateButton steps={steps} onClick={migrate} label={selectedRows.length ? `Migrate ${selectedRows.length.toLocaleString()} segment${selectedRows.length === 1 ? "" : "s"}…` : "Migrate…"} />}
         </div>
       </div>
+      <MappingExplainer resource="segment" onOpenCoverage={nav?.coverage} className="mb-3" />
       {!readOnly && <ReadinessLine steps={steps} />}
       {ld.status !== "connected" && (
         <div className="mb-3">

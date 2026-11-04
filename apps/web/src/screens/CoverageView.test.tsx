@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CanonicalSnapshot, Experiment, Holdout, Metric } from '@sslm/canonical';
 import { AREAS, COVERAGE } from '@sslm/coverage';
@@ -104,7 +104,11 @@ describe('EntityList with guidance', () => {
     expect(screen.getByText(/serving “Treatment” at 100%/)).toBeTruthy();
     fireEvent.click(screen.getAllByRole('button', { name: 'why?' })[0]!);
     expect(onOpenCoverage).toHaveBeenCalledWith('experiments.running');
-    fireEvent.click(screen.getByRole('button', { name: 'Details and limitations' }));
+    // The mapping panel: headline row visible, caveats behind the toggle, each linking to its coverage row.
+    const panel = screen.getByTestId('mapping-explainer');
+    expect(within(panel).getByText('Experiment not started (setup)')).toBeTruthy();
+    fireEvent.click(within(panel).getByText(/Show \d+ caveats/));
+    fireEvent.click(within(panel).getByRole('button', { name: 'Full row on What migrates' }));
     expect(onOpenCoverage).toHaveBeenCalledWith('experiments.setup');
   });
 

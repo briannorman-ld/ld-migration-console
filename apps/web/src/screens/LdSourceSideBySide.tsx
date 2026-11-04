@@ -10,6 +10,7 @@ import { MigrateButton, ReadinessLine, readinessSteps } from '../components/Read
 import { LdTargeting } from '../components/Targeting.tsx';
 import { Badge, Button, Callout, Card, cx, Input, Select } from '../components/ui.tsx';
 import { TagFilter } from '../components/TagFilter.tsx';
+import { MappingExplainer } from '../components/MappingExplainer.tsx';
 import { matchesTags, pruneTags, tagOptions } from '../lib/tags.ts';
 import { ldFlagState, mapNeutralFlagFor, mapNeutralSegmentFor } from '../lib/migration.ts';
 import type { MigrationContext } from '../lib/useMigration.ts';
@@ -207,6 +208,7 @@ export function LdSourceSideBySide({
           {!readOnly && <MigrateButton steps={steps} onClick={migrate} label={selectedRows.length ? `Migrate ${selectedRows.length.toLocaleString()} ${selectedRows.length === 1 ? words.one : words.many}…` : 'Migrate…'} />}
         </div>
       </div>
+      <MappingExplainer resource={resource === 'flag' ? 'ld_flag' : 'ld_segment'} onOpenCoverage={nav?.coverage} className="mb-3" />
       {!readOnly && <ReadinessLine steps={steps} />}
       {m.ld.status !== 'connected' && (
         <div className="mb-3">

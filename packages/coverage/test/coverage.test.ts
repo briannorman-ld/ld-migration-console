@@ -77,3 +77,29 @@ describe('per-item guidance', () => {
     expect(guidanceFor({ ...base, kind: 'metric', metricType: 'event_count_custom', definition: {}, isWarehouseNative: false }).detail).toContain('conversion');
   });
 });
+
+describe('mapping explainer (resource pages)', () => {
+  it('has a headline and caveats for every entity kind and both LaunchDarkly-source resources', async () => {
+    const { EXPLAINER_KEYS, explainMapping } = await import('../src/explainer.ts');
+    for (const k of ENTITY_KINDS) expect(EXPLAINER_KEYS).toContain(k);
+    for (const k of EXPLAINER_KEYS) {
+      const x = explainMapping(k);
+      expect(x.headline.id).toBeTruthy();
+      if (k !== 'ld_flag' && k !== 'ld_segment') expect(x.headline.kind, `${k}: headline row should count that kind`).toBe(k);
+      expect(x.caveats.length, `${k}: a page with no caveats hides something`).toBeGreaterThan(0);
+      const all = [...x.clean, ...x.caveats.flatMap((c) => c.rows)];
+      expect(all.map((e) => e.id)).not.toContain(x.headline.id);
+      expect(new Set(all.map((e) => e.id)).size).toBe(all.length);
+      for (const e of x.caveats.flatMap((c) => c.rows)) expect(e.status).not.toBe('migrates');
+    }
+  });
+
+  it('brings rule conditions and operators onto every page whose resource has rules', async () => {
+    const { explainMapping } = await import('../src/explainer.ts');
+    for (const k of ['gate', 'config', 'segment'] as const) {
+      const areas = explainMapping(k).caveats.map((c) => c.area.area);
+      expect(areas).toContain('conditions');
+      expect(areas).toContain('operators');
+    }
+  });
+});

@@ -1,10 +1,11 @@
 import { useMemo, useState } from 'react';
 import { entitiesOf, type CanonicalSnapshot, type EntityKind } from '@sslm/canonical';
-import { coverageFor, guidanceFor, STATUS_LABEL, type CoverageStatus } from '@sslm/coverage';
+import { guidanceFor, STATUS_LABEL, type CoverageStatus } from '@sslm/coverage';
 import type { SourceRecord } from '@sslm/store';
 import { PagerBar, usePager } from '../components/Pager.tsx';
-import { Badge, Callout, Card, Input, Select } from '../components/ui.tsx';
+import { Badge, Card, Input, Select } from '../components/ui.tsx';
 import { TagFilter } from '../components/TagFilter.tsx';
+import { MappingExplainer } from '../components/MappingExplainer.tsx';
 import { matchesTags, pruneTags, tagOptions } from '../lib/tags.ts';
 import { COVERAGE_TONE } from './coverageTone.ts';
 
@@ -43,7 +44,6 @@ export function EntityList({
       .filter(({ e }) => !needle || e.id.toLowerCase().includes(needle) || (e.description ?? '').toLowerCase().includes(needle));
   }, [rows, q, status, chosenTags]);
   const pager = usePager(filtered);
-  const coverage = coverageFor(kind);
   const counts = useMemo(() => {
     const out: Partial<Record<CoverageStatus, number>> = {};
     for (const { g } of rows) out[g.status] = (out[g.status] ?? 0) + 1;
@@ -66,18 +66,7 @@ export function EntityList({
         <TagFilter options={tagChoices} chosen={chosenTags} onChange={setTags} noun={label.toLowerCase()} />
         <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder={`Search ${label.toLowerCase()}…`} aria-label={`Search ${label}`} className="ml-auto w-64 py-1" />
       </div>
-      {coverage.length > 0 && (
-        <div className="mb-3">
-          <Callout tone="blue">
-            <span className="font-medium">{coverage[0]!.statsig}</span> → {coverage[0]!.ld}. {coverage[0]!.how}{' '}
-            {onOpenCoverage && (
-              <button type="button" className="text-link hover:underline" onClick={() => onOpenCoverage(coverage[0]!.id)}>
-                Details and limitations
-              </button>
-            )}
-          </Callout>
-        </div>
-      )}
+      <MappingExplainer resource={kind} onOpenCoverage={onOpenCoverage} className="mb-3" />
       <PagerBar pager={pager} label={label.toLowerCase()} className="mb-2" />
       <Card>
         <ul className="divide-y divide-line-soft text-sm">
