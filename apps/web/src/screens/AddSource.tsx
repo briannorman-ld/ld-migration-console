@@ -1,26 +1,39 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ENTITY_KINDS, type EntityKind, type SourceDescriptor, type SourceKind } from '@sslm/canonical';
 import { MAX_SPEC_BYTES } from '@sslm/adapters';
-import { LD_INSTANCES, type LdInstanceId } from '@sslm/ld-client';
-import { STATSIG_CONSOLE_BASE_URL } from '@sslm/statsig-client';
+import { LD_INSTANCES, LdClient, type LdInstanceId, type LdProject } from '@sslm/ld-client';
+import { STATSIG_CONSOLE_BASE_URL, StatsigConsoleClient } from '@sslm/statsig-client';
 import { appendLog, describeProgress, describeTransportEvent, SyncActivity, type SyncLogEntry } from '../components/SyncActivity.tsx';
+import { SearchSelect } from '../components/SearchSelect.tsx';
 import { Button, Callout, Card, Input, Label, Select, Spinner } from '../components/ui.tsx';
 import { KIND_LABEL } from '../lib/kinds.ts';
 import { secrets } from '../lib/secrets.ts';
+import { deriveAlias, specSourceLabel } from '../lib/sourceNaming.ts';
 import { store } from '../lib/store.ts';
 import { syncConsoleSource, syncLdSource, uploadSpec } from '../lib/sync.ts';
+
+/** Shortest string we try as a LaunchDarkly token; anything shorter is still being typed. */
+const MIN_LD_TOKEN_LENGTH = 8;
+/** Pause after the last keystroke before the token is tried against the API. */
+const LD_LIST_DEBOUNCE_MS = 400;
 
 /**
  * Add a source: a StatSig project (Console API key, recommended, or an uploaded config spec,
  * PLAN §4.2), or another LaunchDarkly project read with its own token (PLAN §20.2).
+ *
+ * The source names itself. A Console key belongs to one StatSig project, so its name comes from
+ * `GET /project`; a LaunchDarkly token can read many projects, so they are listed and one is
+ * picked; a spec file is named after the file. The alias (tags, provenance, consolidation
+ * prefix; see `sourceNaming.ts`) is derived from that name and made unique in the workspace.
  */
 export function AddSource({ workspaceId, onDone }: { workspaceId: string; onDone: () => void }) {
   const [kind, setKind] = useState<SourceKind>('console_api');
-  const [label, setLabel] = useState('');
-  const [alias, setAlias] = useState('');
   const [key, setKey] = useState('');
   const [ldInstance, setLdInstance] = useState<LdInstanceId>('us');
   const [ldProject, setLdProject] = useState('');
+  const [ldProjects, setLdProjects] = useState<LdProject[]>();
+  const [ldListing, setLdListing] = useState(false);
+  const [ldListError, setLdListError] = useState<string>();
   const [file, setFile] = useState<File>();
   const [kinds, setKinds] = useState<Set<EntityKind>>(() => new Set(ENTITY_KINDS));
   const [busy, setBusy] = useState(false);
@@ -28,47 +41,85 @@ export function AddSource({ workspaceId, onDone }: { workspaceId: string; onDone
   const [log, setLog] = useState<SyncLogEntry[]>([]);
   const [progress, setProgress] = useState<{ done: number; total: number; endpoint: string }>();
 
+  // A LaunchDarkly token can read many projects: list them as soon as a token is pasted, the way
+  // the target connection does, instead of asking for a key to be typed from memory.
+  useEffect(() => {
+    if (kind !== 'launchdarkly') return;
+    const token = key.trim();
+    setLdProjects(undefined);
+    setLdListError(undefined);
+    setLdProject('');
+    if (token.length < MIN_LD_TOKEN_LENGTH) {
+      setLdListing(false);
+      return;
+    }
+    setLdListing(true);
+    const ctrl = new AbortController();
+    const timer = setTimeout(async () => {
+      try {
+        const listed = await new LdClient({ instance: ldInstance, token }).listProjects(ctrl.signal);
+        if (ctrl.signal.aborted) return;
+        const projects = [...listed].sort((a, b) => a.name.localeCompare(b.name));
+        setLdProjects(projects);
+        if (projects.length === 1) setLdProject(projects[0]!.key);
+      } catch (e) {
+        if (ctrl.signal.aborted) return;
+        setLdListError((e as Error).message);
+      } finally {
+        if (!ctrl.signal.aborted) setLdListing(false);
+      }
+    }, LD_LIST_DEBOUNCE_MS);
+    return () => {
+      clearTimeout(timer);
+      ctrl.abort();
+    };
+  }, [kind, key, ldInstance]);
+
   const add = async () => {
     setBusy(true);
     setError(undefined);
     setLog([]);
     setProgress(undefined);
     const push = (e: SyncLogEntry) => setLog((l) => appendLog(l, e));
-    const a = (alias || label || (kind === 'launchdarkly' ? ldProject : '') || 'src').toLowerCase().replace(/[^a-z0-9-]+/g, '-').slice(0, 24);
-    // Only Console API sources have a crawl scope; a spec file already holds whatever it holds.
-    const scope = kind === 'console_api' && kinds.size < ENTITY_KINDS.length ? { resources: ENTITY_KINDS.filter((k) => kinds.has(k)) } : {};
-    const source: SourceDescriptor = {
-      id: crypto.randomUUID(),
-      alias: a,
-      label: label || (kind === 'launchdarkly' ? `${ldProject.trim()} (LaunchDarkly)` : a),
-      kind,
-      createdAt: new Date().toISOString(),
-      ...(kind === 'console_api' ? { baseUrl: STATSIG_CONSOLE_BASE_URL, ...scope } : {}),
-      ...(kind === 'launchdarkly' ? { ld: { instance: ldInstance, projectKey: ldProject.trim() } } : {}),
+    const handlers = {
+      onProgress: (p: { done: number; total: number; endpoint: string }) => {
+        setProgress(p);
+        push(describeProgress(p));
+      },
+      onTransport: (e: Parameters<typeof describeTransportEvent>[0]) => push(describeTransportEvent(e)),
     };
     try {
-      await store.addSource(workspaceId, source);
+      const taken = (await store.listSources(workspaceId)).map((s) => s.alias);
+      const base = { id: crypto.randomUUID(), kind, createdAt: new Date().toISOString() };
       if (kind === 'launchdarkly') {
+        const project = ldProjects?.find((p) => p.key === ldProject);
+        if (!project) throw new Error('Choose the LaunchDarkly project to read.');
+        const source: SourceDescriptor = {
+          ...base,
+          alias: deriveAlias(project.key, taken, 'ld'),
+          label: `${project.name} (LaunchDarkly)`,
+          ld: { instance: ldInstance, projectKey: project.key },
+        };
+        await store.addSource(workspaceId, source);
         secrets.set('ld_source', source.id, key.trim(), workspaceId);
         setKey('');
-        await syncLdSource(workspaceId, source, {
-          onProgress: (p) => {
-            setProgress(p);
-            push(describeProgress(p));
-          },
-          onTransport: (e) => push(describeTransportEvent(e)),
-        });
+        await syncLdSource(workspaceId, source, handlers);
       } else if (kind === 'console_api') {
-        secrets.set('statsig', source.id, key.trim(), workspaceId);
+        // One request validates the key and names the project before anything is saved.
+        const apiKey = key.trim();
+        const client = new StatsigConsoleClient({ baseUrl: STATSIG_CONSOLE_BASE_URL, apiKey, transport: { onEvent: handlers.onTransport } });
+        const project = await client.validateKey();
+        const label = project.name?.trim() || `StatSig project ${project.id}`;
+        // Only Console API sources have a crawl scope; a spec file already holds whatever it holds.
+        const scope = kinds.size < ENTITY_KINDS.length ? { resources: ENTITY_KINDS.filter((k) => kinds.has(k)) } : {};
+        const source: SourceDescriptor = { ...base, alias: deriveAlias(label, taken, 'statsig'), label, baseUrl: STATSIG_CONSOLE_BASE_URL, ...scope };
+        await store.addSource(workspaceId, source);
+        secrets.set('statsig', source.id, apiKey, workspaceId);
         setKey('');
-        await syncConsoleSource(workspaceId, source, {
-          onProgress: (p) => {
-            setProgress(p);
-            push(describeProgress(p));
-          },
-          onTransport: (e) => push(describeTransportEvent(e)),
-        });
+        await syncConsoleSource(workspaceId, source, handlers);
       } else if (file) {
+        const source: SourceDescriptor = { ...base, alias: deriveAlias('spec', taken, 'spec'), label: specSourceLabel(file.name) };
+        await store.addSource(workspaceId, source);
         await uploadSpec(workspaceId, source, file);
       }
       onDone();
@@ -78,6 +129,8 @@ export function AddSource({ workspaceId, onDone }: { workspaceId: string; onDone
       setBusy(false);
     }
   };
+
+  const canAdd = kind === 'console_api' ? !!key.trim() && kinds.size > 0 : kind === 'launchdarkly' ? !!key.trim() && !!ldProject : !!file;
 
   return (
     <div className="max-w-2xl space-y-4">
@@ -94,16 +147,6 @@ export function AddSource({ workspaceId, onDone }: { workspaceId: string; onDone
         </Button>
       </div>
       <Card className="space-y-4 p-5">
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <Label htmlFor="src-label">Name</Label>
-            <Input id="src-label" value={label} placeholder={kind === 'launchdarkly' ? 'acme-legacy (LaunchDarkly)' : 'acme-web'} onChange={(e) => setLabel(e.target.value)} />
-          </div>
-          <div>
-            <Label htmlFor="src-alias">Alias (prefix for consolidation)</Label>
-            <Input id="src-alias" value={alias} placeholder={kind === 'launchdarkly' ? 'legacy' : 'web'} onChange={(e) => setAlias(e.target.value)} />
-          </div>
-        </div>
         {kind === 'launchdarkly' ? (
           <>
             <div className="grid grid-cols-2 gap-3">
@@ -118,17 +161,36 @@ export function AddSource({ workspaceId, onDone }: { workspaceId: string; onDone
                 </Select>
               </div>
               <div>
-                <Label htmlFor="src-ld-project">Project key</Label>
-                <Input id="src-ld-project" value={ldProject} placeholder="legacy-storefront" spellCheck={false} onChange={(e) => setLdProject(e.target.value)} />
+                <Label htmlFor="src-ld-token">Access token (read access to the source project)</Label>
+                <Input id="src-ld-token" type="password" autoComplete="off" spellCheck={false} placeholder="api-…" value={key} onChange={(e) => setKey(e.target.value)} />
               </div>
             </div>
             <div>
-              <Label htmlFor="src-ld-token">Access token (read access to that project)</Label>
-              <Input id="src-ld-token" type="password" autoComplete="off" spellCheck={false} placeholder="api-…" value={key} onChange={(e) => setKey(e.target.value)} />
+              <Label htmlFor="src-ld-project">Project to read</Label>
+              <SearchSelect
+                id="src-ld-project"
+                value={ldProject}
+                options={ldProjects ?? []}
+                disabled={!ldProjects}
+                placeholder={
+                  ldListing
+                    ? 'Listing the projects this token can read…'
+                    : ldProjects
+                      ? ldProjects.length
+                        ? `Search ${ldProjects.length} projects…`
+                        : 'This token can read no project'
+                      : ldListError
+                        ? 'Could not list projects'
+                        : 'Paste the token first'
+                }
+                emptyText="No project matches"
+                onChange={setLdProject}
+              />
+              {ldListError && <p className="mt-1.5 text-xs text-error">{ldListError}</p>}
               <p className="mt-1.5 text-xs text-fg-muted">
                 A Reader token is enough. It may belong to a <b>different LaunchDarkly account or instance</b> than the target project; it is kept encrypted on this device and sent
-                only to that instance’s API. The source project is only ever read: flags, their per-environment targeting, segments
-                and context kinds. Experiments and metrics are not read (they end in the source and launch new in the target).
+                only to that instance’s API. The source project is only ever read: flags, their per-environment targeting, segments and context kinds. Experiments and metrics
+                are not read (they end in the source and launch new in the target).
               </p>
             </div>
           </>
@@ -139,7 +201,8 @@ export function AddSource({ workspaceId, onDone }: { workspaceId: string; onDone
               <Input id="src-key" type="password" autoComplete="off" spellCheck={false} placeholder="console-…" value={key} onChange={(e) => setKey(e.target.value)} />
               <p className="mt-1.5 text-xs text-fg-muted">
                 Kept encrypted on this device and sent only to statsigapi.net. A Console API key belongs to <b>one StatSig project</b> (StatSig has no API that lists an
-                organization’s projects), so add one source per project; several sources consolidate into this workspace’s single LaunchDarkly project.
+                organization’s projects), so add one source per project; several sources consolidate into this workspace’s single LaunchDarkly project. The source takes
+                the project’s name.
               </p>
             </div>
             <fieldset>
@@ -203,13 +266,13 @@ export function AddSource({ workspaceId, onDone }: { workspaceId: string; onDone
             />
             <p className="mt-1.5 text-xs text-fg-muted">
               Fetch with <code>curl -o spec.json "https://api.statsigcdn.com/v2/download_config_specs/&lt;CLIENT_KEY&gt;.json"</code> using a client key that has only the
-              “Allow Download Config Specs” scope and covers all environments and target apps. The file stays in this browser.
+              “Allow Download Config Specs” scope and covers all environments and target apps. The file stays in this browser; the source is named after it.
             </p>
           </div>
         )}
         {error && <Callout tone="red">{error}</Callout>}
         <div className="flex items-center gap-3">
-          <Button onClick={add} disabled={busy || (kind === 'console_api' ? !key || kinds.size === 0 : kind === 'launchdarkly' ? !key || !ldProject.trim() : !file)}>
+          <Button onClick={add} disabled={busy || !canAdd}>
             {busy && <Spinner />} {busy && kind !== 'config_spec' ? 'Syncing…' : 'Add source'}
           </Button>
           {busy && progress && (

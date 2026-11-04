@@ -25,7 +25,7 @@ export interface SourceRef {
 /** A StatSig project attached to a workspace. A workspace has 1 LD project and N of these (§3.6). */
 export interface SourceDescriptor {
   id: string;
-  /** Short alias used for consolidation prefixes and LD tags (`statsig-src-<alias>`), e.g. `web`. */
+  /** Short alias used for consolidation prefixes and LD tags (`migration-src-<alias>`), e.g. `web`. */
   alias: string;
   label: string;
   kind: SourceKind;
