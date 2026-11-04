@@ -100,7 +100,7 @@ export function RunsView({
         const updated = run.steps.filter(
           (s) =>
             !s.created &&
-            s.preImage &&
+            (s.preImage !== undefined || s.hasPreImage) &&
             s.status === "done" &&
             !createdFlags.has(s.step.key),
         ).length;

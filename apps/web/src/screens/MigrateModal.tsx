@@ -16,7 +16,7 @@ import {
   Input,
   Spinner,
 } from "../components/ui.tsx";
-import { FRESH_LD_LISTING_MS, ldSessionSnapshot, refreshLdState } from "../lib/ld.ts";
+import { FRESH_LD_LISTING_MS, ldSessionSnapshot, refreshLdState, useLdSession } from "../lib/ld.ts";
 import {
   buildPlan,
   cancelRun,
@@ -106,6 +106,9 @@ export function MigrateModal({
   const needsEnv = !isProjectOnlySelection(selection);
   const activeRun = useActiveRun(workspaceId);
   const cancelling = useCancelling(workspaceId);
+  // The read's progress ("Reading flags: 300 of 1,480…") comes from the live session: `m.ld`
+  // changes only when the listing itself does, so the plan is not rebuilt per page.
+  const live = useLdSession(workspaceId);
 
   // Load what a run needs: the latest LD state, segments in the target environments and the
   // deferred ID lists. The plan on screen rebuilds as each part lands (the session changes).
@@ -485,7 +488,7 @@ export function MigrateModal({
                 {check.kind === "checking" ? (
                   <span className="flex flex-wrap items-center gap-1.5" role="status">
                     <Spinner /> <span>{check.message}</span>
-                    {m.ld.refreshProgress && <span>{m.ld.refreshProgress}</span>}
+                    {live.refreshProgress && <span>{live.refreshProgress}</span>}
                     <span>Dry run and Migrate enable once it lands.</span>
                   </span>
                 ) : check.kind === "error" ? (

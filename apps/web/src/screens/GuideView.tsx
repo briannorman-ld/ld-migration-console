@@ -10,7 +10,7 @@ import { ACCESS_LABEL, ACCOUNT_WIDE_STEPS, computeGuide, describeTally, LOOP_STE
 const ENV_STEP = STEP_ORDER.indexOf('environment') + 1;
 import { KIND_LABEL } from '../lib/kinds.ts';
 import { timeAgo } from '../lib/time.ts';
-import { createLdEnvironment, createLdTeam, FRESH_LD_LISTING_MS, inviteLdMembers, refreshLdPeople, refreshLdState, reprobe, requireLdApprovals, setDefaultRandomizationUnit, type LdInviteRole } from '../lib/ld.ts';
+import { createLdEnvironment, createLdTeam, FRESH_LD_LISTING_MS, inviteLdMembers, refreshLdPeople, refreshLdState, reprobe, requireLdApprovals, setDefaultRandomizationUnit, useLdSession, type LdInviteRole } from '../lib/ld.ts';
 import { store } from '../lib/store.ts';
 import type { MigrationSelection } from '../lib/migration.ts';
 import type { MigrationContext } from '../lib/useMigration.ts';
@@ -865,6 +865,9 @@ function Contexts({ workspaceId, g, m, nav, onMigrate }: { workspaceId: string; 
 }
 
 function Items({ workspaceId, g, tallies, noun, nav, onMigrate, toSelection }: { workspaceId: string; g: GuideModel; tallies: Tally[]; noun: string; nav: GuideNav; onMigrate: (selection: MigrationSelection, ldEnvs: string[]) => void; toSelection: (uids: string[]) => MigrationSelection }) {
+  // Whether a read is in flight comes from the live session: the guide model is built from the
+  // session's data view, which does not follow a read's progress.
+  const refreshing = !!useLdSession(workspaceId).refreshing;
   const uids = tallies.flatMap((t) => t.toMigrate);
   const blocked = tallies.reduce((n, t) => n + t.blocked, 0);
   const total = tallies.reduce((n, t) => n + t.total, 0);
@@ -882,7 +885,7 @@ function Items({ workspaceId, g, tallies, noun, nav, onMigrate, toSelection }: {
         <>
           {g.ldAsOf && (
             <p className="flex flex-wrap items-center gap-1.5 text-xs text-fg-muted" role="status">
-              {g.ldAsOf.refreshing ? (
+              {refreshing ? (
                 <>
                   <Spinner /> Reading LaunchDarkly…
                 </>

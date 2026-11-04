@@ -75,15 +75,18 @@ export function useMonitorError(workspaceId: string): string | undefined {
 /**
  * "Refresh now" and the 15-minute tick: re-read flags, read flag statuses for every LD environment,
  * record samples, save the check. StatSig is not re-crawled here (that is the sidebar's refresh,
- * within the Console API budget); spec sources refresh when a file is uploaded.
+ * within the Console API budget); spec sources refresh when a file is uploaded. With
+ * `reuseListing`, the check runs against the listing the session holds (the one kept from the
+ * last read, on open) and reads only the flag statuses: the check on open costs one request per
+ * environment instead of every flag page again.
  */
-export async function checkMonitor(workspaceId: string, ld: LdSession, snapshots: CanonicalSnapshot[]): Promise<void> {
+export async function checkMonitor(workspaceId: string, ld: LdSession, snapshots: CanonicalSnapshot[], opts: { reuseListing?: boolean } = {}): Promise<void> {
   if (!ld.projectKey || ld.status !== 'connected' || checking.has(workspaceId)) return;
   checking.set(workspaceId, true);
   errors.delete(workspaceId);
   notify();
   try {
-    await refreshLdState(workspaceId);
+    if (!(opts.reuseListing && ldSessionSnapshot(workspaceId).flags)) await refreshLdState(workspaceId);
     const c = ldClient(workspaceId);
     const envs = (ld.matrix?.environments ?? []).map((e) => e.key);
     const statuses: MonitorStateRecord['statuses'] = {};
@@ -129,13 +132,17 @@ export async function checkMonitor(workspaceId: string, ld: LdSession, snapshots
   }
 }
 
-/** Run a check when the LD connection is ready, then every 15 minutes while the tab is open. */
+/**
+ * Run a check when the LD connection is ready, then every 15 minutes while the tab is open. The
+ * first check uses the listing the session holds (on open, the one kept from the last read); the
+ * ticks re-read the project, so a change made in LaunchDarkly shows up within the interval.
+ */
 export function useMonitorSchedule(workspaceId: string, ld: LdSession, snapshots: CanonicalSnapshot[], enabled: boolean): void {
   const ready = enabled && ld.status === 'connected' && !!ld.matrix && snapshots.length > 0;
   const snapKey = snapshots.map((s) => `${s.source.sourceId}@${s.takenAt}`).join('|');
   useEffect(() => {
     if (!ready) return;
-    void checkMonitor(workspaceId, ld, snapshots);
+    void checkMonitor(workspaceId, ld, snapshots, { reuseListing: true });
     const t = window.setInterval(() => void checkMonitor(workspaceId, ld, snapshots), MONITOR_INTERVAL_MS);
     return () => window.clearInterval(t);
     // `ld` changes identity on every session patch; re-running on connection/project only.

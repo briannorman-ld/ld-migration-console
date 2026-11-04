@@ -85,6 +85,11 @@ export interface StepRecord {
   created?: boolean;
   /** State before this run touched it: undo restores it. Contains customer config; stays local. */
   preImage?: LdFlag | LdSegment | LdMetric | LdExperiment | LdExperimentationSettings;
+  /**
+   * Set by the journal (@sslm/store) on a record it lists without its pre-image, which it keeps
+   * apart; reading the run back by id puts the pre-image in place.
+   */
+  hasPreImage?: boolean;
   ldVersion?: number;
 }
 

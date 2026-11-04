@@ -111,7 +111,7 @@ export function LdPanel({ workspaceId, workspace }: { workspaceId: string; works
                 className="w-[28rem] max-w-full"
                 value={ld.projectKey ?? ''}
                 options={ld.projects ?? []}
-                placeholder={ld.projects?.length ? `Search ${ld.projects.length} projects…` : 'Choose a project…'}
+                placeholder={ld.projects ? (ld.projects.length ? `Search ${ld.projects.length} projects…` : 'Choose a project…') : 'Listing projects…'}
                 emptyText="No project matches"
                 onChange={(key) => key !== ld.projectKey && void chooseProject(workspaceId, key)}
               />

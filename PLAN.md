@@ -138,8 +138,11 @@ Two places, and nowhere else.
    - pre-images for undo
    - spec uploads
    - cutover time series sampled while the app is open
+   - the LD project as last read: the capability matrix of the last probe and the listing (flags with every environment, segments and experiments per environment, context kinds, metrics, members, teams, AI Configs)
 
    Losing this data is recoverable: snapshots can be re-fetched or re-uploaded, migration status is rebuilt from LD, and decisions are asked again (or re-imported).
+
+   **Everything is read on request, nothing on a schedule but the monitoring tick** (2026-11-03). Opening a workspace costs one request to LaunchDarkly (the token's identity); the saved matrix and listing come back from IndexedDB, marked with the time they were read, and the guide offers **Re-read** next to that age and **Re-probe** on the LaunchDarkly page. LaunchDarkly is read on its own only when something is missing (a project never probed or never listed), when a plan opens (the plan modal reads the project afresh before a run, unless it was read live within the last five minutes), after a run (what the run wrote is merged from its own responses), and on the 15-minute monitoring tick. StatSig is read only on **Sync**. Pre-images live apart from the run records, so listing the runs reads none of them.
 
 **Workspace file (`.sslm`).** Export/import of everything in IndexedDB. Use it to share decisions with a teammate, move to another machine, hand off to a customer, or keep a backup.
 - It's a JSON bundle, **encrypted with a passphrase by default**: it can contain PII from overrides and salts from specs. Tokens are never included.

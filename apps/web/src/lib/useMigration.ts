@@ -1,10 +1,10 @@
 import { useLiveQuery } from 'dexie-react-hooks';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CanonicalSnapshot } from '@sslm/canonical';
-import type { ExclusionRecord } from '@sslm/store';
-import { type DecisionPoint, type DecisionType, type MappingProfile, type Resolution, acceptsOption } from '@sslm/mapper';
+import type { ExclusionRecord, IdListRecord } from '@sslm/store';
+import { type DecisionPoint, type DecisionType, type IdLists, type MappingProfile, type Resolution, acceptsOption } from '@sslm/mapper';
 import { DEMO_ENV_HINTS, DEMO_WORKSPACE_ID } from './demo.ts';
-import { useLdSession, type LdSession } from './ld.ts';
+import { useLdSessionData, type LdSession } from './ld.ts';
 import { ensureProfile, ldDirectory, mapperCapabilities, type MappingInputs } from './migration.ts';
 import { store } from './store.ts';
 
@@ -27,7 +27,8 @@ export interface MigrationContext extends MappingInputs {
 
 /** Everything the mapper needs, live from IndexedDB and the LD session. `null` until loaded. */
 export function useMigration(workspaceId: string, snapshots: CanonicalSnapshot[]): MigrationContext | null {
-  const ld = useLdSession(workspaceId);
+  // The data view: a probe's steps and a read's page counter do not rebuild the context.
+  const ld = useLdSessionData(workspaceId);
   const ldEnvs = useMemo(() => (ld.matrix?.environments ?? []).map((e) => ({ key: e.key, name: e.name, critical: e.critical || /prod/i.test(e.key) })), [ld.matrix]);
   const snapKey = snapshots.map((s) => `${s.source.sourceId}@${s.takenAt}`).join('|');
   const envKey = ldEnvs.map((e) => e.key).join('|');
@@ -43,14 +44,18 @@ export function useMigration(workspaceId: string, snapshots: CanonicalSnapshot[]
   const [now] = useState(() => new Date().toISOString());
 
   // Each mapping input keeps its identity until what it is made of changes: the mapping memo
-  // (lib/migration.ts) keys on them, and the session object `ld` below changes on every probe
-  // step, flag refresh and monitoring check, which must not re-map the whole project.
+  // (lib/migration.ts) keys on them, and a new identity with the same content re-maps the whole
+  // project (seconds of frozen page on a large one). The session's matrix is a new object after
+  // every probe and its members and teams after every listing refresh, with the same content
+  // nearly every time, so the capabilities, directory and coverage keep their identity while
+  // their content is unchanged; the ID lists keep each list's array while that list is unchanged
+  // (the memo tracks which lists a mapping looked up).
   const resolutions = useMemo(() => (resolutionList ? new Map(resolutionList.map((r) => [r.id, r])) : undefined), [resolutionList]);
   const exclusions = useMemo(() => (exclusionRecs ? new Map(exclusionRecs.map((r) => [r.uid, r])) : undefined), [exclusionRecs]);
-  const capabilities = useMemo(() => mapperCapabilities(ld.matrix, ld.contextKinds), [ld.matrix, ld.contextKinds]);
-  const directory = useMemo(() => ldDirectory(ld), [ld.members, ld.teams, ld.matrix]);
-  const idLists = useMemo(() => (idListRecs ? Object.fromEntries(idListRecs.map((r) => [r.uid, r.ids])) : undefined), [idListRecs]);
-  const coverage = useMemo(() => (idListRecs ? Object.fromEntries(idListRecs.flatMap((r) => (r.coverage ? [[r.uid, r.coverage] as const] : []))) : undefined), [idListRecs]);
+  const capabilities = useStable(useMemo(() => mapperCapabilities(ld.matrix, ld.contextKinds), [ld.matrix, ld.contextKinds]))!;
+  const directory = useStable(useMemo(() => ldDirectory(ld), [ld.members, ld.teams, ld.matrix]))!;
+  const idLists = useStableIdLists(idListRecs);
+  const coverage = useStable(useMemo(() => (idListRecs ? Object.fromEntries(idListRecs.flatMap((r) => (r.coverage ? [[r.uid, r.coverage] as const] : []))) : undefined), [idListRecs]));
 
   return useMemo(() => {
     if (!profile || !resolutionList || !resolutions || !exclusions || !idLists || !coverage) return null;
@@ -81,6 +86,43 @@ export function useMigration(workspaceId: string, snapshots: CanonicalSnapshot[]
       include: (uids) => store.deleteExclusions(workspaceId, uids),
     };
   }, [profile, resolutionList, resolutions, exclusions, capabilities, directory, idLists, coverage, ld, ldEnvs, now, workspaceId]);
+}
+
+/**
+ * `value`, keeping the previous one while its content (as JSON) is unchanged. For small inputs
+ * whose source object is rebuilt more often than it changes.
+ */
+export function useStable<T>(value: T): T {
+  const key = value === undefined ? '' : JSON.stringify(value);
+  // The key is the identity that matters here: the same JSON means the same input to the mapper.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  return useMemo(() => value, [key]);
+}
+
+/**
+ * The fetched ID lists as the mapper reads them (segment uid → IDs), each list's array kept
+ * from the previous result while its record is unchanged (same fetch time and size), and the
+ * whole object kept while no list changed. `undefined` until the records have loaded.
+ */
+export function useStableIdLists(recs: IdListRecord[] | undefined): IdLists | undefined {
+  const prev = useRef<{ byUid: Map<string, { stamp: string; ids: string[] }>; value: IdLists }>(undefined);
+  return useMemo(() => {
+    if (!recs) return undefined;
+    const byUid = new Map<string, { stamp: string; ids: string[] }>();
+    const value: IdLists = {};
+    let changed = !prev.current || prev.current.byUid.size !== recs.length;
+    for (const r of recs) {
+      const stamp = `${r.fetchedAt}|${r.ids.length}`;
+      const old = prev.current?.byUid.get(r.uid);
+      const ids = old && old.stamp === stamp ? old.ids : r.ids;
+      if (ids !== old?.ids) changed = true;
+      byUid.set(r.uid, { stamp, ids });
+      value[r.uid] = ids;
+    }
+    if (!changed && prev.current) return prev.current.value;
+    prev.current = { byUid, value };
+    return value;
+  }, [recs]);
 }
 
 /**

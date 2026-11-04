@@ -138,29 +138,17 @@ export class LdClient {
     return this.get(`/tokens/${encodeURIComponent(id)}`, TokenSchema, { signal });
   }
 
-  /** All projects (paged by offset). */
-  async listProjects(signal?: AbortSignal): Promise<LdProject[]> {
-    const out: LdProject[] = [];
-    for (let offset = 0; offset < 10_000; offset += 100) {
-      const page = await this.get('/projects', ProjectsSchema, { query: { limit: '100', offset: String(offset) }, signal });
-      out.push(...page.items);
-      if (page.items.length < 100 || (page.totalCount != null && out.length >= page.totalCount)) break;
-    }
-    return out;
+  /** All projects (paged by offset; the pages after the first are read at once, see `allPages`). */
+  listProjects(signal?: AbortSignal): Promise<LdProject[]> {
+    return allPages((offset) => this.get('/projects', ProjectsSchema, { query: { limit: '100', offset: String(offset) }, signal }), 100, { max: 10_000 });
   }
 
   getProject(projectKey: string, signal?: AbortSignal): Promise<LdProject> {
     return this.get(`/projects/${encodeURIComponent(projectKey)}`, ProjectSchema, { signal });
   }
 
-  async listEnvironments(projectKey: string, signal?: AbortSignal): Promise<LdEnvironment[]> {
-    const out: LdEnvironment[] = [];
-    for (let offset = 0; offset < 10_000; offset += 100) {
-      const page = await this.get(`/projects/${encodeURIComponent(projectKey)}/environments`, EnvironmentsSchema, { query: { limit: '100', offset: String(offset) }, signal });
-      out.push(...page.items);
-      if (page.items.length < 100 || (page.totalCount != null && out.length >= page.totalCount)) break;
-    }
-    return out;
+  listEnvironments(projectKey: string, signal?: AbortSignal): Promise<LdEnvironment[]> {
+    return allPages((offset) => this.get(`/projects/${encodeURIComponent(projectKey)}/environments`, EnvironmentsSchema, { query: { limit: '100', offset: String(offset) }, signal }), 100, { max: 10_000 });
   }
 
   getEnvironment(projectKey: string, envKey: string, signal?: AbortSignal): Promise<LdEnvironment> {
@@ -183,41 +171,14 @@ export class LdClient {
    * transport's limiter paces them. A project of thousands of flags (every migrated flag is one)
    * then takes a few round trips rather than one per hundred flags.
    */
-  private async listFlagPages(projectKey: string, opts: { envKey?: string; signal?: AbortSignal; filter?: string; onPage?: (read: number, total?: number) => void }): Promise<LdFlagSummary[]> {
+  private listFlagPages(projectKey: string, opts: { envKey?: string; signal?: AbortSignal; filter?: string; onPage?: (read: number, total?: number) => void }): Promise<LdFlagSummary[]> {
     const page = (offset: number) => {
       const query: Record<string, string> = { limit: String(FLAG_PAGE), offset: String(offset), summary: 'true' };
       if (opts.envKey) query.env = opts.envKey;
       if (opts.filter) query.filter = opts.filter;
       return this.get(`/flags/${encodeURIComponent(projectKey)}`, FlagsSchema, { query, signal: opts.signal });
     };
-    const first = await page(0);
-    const out: LdFlagSummary[] = [...first.items];
-    const total = first.totalCount ?? undefined;
-    opts.onPage?.(out.length, total);
-    if (first.items.length < FLAG_PAGE || (total != null && out.length >= total)) return out;
-    if (total == null) {
-      // No count to plan from: walk the pages one after another until a short one.
-      for (let offset = FLAG_PAGE; offset < 100_000; offset += FLAG_PAGE) {
-        const next = await page(offset);
-        out.push(...next.items);
-        opts.onPage?.(out.length);
-        if (next.items.length < FLAG_PAGE) break;
-      }
-      return out;
-    }
-    const offsets: number[] = [];
-    for (let offset = FLAG_PAGE; offset < total; offset += FLAG_PAGE) offsets.push(offset);
-    let read = out.length;
-    const pages = await Promise.all(
-      offsets.map(async (offset) => {
-        const next = await page(offset);
-        read += next.items.length;
-        opts.onPage?.(read, total);
-        return next.items;
-      }),
-    );
-    for (const items of pages) out.push(...items);
-    return out;
+    return allPages(page, FLAG_PAGE, { ...(opts.onPage ? { onPage: opts.onPage } : {}) });
   }
 
   /** Full flag with every environment's configuration (pre-images, variation IDs). `null` if absent. */
@@ -252,14 +213,8 @@ export class LdClient {
     return out;
   }
 
-  async listSegments(projectKey: string, envKey: string, signal?: AbortSignal): Promise<LdSegment[]> {
-    const out: LdSegment[] = [];
-    for (let offset = 0; offset < 100_000; offset += 50) {
-      const page = await this.get(`/segments/${encodeURIComponent(projectKey)}/${encodeURIComponent(envKey)}`, SegmentsSchema, { query: { limit: '50', offset: String(offset) }, signal });
-      out.push(...page.items);
-      if (page.items.length < 50 || (page.totalCount != null && out.length >= page.totalCount)) break;
-    }
-    return out;
+  listSegments(projectKey: string, envKey: string, signal?: AbortSignal): Promise<LdSegment[]> {
+    return allPages((offset) => this.get(`/segments/${encodeURIComponent(projectKey)}/${encodeURIComponent(envKey)}`, SegmentsSchema, { query: { limit: '50', offset: String(offset) }, signal }), 50);
   }
 
   async getSegment(projectKey: string, envKey: string, key: string, signal?: AbortSignal): Promise<LdSegment | null> {
@@ -274,15 +229,11 @@ export class LdClient {
   // --- Experimentation reads ---------------------------------------------------------------------
 
   /** Every metric in the project (key, kind, event key, tags). 403 on plans without Experimentation. */
-  async listMetrics(projectKey: string, signal?: AbortSignal): Promise<LdMetric[]> {
-    const out: LdMetric[] = [];
-    for (let offset = 0; offset < 100_000; offset += 50) {
+  listMetrics(projectKey: string, signal?: AbortSignal): Promise<LdMetric[]> {
+    return allPages(async (offset) => {
       const page = await this.get(`/metrics/${encodeURIComponent(projectKey)}`, MetricsSchema, { query: { limit: '50', offset: String(offset) }, signal });
-      const items = page.items ?? [];
-      out.push(...items);
-      if (items.length < 50 || (page.totalCount != null && out.length >= page.totalCount)) break;
-    }
-    return out;
+      return { items: page.items ?? [], totalCount: page.totalCount };
+    }, 50);
   }
 
   async getMetric(projectKey: string, key: string, signal?: AbortSignal): Promise<LdMetric | null> {
@@ -295,18 +246,14 @@ export class LdClient {
   }
 
   /** Experiments (including bandits) in one environment, active and archived. */
-  async listExperiments(projectKey: string, envKey: string, signal?: AbortSignal): Promise<LdExperiment[]> {
-    const out: LdExperiment[] = [];
-    for (let offset = 0; offset < 100_000; offset += 50) {
+  listExperiments(projectKey: string, envKey: string, signal?: AbortSignal): Promise<LdExperiment[]> {
+    return allPages(async (offset) => {
       const page = await this.get(`/projects/${encodeURIComponent(projectKey)}/environments/${encodeURIComponent(envKey)}/experiments`, ExperimentsSchema, {
         query: { limit: '50', offset: String(offset), lifecycleState: 'active,archived' },
         signal,
       });
-      out.push(...page.items);
-      const total = page.total_count ?? page.totalCount;
-      if (page.items.length < 50 || (total != null && out.length >= total)) break;
-    }
-    return out;
+      return { items: page.items, totalCount: page.total_count ?? page.totalCount };
+    }, 50);
   }
 
   async getExperiment(projectKey: string, envKey: string, key: string, signal?: AbortSignal): Promise<LdExperiment | null> {
@@ -344,14 +291,8 @@ export class LdClient {
   // --- Members and teams (owner → maintainer, PLAN §8.3 `maintainer_unknown`) ---------------------
 
   /** GET /members, every page. Reader on `member/*` is enough to list; Admin to invite. */
-  async listMembers(signal?: AbortSignal): Promise<LdMember[]> {
-    const out: LdMember[] = [];
-    for (let offset = 0; offset < 50_000; offset += MEMBER_PAGE) {
-      const page = await this.get('/members', MembersSchema, { query: { limit: String(MEMBER_PAGE), offset: String(offset) }, signal });
-      out.push(...page.items);
-      if (page.items.length < MEMBER_PAGE || (page.totalCount != null && out.length >= page.totalCount)) break;
-    }
-    return out;
+  listMembers(signal?: AbortSignal): Promise<LdMember[]> {
+    return allPages((offset) => this.get('/members', MembersSchema, { query: { limit: String(MEMBER_PAGE), offset: String(offset) }, signal }), MEMBER_PAGE, { max: 50_000 });
   }
 
   /** POST /members (NewMemberForm[]): invites by email; LD sends each an invitation. Needs Admin or `createMember`. */
@@ -360,14 +301,8 @@ export class LdClient {
   }
 
   /** GET /teams, every page (Enterprise). */
-  async listTeams(signal?: AbortSignal): Promise<LdTeam[]> {
-    const out: LdTeam[] = [];
-    for (let offset = 0; offset < 10_000; offset += MEMBER_PAGE) {
-      const page = await this.get('/teams', TeamsSchema, { query: { limit: String(MEMBER_PAGE), offset: String(offset) }, signal });
-      out.push(...page.items);
-      if (page.items.length < MEMBER_PAGE || (page.totalCount != null && out.length >= page.totalCount)) break;
-    }
-    return out;
+  listTeams(signal?: AbortSignal): Promise<LdTeam[]> {
+    return allPages((offset) => this.get('/teams', TeamsSchema, { query: { limit: String(MEMBER_PAGE), offset: String(offset) }, signal }), MEMBER_PAGE, { max: 10_000 });
   }
 
   /** POST /teams (teamPostInput: key and name required; memberIDs are member `_id`s). */
@@ -382,14 +317,8 @@ export class LdClient {
 
   // --- AI Configs (StatSig prompts, PLAN §6) ----------------------------------------------------------
 
-  async listAiConfigs(projectKey: string, signal?: AbortSignal): Promise<LdAiConfig[]> {
-    const out: LdAiConfig[] = [];
-    for (let offset = 0; offset < 10_000; offset += MEMBER_PAGE) {
-      const page = await this.get(`/projects/${encodeURIComponent(projectKey)}/ai-configs`, AiConfigsSchema, { query: { limit: String(MEMBER_PAGE), offset: String(offset) }, signal });
-      out.push(...page.items);
-      if (page.items.length < MEMBER_PAGE || (page.totalCount != null && out.length >= page.totalCount)) break;
-    }
-    return out;
+  listAiConfigs(projectKey: string, signal?: AbortSignal): Promise<LdAiConfig[]> {
+    return allPages((offset) => this.get(`/projects/${encodeURIComponent(projectKey)}/ai-configs`, AiConfigsSchema, { query: { limit: String(MEMBER_PAGE), offset: String(offset) }, signal }), MEMBER_PAGE, { max: 10_000 });
   }
 
   getAiConfig(projectKey: string, key: string, signal?: AbortSignal): Promise<LdAiConfig | null> {
@@ -650,6 +579,47 @@ export class LdClient {
       signal: opts.signal,
     });
   }
+}
+
+/**
+ * Every item of an offset-paged LD list. The first page says how many items there are; the pages
+ * after it are requested at once and the transport's limiter paces them, so a list of thousands
+ * (flags, members, an account's projects) costs a few round trips rather than one per page. Without
+ * a count, the pages are walked one after another until a short one. `onPage` reports progress.
+ */
+export async function allPages<T>(
+  page: (offset: number) => Promise<{ items: T[]; totalCount?: number | null | undefined }>,
+  size: number,
+  opts: { max?: number; onPage?: (read: number, total?: number) => void } = {},
+): Promise<T[]> {
+  const max = opts.max ?? 100_000;
+  const first = await page(0);
+  const out: T[] = [...first.items];
+  const total = first.totalCount ?? undefined;
+  opts.onPage?.(out.length, total);
+  if (first.items.length < size || (total != null && out.length >= total)) return out;
+  if (total == null) {
+    for (let offset = size; offset < max; offset += size) {
+      const next = await page(offset);
+      out.push(...next.items);
+      opts.onPage?.(out.length);
+      if (next.items.length < size) break;
+    }
+    return out;
+  }
+  const offsets: number[] = [];
+  for (let offset = size; offset < Math.min(total, max); offset += size) offsets.push(offset);
+  let read = out.length;
+  const pages = await Promise.all(
+    offsets.map(async (offset) => {
+      const next = await page(offset);
+      read += next.items.length;
+      opts.onPage?.(read, total);
+      return next.items;
+    }),
+  );
+  for (const items of pages) out.push(...items);
+  return out;
 }
 
 /** Page size for the account-level lists (members, teams, AI Configs); LD caps `limit` at 50 on some of them. */

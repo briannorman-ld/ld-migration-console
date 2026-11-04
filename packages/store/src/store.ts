@@ -13,6 +13,7 @@ import {
   type MonitorStateRecord,
   type ProfileRecord,
   type RunJournalRecord,
+  type RunPreImageRecord,
   type SnapshotRecord,
   type SourceRecord,
   type SpecUploadRecord,
@@ -152,8 +153,11 @@ export class WorkspaceStore {
       this.db.vaults,
       this.db.exclusions,
       this.db.ldState,
+      this.db.runPreImages,
     ];
     await this.db.transaction("rw", tables, async () => {
+      const runIds = await this.db.runs.where("workspaceId").equals(id).primaryKeys();
+      if (runIds.length) await this.db.runPreImages.where("runId").anyOf(runIds).delete();
       await this.db.ldState.delete(id);
       await this.db.vaults.delete(id);
       await this.db.exclusions.where("workspaceId").equals(id).delete();
@@ -394,19 +398,43 @@ export class WorkspaceStore {
 
   // --- Run journal (PLAN §9 step 6, §15) --------------------------------------------------------
 
+  /** Pre-image objects already in `runPreImages`, by identity: each is written once per run, not with every journal write. */
+  private readonly journaledPreImages = new WeakSet<object>();
+
   /**
    * Called before and after every step. No assertNoSecrets: pre-images are LD flag/segment
    * configurations, whose JSON values are customer data (like snapshots), not our credentials.
+   * The record is stored without its pre-images (`hasPreImage` marks the steps that have one);
+   * those go to `runPreImages`, new ones only, so a write mid-run costs the run's steps and the
+   * pre-images captured since the last write rather than everything the run has read so far.
    */
   async saveRun(run: RunJournalRecord): Promise<void> {
-    await this.db.runs.put(run);
+    const parts: RunPreImageRecord[] = [];
+    const steps = run.steps.map((s) => {
+      if (s.preImage === undefined) return s;
+      const { preImage, ...rest } = s;
+      if (!this.journaledPreImages.has(preImage)) parts.push({ id: `${run.id}/${s.id}`, runId: run.id, stepId: s.id, preImage });
+      return { ...rest, hasPreImage: true };
+    });
+    await this.db.transaction("rw", [this.db.runs, this.db.runPreImages], async () => {
+      if (parts.length) await this.db.runPreImages.bulkPut(parts);
+      await this.db.runs.put({ ...run, steps });
+    });
+    for (const p of parts) this.journaledPreImages.add(p.preImage as object);
   }
 
-  getRun(id: string): Promise<RunJournalRecord | undefined> {
-    return this.db.runs.get(id);
+  /** The run with its pre-images in place (undo, resume, approval checks). */
+  async getRun(id: string): Promise<RunJournalRecord | undefined> {
+    const run = await this.db.runs.get(id);
+    if (!run) return undefined;
+    const parts = await this.db.runPreImages.where("runId").equals(id).toArray();
+    if (!parts.length) return run;
+    const byStep = new Map(parts.map((p) => [p.stepId, p.preImage]));
+    for (const p of parts) this.journaledPreImages.add(p.preImage as object);
+    return { ...run, steps: run.steps.map((s) => (byStep.has(s.id) ? { ...s, preImage: byStep.get(s.id) as RunJournalRecord["steps"][number]["preImage"] } : s)) };
   }
 
-  /** Newest first. */
+  /** Newest first, without pre-images (`hasPreImage` says which steps have one; `getRun` reads them). */
   listRuns(workspaceId: string): Promise<RunJournalRecord[]> {
     return this.db.runs
       .where("[workspaceId+startedAt]")

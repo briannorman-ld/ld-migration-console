@@ -46,7 +46,21 @@ describe('mapping memo', () => {
     // The same answer in a fresh map (a live query re-reads the records) is still a hit.
     const again = new Map([[own!.id, { ...answered.get(own!.id)!, decidedAt: '2026-02-02T00:00:00.000Z' }]]);
     expect(mapGateFor(web, gate, env, { ...inputs, resolutions: again })).toBe(second);
-    expect(mapGateFor(web, gate, env, { ...inputs, idLists: {} })).not.toBe(first);
+    // ID lists are tracked like resolutions: a new object (every list fetched after a sync is one)
+    // that changes nothing this gate looked up still hits; a gate whose segment's list arrived misses.
+    // (The memo keeps one entry per gate and environment, so the baseline is taken afresh here.)
+    const base = mapGateFor(web, gate, env, inputs);
+    expect(mapGateFor(web, gate, env, { ...inputs, idLists: {} })).toBe(base);
+    const wholesale = web.gates.find((g) => g.id === 'wholesale_portal')!;
+    const partners = web.segments.find((s) => s.id === 'wholesale_partners')!;
+    const deferred = mapGateFor(web, wholesale, env, inputs);
+    expect(mapGateFor(web, wholesale, env, { ...inputs, idLists: { 'someone-else': ['x'] } })).toBe(deferred);
+    const fetched = mapGateFor(web, wholesale, env, { ...inputs, idLists: { [partners.uid]: ['partner-00001'] } });
+    expect(fetched).not.toBe(deferred);
+    // The same list object in a new map (a live query re-reads the records) is still a hit.
+    const list = ['partner-00001'];
+    const a = mapGateFor(web, wholesale, env, { ...inputs, idLists: { [partners.uid]: list } });
+    expect(mapGateFor(web, wholesale, env, { ...inputs, idLists: { [partners.uid]: list, other: ['y'] } })).toBe(a);
     expect(mapGateFor(web, gate, env, { ...inputs, now: '2026-01-01T00:00:00.000Z' })).not.toBe(first);
     expect(mapGateFor({ ...web }, gate, env, inputs)).not.toBe(first);
     // Equal content either way.

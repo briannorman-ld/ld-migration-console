@@ -192,9 +192,17 @@ interface MemoEntry {
   resolutions: ReadonlyMap<string, Resolution>;
   /** Decision ids the mapping looked up; undefined when the value does not say (then only the same map is a hit). */
   consulted: string[] | undefined;
+  /**
+   * The ID lists the value was computed (or last validated) against, and the segment uids it
+   * looked up in them (undefined when it enumerated them, then only the same object is a hit).
+   * Like resolutions, ID lists are not a key: each list fetched after a sync is a new object, and
+   * a gate is affected only by the lists of the segments it uses.
+   */
+  idLists: IdLists;
+  consultedLists: string[] | undefined;
 }
 type MemoLeaf = Map<string, MemoEntry>;
-const mapMemo = new WeakMap<object, WeakMap<object, WeakMap<object, WeakMap<object, WeakMap<object, WeakMap<CanonicalSnapshot, MemoLeaf>>>>>>();
+const mapMemo = new WeakMap<object, WeakMap<object, WeakMap<object, WeakMap<object, WeakMap<CanonicalSnapshot, MemoLeaf>>>>>();
 
 /** The decision ids a mapping result looked up, from its applied, unresolved and stale decisions. */
 function consultedDecisionIds(value: unknown): string[] | undefined {
@@ -206,10 +214,39 @@ function consultedDecisionIds(value: unknown): string[] | undefined {
 /** What `lookupResolution` reads of a resolution; `decidedAt` and notes do not change a mapping. */
 const sameResolution = (a: Resolution | undefined, b: Resolution | undefined): boolean => a === b || (!!a && !!b && a.optionKey === b.optionKey && a.scope === b.scope && a.fingerprint === b.fingerprint);
 
-function stillValid(e: MemoEntry, resolutions: ReadonlyMap<string, Resolution>): boolean {
-  if (e.resolutions === resolutions) return true;
-  if (!e.consulted) return false;
-  return e.consulted.every((id) => sameResolution(e.resolutions.get(id), resolutions.get(id)));
+function stillValid(e: MemoEntry, i: MappingInputs): boolean {
+  const resolutions = e.resolutions === i.resolutions || (!!e.consulted && e.consulted.every((id) => sameResolution(e.resolutions.get(id), i.resolutions.get(id))));
+  if (!resolutions) return false;
+  const idLists = i.idLists ?? NO_LISTS;
+  if (e.idLists === idLists) return true;
+  if (!e.consultedLists) return false;
+  return e.consultedLists.every((uid) => e.idLists[uid] === idLists[uid]);
+}
+
+const NO_LISTS: IdLists = {};
+
+/**
+ * `idLists` wrapped so the lookups a mapping makes are recorded. Enumerating the lists (keys,
+ * spread) records "every list", and the result is then valid only for the same object.
+ */
+function trackedIdLists(idLists: IdLists): { lists: IdLists; consulted: () => string[] | undefined } {
+  const seen = new Set<string>();
+  let all = false;
+  const lists = new Proxy(idLists, {
+    get(t, p, r) {
+      if (typeof p === 'string') seen.add(p);
+      return Reflect.get(t, p, r);
+    },
+    has(t, p) {
+      if (typeof p === 'string') seen.add(p);
+      return Reflect.has(t, p);
+    },
+    ownKeys(t) {
+      all = true;
+      return Reflect.ownKeys(t);
+    },
+  });
+  return { lists, consulted: () => (all ? undefined : [...seen]) };
 }
 
 function nested<K extends object, V extends object>(map: WeakMap<K, V>, key: K, make: () => V): V {
@@ -222,21 +259,24 @@ function nested<K extends object, V extends object>(map: WeakMap<K, V>, key: K, 
 const MISSING = {};
 const part = (v: unknown): object => (v !== null && typeof v === 'object' ? v : MISSING);
 
-function memoized<T>(i: MappingInputs, snapshot: CanonicalSnapshot, key: string, compute: () => T): T {
-  const byIdLists = nested(mapMemo, part(i.profile), () => new WeakMap());
-  const byCoverage = nested(byIdLists, part(i.idLists), () => new WeakMap());
+/** `compute` receives the ID lists to hand the mapper: a tracked view, so the entry knows which lists it depends on. */
+function memoized<T>(i: MappingInputs, snapshot: CanonicalSnapshot, key: string, compute: (idLists: IdLists) => T): T {
+  const byCoverage = nested(mapMemo, part(i.profile), () => new WeakMap());
   const byCapabilities = nested(byCoverage, part(i.coverage), () => new WeakMap());
   const byDirectory = nested(byCapabilities, part(i.capabilities), () => new WeakMap());
   const bySnapshot = nested(byDirectory, part(i.directory), () => new WeakMap());
   const byKey = nested(bySnapshot, snapshot, () => new Map<string, MemoEntry>());
   const full = `${key}|${i.now}`;
+  const idLists = i.idLists ?? NO_LISTS;
   const hit = byKey.get(full);
-  if (hit && stillValid(hit, i.resolutions)) {
+  if (hit && stillValid(hit, i)) {
     hit.resolutions = i.resolutions;
+    hit.idLists = idLists;
     return hit.value as T;
   }
-  const value = compute();
-  byKey.set(full, { value, resolutions: i.resolutions, consulted: consultedDecisionIds(value) });
+  const tracked = trackedIdLists(idLists);
+  const value = compute(tracked.lists);
+  byKey.set(full, { value, resolutions: i.resolutions, consulted: consultedDecisionIds(value), idLists, consultedLists: tracked.consulted() });
   return value;
 }
 
@@ -248,9 +288,9 @@ export function mapGateFor(
   env: EnvTarget,
   i: MappingInputs,
 ): GateMapResult {
-  return memoized(i, snapshot, memoKey("gate", gate.uid, env), () =>
+  return memoized(i, snapshot, memoKey("gate", gate.uid, env), (idLists) =>
     mapGate({
-      canonical: { snapshot, idLists: i.idLists, coverage: i.coverage },
+      canonical: { snapshot, idLists, coverage: i.coverage },
       entity: gate,
       profile: i.profile,
       resolutions: i.resolutions,
@@ -268,9 +308,9 @@ export function mapSegmentFor(
   env: EnvTarget,
   i: MappingInputs,
 ): SegmentMapResult {
-  return memoized(i, snapshot, memoKey("segment", segment.uid, env), () =>
+  return memoized(i, snapshot, memoKey("segment", segment.uid, env), (idLists) =>
     mapSegment({
-      canonical: { snapshot, idLists: i.idLists, coverage: i.coverage },
+      canonical: { snapshot, idLists, coverage: i.coverage },
       entity: segment,
       profile: i.profile,
       resolutions: i.resolutions,
@@ -283,14 +323,14 @@ export function mapSegmentFor(
 }
 
 export function mapConfigFor(snapshot: CanonicalSnapshot, config: Config, env: EnvTarget, i: MappingInputs): ConfigMapResult {
-  return memoized(i, snapshot, memoKey("config", config.uid, env), () =>
-    mapConfig({ canonical: { snapshot, idLists: i.idLists, coverage: i.coverage }, entity: config, profile: i.profile, resolutions: i.resolutions, capabilities: i.capabilities, env, now: i.now, directory: i.directory }),
+  return memoized(i, snapshot, memoKey("config", config.uid, env), (idLists) =>
+    mapConfig({ canonical: { snapshot, idLists, coverage: i.coverage }, entity: config, profile: i.profile, resolutions: i.resolutions, capabilities: i.capabilities, env, now: i.now, directory: i.directory }),
   );
 }
 
 export function mapAutotuneFor(snapshot: CanonicalSnapshot, autotune: Autotune, env: EnvTarget, i: MappingInputs): AutotuneMapResult {
-  return memoized(i, snapshot, memoKey("autotune", autotune.uid, env), () =>
-    mapAutotune({ canonical: { snapshot, idLists: i.idLists, coverage: i.coverage }, entity: autotune, profile: i.profile, resolutions: i.resolutions, capabilities: i.capabilities, env, now: i.now, directory: i.directory }),
+  return memoized(i, snapshot, memoKey("autotune", autotune.uid, env), (idLists) =>
+    mapAutotune({ canonical: { snapshot, idLists, coverage: i.coverage }, entity: autotune, profile: i.profile, resolutions: i.resolutions, capabilities: i.capabilities, env, now: i.now, directory: i.directory }),
   );
 }
 
@@ -642,13 +682,23 @@ function executor(
 export async function checkRunApprovals(workspaceId: string, ld: LdSession, run: RunRecord): Promise<RunRecord> {
   const before = run.steps.filter((s) => s.status === "pending_approval").length;
   const changes: ResourceChange[] = [];
-  const r = await executor(workspaceId, ld, (run as RunJournalRecord).snapshots, changes).checkApprovals(structuredClone(run));
+  const r = await executor(workspaceId, ld, (run as RunJournalRecord).snapshots, changes).checkApprovals(await journaled(run));
   const after = r.steps.filter((s) => s.status === "pending_approval").length;
   if (after !== before) await applyRunResults(workspaceId, r, changes);
   return r;
 }
 
 export const pendingApprovals = (run: RunRecord) => run.steps.filter((s) => s.status === "pending_approval").length;
+
+/**
+ * The run as journaled, pre-images included, as a fresh record the executor may mutate. The run
+ * lists on screen come without pre-images (the store keeps those apart, so listing the runs does
+ * not read every flag the runs ever touched); undo restores from them, and resume and the approval
+ * check tell an item that existed from one the run created by them.
+ */
+async function journaled(run: RunRecord): Promise<RunRecord> {
+  return (await store.getRun(run.id)) ?? structuredClone(run);
+}
 
 /**
  * Run with a Web Locks guard (one running tab per workspace) and a beforeunload warning
@@ -711,9 +761,9 @@ export async function resumeRun(
   const changes: ResourceChange[] = [];
   return finishRun(
     workspaceId,
-    (signal) =>
+    async (signal) =>
       executor(workspaceId, ld, (run as RunJournalRecord).snapshots, changes).run(
-        structuredClone(run),
+        await journaled(run),
         signal,
       ),
     true,
@@ -729,9 +779,9 @@ export async function undoRun(
   const changes: ResourceChange[] = [];
   return finishRun(
     workspaceId,
-    (signal) =>
+    async (signal) =>
       executor(workspaceId, ld, (run as RunJournalRecord).snapshots, changes).undo(
-        structuredClone(run),
+        await journaled(run),
         signal,
       ),
     true,

@@ -67,3 +67,56 @@ describe('LdClient.listFlags', () => {
     expect(calls).toBe(1);
   });
 });
+
+describe('LdClient offset-paged lists (allPages)', () => {
+  it('lists an account’s projects the same way: the first page gives the count, the rest are read at once', async () => {
+    const total = 230;
+    const offsets: number[] = [];
+    let waiting: (() => void)[] = [];
+    const c = new LdClient({
+      instance: 'us',
+      token: TOKEN,
+      transport: {
+        limiter: { initial: 6, max: 6 },
+        fetch: async (input) => {
+          const u = new URL(String(input));
+          expect(u.pathname.endsWith('/projects')).toBe(true);
+          const offset = Number(u.searchParams.get('offset'));
+          offsets.push(offset);
+          const items = Array.from({ length: Math.min(100, total - offset) }, (_, i) => ({ key: `p${offset + i}`, name: `p${offset + i}`, tags: [] }));
+          if (offset === 0) return json({ items, totalCount: total });
+          await new Promise<void>((r) => {
+            waiting.push(r);
+            if (waiting.length === 2) {
+              waiting.forEach((w) => w());
+              waiting = [];
+            }
+          });
+          return json({ items, totalCount: total });
+        },
+      },
+    });
+    const out = await c.listProjects();
+    expect(out.map((p) => p.key)).toEqual(Array.from({ length: total }, (_, i) => `p${i}`));
+    expect(offsets).toEqual([0, 100, 200]);
+  }, 2_000);
+
+  it('members page by 50 and stop at a short page without a count', async () => {
+    const offsets: number[] = [];
+    const c = new LdClient({
+      instance: 'us',
+      token: TOKEN,
+      transport: {
+        fetch: async (input) => {
+          const u = new URL(String(input));
+          const offset = Number(u.searchParams.get('offset'));
+          expect(u.searchParams.get('limit')).toBe('50');
+          offsets.push(offset);
+          return json({ items: Array.from({ length: offset < 50 ? 50 : 3 }, (_, i) => ({ _id: `m${offset + i}`, email: `m${offset + i}@x.test`, role: 'reader' })) });
+        },
+      },
+    });
+    expect(await c.listMembers()).toHaveLength(53);
+    expect(offsets).toEqual([0, 50]);
+  });
+});

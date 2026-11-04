@@ -55,25 +55,61 @@ type LdListing = Pick<LdSession, 'flags' | 'contextKinds' | 'segments' | 'experi
 const LISTING_KEYS = ['flags', 'contextKinds', 'segments', 'experiments', 'metrics', 'randomizationUnits', 'defaultRandomizationUnit', 'members', 'teams', 'aiConfigs'] as const satisfies readonly (keyof LdListing)[];
 
 const sessions = new Map<string, LdSession>();
+/**
+ * The session as of its last change of *data* (see `useLdSessionData`): a probe step or a page
+ * counter changes the session without changing what it holds, and this view then keeps its
+ * identity.
+ */
+const views = new Map<string, LdSession>();
 const clients = new Map<string, LdClient>();
 const listeners = new Set<() => void>();
 /** Workspaces whose device vault is being restored: "connecting" until the token comes back (or doesn't). */
 const pendingRestore = new Set<string>();
 const EMPTY: LdSession = { status: 'disconnected' };
 
+/** Fields that only say where a read stands; the listing, matrix and status are the same before and after. */
+const TRANSIENT_KEYS: ReadonlySet<string> = new Set<keyof LdSession>(['refreshing', 'refreshProgress']);
+
+/** Whether `next` holds other data than `prev`: anything but the transient fields, and for `probing` only whether a probe runs. */
+export function sessionDataChanged(prev: LdSession, next: LdSession): boolean {
+  for (const k of new Set([...Object.keys(prev), ...Object.keys(next)] as (keyof LdSession)[])) {
+    if (TRANSIENT_KEYS.has(k)) continue;
+    if (k === 'probing') {
+      if ((prev.probing === undefined) !== (next.probing === undefined)) return true;
+      continue;
+    }
+    if (prev[k] !== next[k]) return true;
+  }
+  return false;
+}
+
 function set(workspaceId: string, patch: Partial<LdSession>) {
-  sessions.set(workspaceId, { ...(sessions.get(workspaceId) ?? EMPTY), ...patch });
+  const prev = sessions.get(workspaceId) ?? EMPTY;
+  const next = { ...prev, ...patch };
+  sessions.set(workspaceId, next);
+  if (!views.has(workspaceId) || sessionDataChanged(views.get(workspaceId)!, next)) views.set(workspaceId, next);
   listeners.forEach((l) => l());
 }
 
+const subscribe = (l: () => void) => {
+  listeners.add(l);
+  return () => listeners.delete(l);
+};
+
+/** The live session, every field current. Screens that show a probe's step or a read's progress use this. */
 export function useLdSession(workspaceId: string): LdSession {
-  return useSyncExternalStore(
-    (l) => {
-      listeners.add(l);
-      return () => listeners.delete(l);
-    },
-    () => sessions.get(workspaceId) ?? EMPTY,
-  );
+  return useSyncExternalStore(subscribe, () => sessions.get(workspaceId) ?? EMPTY);
+}
+
+/**
+ * The session for work that depends on what it holds, not on where a read stands: the mapping
+ * context (useMigration), and through it the explorers, the guide and the plan. It changes
+ * identity only when the status, matrix, listing or an error changes, so a flag refresh that
+ * reports thirty pages does not rebuild the plan thirty times. `refreshing` and `refreshProgress`
+ * in it may lag; `probing` is current as to whether a probe runs, not which step it is at.
+ */
+export function useLdSessionData(workspaceId: string): LdSession {
+  return useSyncExternalStore(subscribe, () => views.get(workspaceId) ?? EMPTY);
 }
 
 /** The current session state outside React (the monitoring check reads freshly loaded flags). */
@@ -117,24 +153,36 @@ function client(workspaceId: string): LdClient {
   return c;
 }
 
-/** Validate the token (caller identity) and list projects. */
+/**
+ * Validate the token (caller identity), come back to the workspace's project, and list the
+ * account's projects for the picker. The listing is not waited for when a project is saved: an
+ * account with hundreds of projects would otherwise hold the workspace at "connecting" for them.
+ */
 export async function connectLd(workspaceId: string, instance: LdInstanceId, token: string): Promise<void> {
   pendingRestore.delete(workspaceId);
   set(workspaceId, { status: 'connecting', instance, error: undefined, matrix: undefined, flags: undefined });
   const c = new LdClient({ instance, token });
   try {
     const identity = await c.callerIdentity();
-    const projects = await c.listProjects();
     secrets.set('ld', workspaceId, token);
     clients.set(workspaceId, c);
-    // Keep the workspace's chosen project (e.g. the demo's) and probe it straight away. The probe
-    // starts in the same patch as "connected", so `ldConnecting` stays true without a gap.
+    // Keep the workspace's chosen project (e.g. the demo's) and go to it straight away. The probe
+    // (or the saved matrix) starts in the same patch as "connected", so `ldConnecting` stays true
+    // without a gap.
     const saved = (await store.getWorkspace(workspaceId))?.ld;
-    const keep = saved?.instance === instance && saved.projectKey && projects.some((p) => p.key === saved.projectKey) ? saved.projectKey : undefined;
-    set(workspaceId, { status: 'connected', identity, projects, ...(keep ? probeStartPatch(sessions.get(workspaceId) ?? EMPTY, keep) : {}) });
+    const keep = saved?.instance === instance && saved.projectKey ? saved.projectKey : undefined;
+    set(workspaceId, { status: 'connected', identity, ...(keep ? probeStartPatch(sessions.get(workspaceId) ?? EMPTY, keep) : {}) });
+    const projects = c.listProjects().then(
+      (projects) => {
+        if (clients.get(workspaceId) !== c) return;
+        set(workspaceId, { projects });
+        if (keep && !projects.some((p) => p.key === keep) && !sessions.get(workspaceId)?.matrix) set(workspaceId, { error: `Project "${keep}" isn't visible to this token on ${instance}; choose another.` });
+      },
+      () => undefined,
+    );
     await store.updateWorkspace(workspaceId, { ld: { instance, ...(keep ? { projectKey: keep } : {}) } });
     if (keep) await chooseProject(workspaceId, keep);
-    else if (saved?.projectKey) set(workspaceId, { error: `Project "${saved.projectKey}" isn't visible to this token on ${instance}; choose another.` });
+    else await projects;
   } catch (e) {
     set(workspaceId, { status: 'error', error: e instanceof LdAuthError ? e.message : `Could not reach LaunchDarkly: ${(e as Error).message}` });
   }
@@ -151,12 +199,17 @@ export function probeStartPatch(current: LdSession, projectKey: string): Partial
   return { projectKey, probing: 'Starting', error: undefined, ...(sameProject ? {} : { matrix: undefined, flags: undefined, segments: undefined, experiments: undefined, stale: undefined }) };
 }
 
-export async function chooseProject(workspaceId: string, projectKey: string): Promise<void> {
+/**
+ * Go to an LD project. What this device already holds for it is used as it is: the capability
+ * matrix of the last probe and the listing of the last read come back at once, so the guide,
+ * mapping, decisions and monitoring screens render without a request, and LaunchDarkly is read
+ * only when something is missing (a project never probed or never listed) or when asked
+ * (`probe`: the "Re-probe" buttons, and the actions that change the project's environments; the
+ * guide's "Re-read" for the listing). The listing is marked `stale` with the time it was read.
+ */
+export async function chooseProject(workspaceId: string, projectKey: string, opts: { probe?: boolean } = {}): Promise<void> {
   const c = client(workspaceId);
   set(workspaceId, probeStartPatch(sessions.get(workspaceId) ?? EMPTY, projectKey));
-  // After a reload (token restored from the device vault), show the last probe's matrix and the
-  // last listing at once, so the guide, mapping, decisions and monitoring screens render while
-  // the fresh probe and refresh run. The listing is marked `stale` until the refresh has landed.
   if (!sessions.get(workspaceId)?.matrix) {
     const saved = (await store.getCapabilities(workspaceId))?.matrix as CapabilityMatrix | undefined;
     if (saved && saved.projectKey === projectKey && saved.instance === c.instance.id && !sessions.get(workspaceId)?.matrix) set(workspaceId, { matrix: saved });
@@ -170,14 +223,17 @@ export async function chooseProject(workspaceId: string, projectKey: string): Pr
     }
   }
   try {
-    const matrix = await probeCapabilities(c, projectKey, { onProgress: (s) => set(workspaceId, { probing: s }) });
-    set(workspaceId, { matrix, probing: undefined });
+    let matrix = sessions.get(workspaceId)?.matrix;
+    if (!matrix || opts.probe) {
+      matrix = await probeCapabilities(c, projectKey, { onProgress: (s) => set(workspaceId, { probing: s }) });
+      set(workspaceId, { matrix, probing: undefined });
+      await store.saveCapabilities(workspaceId, matrix);
+    } else set(workspaceId, { probing: undefined });
     await store.updateWorkspace(workspaceId, { ld: { instance: c.instance.id, projectKey } });
-    await store.saveCapabilities(workspaceId, matrix);
     // A saved listing stands until the user asks for a re-read (the guide's "Re-read" next to its
-    // age), or a plan opens: the plan modal always reads the project afresh before a run, and a
-    // finished run merges what it wrote. Without a saved listing, read it now, with the segments
-    // and experiments of the environments the profile maps to in the same refresh as the flags.
+    // age), or a plan opens: the plan modal reads the project afresh before a run, and a finished
+    // run merges what it wrote. Without a saved listing, read it now, with the segments and
+    // experiments of the environments the profile maps to in the same refresh as the flags.
     if (restored) return;
     const mapped = await mappedLdEnvs(workspaceId, matrix);
     await refreshLdState(workspaceId, { segmentEnvs: [...new Set([...mapped, ...Object.keys(sessions.get(workspaceId)?.segments ?? {})])] });
@@ -201,7 +257,7 @@ export async function createLdEnvironment(workspaceId: string, input: { key: str
   } catch (e) {
     if (!(e instanceof LdWriteError && e.status === 409)) throw e;
   }
-  await chooseProject(workspaceId, s.projectKey);
+  await chooseProject(workspaceId, s.projectKey, { probe: true });
 }
 
 /** LD's own environment palette (hex without `#`), picked deterministically per key. */
@@ -224,7 +280,7 @@ export async function learnCapability(workspaceId: string, c: CapabilityUpdate):
 
 export async function reprobe(workspaceId: string): Promise<void> {
   const s = sessions.get(workspaceId);
-  if (s?.projectKey) await chooseProject(workspaceId, s.projectKey);
+  if (s?.projectKey) await chooseProject(workspaceId, s.projectKey, { probe: true });
 }
 
 /** The LD environments the workspace's profile maps source environments to, among those the project has. */
@@ -293,16 +349,21 @@ export function mergeLdSegments(workspaceId: string, updates: { ldEnv: string; k
  * does not wait for the flag pages. Experimentation reads (metrics, experiments, randomization
  * units) are optional: plans without the add-on answer 403, which must not hide the flags.
  */
-/** A flag listing read live in this tab within this long is reused by a refresh that allows it. */
-export const FRESH_LD_LISTING_MS = 60_000;
+/**
+ * A flag listing read live in this tab within this long is reused by a refresh that allows it:
+ * the plan modal and the guide's segment step. Five minutes covers a re-read from the guide
+ * followed by a plan, or two plans in a row, without reading thousands of flags again; the
+ * executor still reads each flag it updates and re-checks anything that appeared since.
+ */
+export const FRESH_LD_LISTING_MS = 5 * 60_000;
 
 export interface RefreshOptions {
   segmentEnvs?: string[];
   /**
    * Keep a flag listing read live in this tab less than this long ago, instead of reading the
    * project's flags again (segments and the rest are still read). The plan modal and the guide
-   * pass a minute: opening one right after the other otherwise reads thousands of flags twice.
-   * A listing restored from the last visit (`stale`) is never reused.
+   * pass `FRESH_LD_LISTING_MS`: opening one right after the other otherwise reads thousands of
+   * flags twice. A listing restored from the last visit (`stale`) is never reused.
    */
   reuseFlagsWithinMs?: number;
 }
@@ -501,7 +562,7 @@ export async function requireLdApprovals(workspaceId: string, envKey: string): P
     if (e instanceof LdWriteError && (e.status === 403 || e.status === 404 || e.status === 405)) await learnCapability(workspaceId, { key: 'approval_settings', status: e.status === 403 ? 'not_permitted' : 'unavailable', evidence: `PATCH environment ${envKey} approvalSettings → ${e.status}` });
     throw e;
   }
-  await chooseProject(workspaceId, s.projectKey);
+  await chooseProject(workspaceId, s.projectKey, { probe: true });
 }
 
 /** Make `kind` the project's default randomization unit (StatSig's default unit type), enabling it first if needed. */
@@ -520,5 +581,6 @@ export function disconnectLd(workspaceId: string): void {
   secrets.forget('ld', workspaceId);
   clients.delete(workspaceId);
   sessions.delete(workspaceId);
+  views.delete(workspaceId);
   listeners.forEach((l) => l());
 }

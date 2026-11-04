@@ -335,3 +335,63 @@ describe("last LaunchDarkly listing (shown while the next read runs)", () => {
     expect(await s.getLdState(ws.id)).toBeUndefined();
   });
 });
+
+describe("run journal: pre-images kept apart", () => {
+  const run = (id: string, steps: { id: string; preImage?: unknown }[]) => ({
+    id,
+    workspaceId: "w",
+    projectKey: "p",
+    label: id,
+    dryRun: false,
+    startedAt: "2026-11-03T10:00:00Z",
+    status: "running" as const,
+    steps: steps.map((s) => ({ id: s.id, label: s.id, status: "done" as const, step: { op: "upsert_flag_shell", key: s.id } as never, ...(s.preImage !== undefined ? { preImage: s.preImage as never } : {}) })),
+  });
+
+  it("lists runs without pre-images, reads one back with them, and writes each pre-image once", async () => {
+    const s = store();
+    const pre = { key: "f1", environments: { production: { on: true } } };
+    const r = run("r1", [{ id: "s1", preImage: pre }, { id: "s2" }]);
+    await s.saveRun(r);
+    const listed = (await s.listRuns("w"))[0]!;
+    expect(listed.steps[0]).not.toHaveProperty("preImage");
+    expect(listed.steps[0]!.hasPreImage).toBe(true);
+    expect(listed.steps[1]!.hasPreImage).toBeUndefined();
+    const full = await s.getRun("r1");
+    expect(full?.steps[0]!.preImage).toEqual(pre);
+    expect(full?.steps[1]!.preImage).toBeUndefined();
+    // The next journal write (same pre-image object, a step further) rewrites the run, not the pre-image.
+    const again = { ...r, status: "done" as const, steps: [...r.steps, { id: "s3", label: "s3", status: "done" as const, step: { op: "upsert_flag_shell", key: "s3" } as never, preImage: { key: "f3" } as never }] };
+    await s.saveRun(again);
+    expect(await s.db.runPreImages.count()).toBe(2);
+    expect((await s.getRun("r1"))?.steps.map((x) => x.preImage)).toEqual([pre, undefined, { key: "f3" }]);
+    // A record read back (resume after a reload) carries pre-images the journal already holds: saving it adds none.
+    await s.saveRun({ ...(await s.getRun("r1"))!, status: "done" });
+    expect(await s.db.runPreImages.count()).toBe(2);
+  });
+
+  it("deletes the pre-images with the workspace", async () => {
+    const s = store();
+    const ws = await s.createWorkspace({ name: "Journal" });
+    await s.saveRun({ ...run("r2", [{ id: "s1", preImage: { key: "f" } }]), workspaceId: ws.id });
+    await s.saveRun({ ...run("r3", [{ id: "s1", preImage: { key: "g" } }]), workspaceId: "other" });
+    expect(await s.db.runPreImages.count()).toBe(2);
+    await s.deleteWorkspace(ws.id);
+    expect(await s.db.runPreImages.toArray()).toEqual([{ id: "r3/s1", runId: "r3", stepId: "s1", preImage: { key: "g" } }]);
+  });
+
+  it("moves the pre-images of runs journaled before version 9 out of their records on upgrade", async () => {
+    const name = `upgrade-${crypto.randomUUID()}`;
+    const { default: Dexie } = await import("dexie");
+    const old = new Dexie(name);
+    old.version(8).stores({ runs: "id, workspaceId, startedAt, [workspaceId+startedAt]" });
+    await old.table("runs").put(run("r1", [{ id: "s1", preImage: { key: "f1" } }, { id: "s2" }]));
+    old.close();
+    const s = new WorkspaceStore(new MigratorDb(name));
+    const listed = (await s.listRuns("w"))[0]!;
+    expect(listed.steps[0]).not.toHaveProperty("preImage");
+    expect(listed.steps[0]!.hasPreImage).toBe(true);
+    expect((await s.getRun("r1"))?.steps[0]!.preImage).toEqual({ key: "f1" });
+    expect(await s.db.runPreImages.count()).toBe(1);
+  });
+});

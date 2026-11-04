@@ -160,24 +160,26 @@ export async function probeCapabilities(client: LdClient, projectKey: string, op
   const project = await client.getProject(projectKey, signal);
   const projectAccess = accessLists(project._access);
   const envList = await client.listEnvironments(projectKey, signal);
-  const environments: EnvironmentCapabilities[] = [];
-  for (const e of envList) {
-    // The list may omit approval settings; the single-environment GET includes them (§5.2).
-    let detail: LdEnvironment = e;
-    try {
-      detail = await client.getEnvironment(projectKey, e.key, signal);
-    } catch {
-      /* keep the list version */
-    }
-    environments.push({
-      key: detail.key,
-      name: detail.name,
-      critical: detail.critical ?? false,
-      flagApprovalsRequired: detail.approvalSettings?.required ?? false,
-      segmentApprovalsRequired: detail.resourceApprovalSettings?.segment?.required ?? false,
-      deniedActions: accessLists(detail._access).denied,
-    });
-  }
+  // The list may omit approval settings; the single-environment GET includes them (§5.2). The
+  // environments are read at once (the limiter paces them), in the list's order.
+  const environments: EnvironmentCapabilities[] = await Promise.all(
+    envList.map(async (e) => {
+      let detail: LdEnvironment = e;
+      try {
+        detail = await client.getEnvironment(projectKey, e.key, signal);
+      } catch {
+        /* keep the list version */
+      }
+      return {
+        key: detail.key,
+        name: detail.name,
+        critical: detail.critical ?? false,
+        flagApprovalsRequired: detail.approvalSettings?.required ?? false,
+        segmentApprovalsRequired: detail.resourceApprovalSettings?.segment?.required ?? false,
+        deniedActions: accessLists(detail._access).denied,
+      };
+    }),
+  );
 
   // --- Feature availability via list routes ------------------------------------------------
   step('Probing plan features');

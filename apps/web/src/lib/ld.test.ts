@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { flagsFresh, ldConnecting, probeStartPatch, type LdSession } from './ld.ts';
+import { flagsFresh, ldConnecting, probeStartPatch, sessionDataChanged, type LdSession } from './ld.ts';
 
 const matrix = { capabilities: [], environments: [] } as unknown as NonNullable<LdSession['matrix']>;
 const connected: LdSession = { status: 'connected', projectKey: 'p1', matrix, flags: { items: [], loadedAt: 't' }, segments: { test: [] } };
@@ -50,5 +50,24 @@ describe('flagsFresh', () => {
     expect(flagsFresh({ ...fresh, stale: '2026-11-02T00:00:00Z' }, 60_000, now)).toBe(false);
     expect(flagsFresh({}, 60_000, now)).toBe(false);
     expect(flagsFresh({ flags: { items: [], loadedAt: 'not a date' } }, 60_000, now)).toBe(false);
+  });
+});
+
+describe('sessionDataChanged', () => {
+  const base: LdSession = { status: 'connected', projectKey: 'p1', matrix, flags: { items: [], loadedAt: 't' } };
+  it('ignores a read’s progress and which step a probe is at', () => {
+    expect(sessionDataChanged(base, { ...base, refreshing: true })).toBe(false);
+    expect(sessionDataChanged({ ...base, refreshing: true }, { ...base, refreshing: true, refreshProgress: 'Reading flags: 300 of 1,480…' })).toBe(false);
+    expect(sessionDataChanged({ ...base, probing: 'Reading token identity' }, { ...base, probing: 'Probing plan features' })).toBe(false);
+  });
+
+  it('sees a probe starting or ending, a new listing, a new matrix, an error and a status change', () => {
+    expect(sessionDataChanged(base, { ...base, probing: 'Starting' })).toBe(true);
+    expect(sessionDataChanged({ ...base, probing: 'Starting' }, base)).toBe(true);
+    expect(sessionDataChanged(base, { ...base, flags: { items: [], loadedAt: 'u' } })).toBe(true);
+    expect(sessionDataChanged(base, { ...base, matrix: { ...matrix } })).toBe(true);
+    expect(sessionDataChanged(base, { ...base, error: 'nope' })).toBe(true);
+    expect(sessionDataChanged(base, { ...base, status: 'error' })).toBe(true);
+    expect(sessionDataChanged(base, { ...base, stale: undefined })).toBe(false);
   });
 });

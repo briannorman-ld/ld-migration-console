@@ -99,10 +99,28 @@ export interface ResolutionRecord extends Resolution {
   workspaceId: string;
 }
 
-/** Run journal (PLAN §9 step 6): written before and after every step. Holds pre-images for undo. */
+/**
+ * Run journal (PLAN §9 step 6): written before and after every step. The steps' pre-images are
+ * kept apart in `runPreImages` (see RunPreImageRecord), so this record stays small enough to
+ * list and to rewrite twice per step.
+ */
 export interface RunJournalRecord extends RunRecord {
   /** The snapshots the run was planned from. Those snapshots are never pruned while the run exists. */
   snapshots?: { sourceId: string; takenAt: string }[];
+}
+
+/**
+ * The state of one LD resource before a run's step touched it (undo restores it). A pre-image is
+ * a whole flag with every environment, and a run of a thousand flags has a thousand of them: kept
+ * in the run record, listing the runs read all of that on every open and every journal write
+ * rewrote it. Written once per step, read back only by `getRun` (undo, resume, approval checks).
+ */
+export interface RunPreImageRecord {
+  /** `<runId>/<stepId>`. */
+  id: string;
+  runId: string;
+  stepId: string;
+  preImage: unknown;
 }
 
 /**
@@ -229,6 +247,7 @@ export class MigratorDb extends Dexie {
   vaults!: EntityTable<VaultRecord, "workspaceId">;
   exclusions!: Dexie.Table<ExclusionRecord, [string, string]>;
   ldState!: EntityTable<LdStateRecord, "workspaceId">;
+  runPreImages!: EntityTable<RunPreImageRecord, "id">;
 
   // The IndexedDB name predates the app's rename and stays: changing it would orphan every
   // user's local workspaces.
@@ -275,5 +294,25 @@ export class MigratorDb extends Dexie {
     this.version(8).stores({
       ldState: "workspaceId",
     });
+    // Pre-images move out of the run records into their own table (see RunPreImageRecord).
+    this.version(9)
+      .stores({
+        runPreImages: "id, runId",
+      })
+      .upgrade(async (tx) => {
+        const parts: RunPreImageRecord[] = [];
+        await tx
+          .table<RunJournalRecord, string>("runs")
+          .toCollection()
+          .modify((run) => {
+            for (const s of run.steps) {
+              if (s.preImage === undefined) continue;
+              parts.push({ id: `${run.id}/${s.id}`, runId: run.id, stepId: s.id, preImage: s.preImage });
+              delete s.preImage;
+              s.hasPreImage = true;
+            }
+          });
+        if (parts.length) await tx.table<RunPreImageRecord, string>("runPreImages").bulkPut(parts);
+      });
   }
 }
