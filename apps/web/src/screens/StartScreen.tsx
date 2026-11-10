@@ -3,6 +3,7 @@ import { useMemo, useState } from 'react';
 import { LdLockup, LdMark } from '../components/Brand.tsx';
 import { ThemeToggle } from '../components/ThemeToggle.tsx';
 import { Badge, Button, Callout, Card, Input, Label, Spinner } from '../components/ui.tsx';
+import { isSharedOrigin, SHARED_ORIGIN_NOTE } from '../lib/origin.ts';
 import { ensureDemoWorkspace, startDemoMock } from '../lib/demo.ts';
 import { store } from '../lib/store.ts';
 import { normalizeWorkspaceName, type WorkspaceRecord } from '@sslm/store';
@@ -41,7 +42,7 @@ export function StartScreen({ onOpen }: { onOpen: (workspaceId: string) => void 
     if (duplicate) return;
     setCreateError(undefined);
     try {
-      const ws = await store.createWorkspace({ name: trimmed || 'Untitled workspace' });
+      const ws = await store.createWorkspace({ name: trimmed || 'Untitled workspace', ...(isSharedOrigin() ? { tokenStorage: 'memory' as const } : {}) });
       onOpen(ws.id);
     } catch (e) {
       // The list is live, so a duplicate created in another tab lands here rather than in the memo.
@@ -73,6 +74,12 @@ export function StartScreen({ onOpen }: { onOpen: (workspaceId: string) => void 
             nothing is dropped or approximated silently. Everything stays in this browser: no server, no account, and tokens are kept encrypted in this browser, or in memory only if you prefer.
           </p>
         </div>
+
+        {isSharedOrigin() && (
+          <div className="mb-6">
+            <Callout tone="amber">{SHARED_ORIGIN_NOTE}</Callout>
+          </div>
+        )}
 
         <div className="grid gap-5 md:grid-cols-2">
           <Card className="relative overflow-hidden p-6">

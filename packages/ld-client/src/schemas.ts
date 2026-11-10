@@ -81,7 +81,7 @@ export const ProjectSchema = z.looseObject({
 export const ProjectsSchema = z.looseObject({ items: z.array(ProjectSchema), totalCount: optNum });
 
 export const ContextKindsSchema = z.looseObject({
-  items: z.array(z.looseObject({ key: z.string(), name: optStr, archived: optBool, createdFrom: optStr })),
+  items: z.array(z.looseObject({ key: z.string(), name: optStr, description: optStr, archived: optBool, createdFrom: optStr })),
 });
 
 export const FlagSummarySchema = z.looseObject({

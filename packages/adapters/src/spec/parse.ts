@@ -37,6 +37,15 @@ export const FETCH_INSTRUCTIONS =
  */
 export const MAX_SPEC_BYTES = 256 * 1024 * 1024;
 
+/**
+ * Top-level DCS fields that carry the project's client SDK keys (`sdk_keys_to_app_ids` maps
+ * plaintext keys to target apps; the hashed variant is its SHA form). They play no part in a
+ * migration and must not reach IndexedDB in the clear (CLAUDE.md: tokens never persisted
+ * unencrypted), so `classifySpec` deletes them before the spec leaves the parser. The store
+ * refuses an upload that still has them (`packages/store`).
+ */
+export const SPEC_SECRET_FIELDS = ['sdk_keys_to_app_ids', 'hashed_sdk_keys_to_app_ids'] as const;
+
 function tooLarge(what: string): SpecRejectedError {
   return new SpecRejectedError('too_large', `${what} is larger than ${MAX_SPEC_BYTES / 1024 / 1024} MB, which is bigger than any config spec. Check that this is the download_config_specs file.`);
 }
@@ -102,6 +111,7 @@ export function classifySpec(parsed: unknown): ParsedSpec {
   if (json.is_delta === true || json.deltas_full_response === false) {
     partialHints.push('This looks like a delta response; fetch without sinceTime/checksum/accept_deltas for the full spec.');
   }
+  for (const k of SPEC_SECRET_FIELDS) delete json[k];
   return { version: isV2 ? 2 : 1, json, partialHints, ...(unwrapped ? { unwrapped } : {}) };
 }
 

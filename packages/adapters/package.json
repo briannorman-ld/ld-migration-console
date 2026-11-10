@@ -9,10 +9,10 @@
   },
   "dependencies": {
     "@sslm/canonical": "workspace:*",
-    "@sslm/statsig-client": "workspace:*",
+    "@sslm/http": "workspace:*",
     "@sslm/ld-client": "workspace:*",
-    "zod": "^4.6.5",
-    "@sslm/http": "workspace:*"
+    "@sslm/statsig-client": "workspace:*",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@sslm/demo-fixtures": "workspace:*"

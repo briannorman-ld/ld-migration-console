@@ -1,5 +1,8 @@
 import { readSync, syncedEnvsOf } from '@sslm/canonical';
-import { flagOwner, migrationStatus } from '@sslm/planner';
+import { flagOwner, ldChange, migrationStatus } from '@sslm/planner';
+
+// The detector moved to the planner (which asks before writing over an LD edit); re-exported for monitoring's callers.
+export { LD_CHANGE_GRACE_MS, ldChange } from '@sslm/planner';
 import type { AlertKind, FlagStatusInfo, LdFlagEnvInfo, LdFlagInfo, LdTraffic, Lifecycle, MonitorAlert, MonitorInput, MonitorRow, MonitorSample, MonitorStatus, MonitoredItem } from './types.ts';
 
 /** Statuses that mean "under monitoring" (the flag carries a sync for this environment). */
@@ -11,31 +14,7 @@ export const DRIFTED: ReadonlySet<MonitorStatus> = new Set<MonitorStatus>(['stat
 /** StatSig must have been at zero checks this long, continuously, before a flag counts as cut over (PLAN §14). */
 export const CUTOVER_QUIET_MS = 7 * 24 * 3600 * 1000;
 
-/**
- * Our own provenance write follows the targeting write by a moment, and may touch the flag's
- * modification time; anything inside this window after `syncedAt` is not a change by someone else.
- */
-export const LD_CHANGE_GRACE_MS = 2 * 60 * 1000;
-
 export const itemKey = (flagKey: string, ldEnv: string) => `${flagKey}|${ldEnv}`;
-
-/**
- * Did someone change the flag's targeting in LD after the sync? (PLAN §14 "LD changed".)
- * Compares the environment's `lastModified` with the sync time recorded in the provenance, and,
- * when the local run journal knows the environment version after our write, the version too. When
- * both are known the modification time decides: our provenance write can bump the version alone.
- */
-export function ldChange(env: LdFlagEnvInfo | undefined, syncedAt: string | undefined, versionAtSync?: number, graceMs = LD_CHANGE_GRACE_MS): { changed: boolean; evidence?: string } {
-  const syncedMs = syncedAt ? Date.parse(syncedAt) : NaN;
-  const modified = env?.lastModified ?? undefined;
-  if (modified !== undefined && Number.isFinite(syncedMs)) {
-    if (modified > syncedMs + graceMs) return { changed: true, evidence: `modified ${new Date(modified).toISOString()}, after the sync at ${new Date(syncedMs).toISOString()}` };
-    return { changed: false };
-  }
-  const version = env?.version ?? undefined;
-  if (versionAtSync !== undefined && version !== undefined && version > versionAtSync) return { changed: true, evidence: `version ${version}, was ${versionAtSync} at sync` };
-  return { changed: false };
-}
 
 export function trafficOf(status: FlagStatusInfo | undefined): LdTraffic {
   const n = status?.name;

@@ -5,6 +5,7 @@
  * the dataset or the mock.
  */
 import type { SourceDescriptor } from '@sslm/canonical';
+import { isSharedOrigin } from './origin.ts';
 import { store } from './store.ts';
 
 export const DEMO_WORKSPACE_ID = 'demo-acme-retail';
@@ -104,7 +105,8 @@ export async function demoLdSourceToken(): Promise<string> {
 export async function ensureDemoWorkspace(): Promise<string> {
   const { demoStatsigBaseUrl, demoLdBaseUrl, ACME_LEGACY_PROJECT_KEY } = await import('@sslm/demo-fixtures');
   const existing = await store.getWorkspace(DEMO_WORKSPACE_ID);
-  if (!existing) await store.createWorkspace({ id: DEMO_WORKSPACE_ID, name: 'Acme Retail (Demo)', isDemo: true, ld: DEMO_LD_PROJECT });
+  // The demo writes with a real LaunchDarkly token, so it follows the same origin rule as any workspace.
+  if (!existing) await store.createWorkspace({ id: DEMO_WORKSPACE_ID, name: 'Acme Retail (Demo)', isDemo: true, ld: DEMO_LD_PROJECT, ...(isSharedOrigin() ? { tokenStorage: 'memory' as const } : {}) });
   else if (!existing.ld?.projectKey) await store.updateWorkspace(DEMO_WORKSPACE_ID, { ld: DEMO_LD_PROJECT });
   const have = new Set((await store.listSources(DEMO_WORKSPACE_ID)).map((s) => s.id));
   const sources: SourceDescriptor[] = (['web', 'mobile'] as const).map((alias, i) => ({

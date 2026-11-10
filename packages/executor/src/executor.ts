@@ -11,9 +11,9 @@
  * scheduled changes carrying the full targeting of that moment; ID lists above 15,000 become big
  * segments filled by a CSV import. The first write a plan refuses updates the capability matrix.
  */
-import { footer as provenanceFooter, parseFooter as parseProvenanceFooter, PROP, readSync, SOURCE_KIND_LABEL, stableStringify, withFooter as withProvenanceFooter, type FooterInput } from '@sslm/canonical';
+import { footer as provenanceFooter, parseFooter as parseProvenanceFooter, PROP, readSync, SOURCE_KIND_LABEL, stableStringify, withFooter as withProvenanceFooter, type FooterInput, CONSOLE_CREATED_MARKER } from '@sslm/canonical';
 import { LdAuthError, LdWriteError, type JsonPatchOp, type LdAiConfig, type LdClient, type LdExperiment, type LdExperimentationSettings, type LdFlag, type LdFlagConfig, type LdMetric, type LdSegment, type SemanticPatch } from '@sslm/ld-client';
-import { flagOwner, ownsSegment, syncPropertyKey, type PlanStep } from '@sslm/planner';
+import { flagOwner, ownsSegment, syncPropertyKey, type PlanStep, ldChange } from '@sslm/planner';
 import { FLAG_SIZE_BUDGET, FLAG_SIZE_LIMIT, SOURCE_KIND, type DesiredBandit, type DesiredFlagEnv, type DesiredRule, type DesiredSegment, type VariationOrRollout } from '@sslm/mapper';
 import type { MigrationSourceKind } from '@sslm/canonical';
 
@@ -752,7 +752,7 @@ export class Executor {
     if (run.dryRun) return `Would create context kind “${s.key}”.`;
     const from = s.sourceKind === 'launchdarkly' ? `Context kind “${s.unitType}” of the source LaunchDarkly project` : `StatSig unit type ${s.unitType}`;
     try {
-      await this.c.putContextKind(this.p, s.key, { name: s.name, description: `${from} (created by the LaunchDarkly Migration Console).` }, this.signal);
+      await this.c.putContextKind(this.p, s.key, { name: s.name, description: `${from} (${CONSOLE_CREATED_MARKER}).` }, this.signal);
     } catch (e) {
       // A 403 here is a missing createContextKind role, not a dead token: only the items that use this
       // kind are skipped, the rest of the run goes on, and the capability matrix learns it.
@@ -1002,6 +1002,13 @@ export class Executor {
       return `Targeting in ${s.ldEnv} already matches; recorded the sync.`;
     }
 
+    // Someone edited the targeting in LaunchDarkly after the last sync: the planner raises
+    // ld_drift_on_sync for that, and a plan older than the edit must not write over it either.
+    const drift = ldChange(current, sync?.[2] ?? undefined);
+    if (drift.changed && !s.overwriteLdChanges) {
+      throw new Error(`Not written: the targeting of “${s.key}” in ${s.ldEnv} was changed in LaunchDarkly after the last sync (${drift.evidence}). Plan again and answer whether to keep LaunchDarkly’s targeting or overwrite it.`);
+    }
+
     let approval = false;
     try {
       const res = await this.c.patchFlagSemantic(this.p, s.key, { environmentKey: s.ldEnv, comment, instructions }, { dryRun: run.dryRun, signal: this.signal });
@@ -1058,7 +1065,7 @@ export class Executor {
         throw new Error(`Targeting in ${s.ldEnv} was written (as StatSig evaluates today), but LaunchDarkly refused the scheduled change: ${(e as Error).message} The time_condition decision now offers only the other options; re-sync after choosing one.`);
       }
     }
-    await this.writeProvenance(run, s, created);
+    await this.writeProvenance(run, s, created, rec);
     return `Set targeting in ${s.ldEnv}${schedNote ? schedNote.replace(' and ', ' and created ') : ''}: ${summary}.`;
   }
 
@@ -1068,11 +1075,13 @@ export class Executor {
    * second write; it runs only after targeting succeeded (or was approved and applied), so LD
    * never claims a sync that didn't happen.
    */
-  private async writeProvenance(run: RunRecord, s: Extract<PlanStep, { op: 'update_flag_env' }>, scheduledChangeIds: string[]): Promise<void> {
+  private async writeProvenance(run: RunRecord, s: Extract<PlanStep, { op: 'update_flag_env' }>, scheduledChangeIds: string[], rec?: StepRecord): Promise<void> {
     const prop = syncPropertyKey(s.ldEnv);
     const value = [s.provenance.statsigFingerprint, String(s.provenance.statsigVersion ?? ''), this.now().toISOString(), s.provenance.decisionSetHash, ...scheduledChangeIds.map((id) => `sc:${id}`)];
     const res = await this.c.patchFlagJson(this.p, s.key, [{ op: 'add', path: `/customProperties/${pointer(prop)}`, value: { name: `${SOURCE_KIND_LABEL[s.provenance.sourceKind ?? SOURCE_KIND]} sync (${s.ldEnv})`, value } }], { comment: this.comment(run, s), dryRun: run.dryRun, signal: this.signal });
     if (!run.dryRun) {
+      // The version the run left the environment at, provenance write included: undo compares against it.
+      if (rec) rec.ldVersion = res.environments?.[s.ldEnv]?.version ?? rec.ldVersion;
       this.flags.set(s.key, res);
       this.report({ kind: 'flag', key: s.key, flag: res });
     }
@@ -1237,6 +1246,10 @@ export class Executor {
         if (rec.status === 'pending_approval') return;
         const current = await this.c.getFlag(this.p, s.key, this.signal);
         if (!current) return;
+        // The pre-image is older than any edit made in LaunchDarkly after this run; restoring it
+        // would revert that edit too, so the environment is left as it is.
+        const since = ldChange(current.environments?.[s.ldEnv], rec.finishedAt, rec.ldVersion);
+        if (since.changed) throw new Error(`Not restored: the targeting of “${s.key}” in ${s.ldEnv} was changed in LaunchDarkly after this run (${since.evidence}). Restore it by hand if needed; LaunchDarkly’s audit log has both states.`);
         const prop = syncPropertyKey(s.ldEnv);
         const prereqs = [];
         for (const p of env.prerequisites ?? []) {

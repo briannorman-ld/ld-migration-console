@@ -4,6 +4,11 @@
   "private": true,
   "type": "module",
   "description": "StatSig Console API transport: pagination, retries, adaptive backoff, lenient Zod validation.",
-  "exports": { ".": "./src/index.ts" },
-  "dependencies": {"@sslm/http": "workspace:*", "zod": "^4.6.5"}
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@sslm/http": "workspace:*",
+    "zod": "^4.6.7"
+  }
 }

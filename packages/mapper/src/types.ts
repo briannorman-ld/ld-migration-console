@@ -235,6 +235,8 @@ export type DecisionType =
   | 'derived_attribute'
   | 'unit_type_kind'
   | 'key_collision'
+  /** LaunchDarkly targeting changed since the last sync (PLAN §8.3): keep the LD edit (skip the environment) or overwrite it. */
+  | 'ld_drift_on_sync'
   | 'source_collision'
   | 'big_segment'
   /** A negated list moved out of a flag that would exceed LaunchDarkly's 400 KB size limit (KNOWN-EDGE-CASES 15.22): contexts without the attribute now match. */

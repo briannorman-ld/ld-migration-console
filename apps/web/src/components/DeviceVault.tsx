@@ -2,6 +2,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { useEffect, useState } from 'react';
 import type { WorkspaceRecord } from '@sslm/store';
 import { restoreAndReconnect, unlockAndReconnect } from '../lib/deviceVault.ts';
+import { isSharedOrigin, SHARED_ORIGIN_NOTE } from '../lib/origin.ts';
 import { keepInMemoryOnly, keepOnDevice, rememberOnDevice, secrets, useDeviceVaultUnlocked, vaultMode } from '../lib/secrets.ts';
 import { store } from '../lib/store.ts';
 import { Button, Callout, Card, Input, Label } from './ui.tsx';
@@ -207,7 +208,10 @@ export function RememberKeysCard({ workspaceId, workspace }: { workspaceId: stri
 
       {mode === 'memory' && (
         <>
-          <Callout tone="amber">Keys are kept in memory only: closing the tab forgets them.{inMemory.length ? ` Holding ${inMemory.join(' and ')}.` : ''}</Callout>
+          <Callout tone="amber">
+            Keys are kept in memory only: closing the tab forgets them.{inMemory.length ? ` Holding ${inMemory.join(' and ')}.` : ''}
+            {isSharedOrigin() ? ` ${SHARED_ORIGIN_NOTE}` : ''}
+          </Callout>
           <Button variant="secondary" className="py-1 text-xs" disabled={busy} onClick={() => void run(async () => (await keepOnDevice(workspaceId), 'Keys are kept on this device again.'))}>
             Keep on this device
           </Button>

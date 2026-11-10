@@ -17,6 +17,7 @@ const plan: ResetPlan = {
   experiments: [{ env: 'production', key: 'price-test', name: 'Price test', running: true }],
   contextKinds: [{ key: 'org', name: 'Organization' }],
   unreadable: ['metrics: 403 Forbidden'],
+  kept: { flags: 3, segments: 0, metrics: 0, experiments: 0, contextKinds: 0 },
 };
 
 const planLdReset = vi.fn<(workspaceId: string, ld: LdSession, signal?: AbortSignal) => Promise<ResetPlan>>(async () => plan);

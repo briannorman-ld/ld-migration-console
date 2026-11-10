@@ -1,19 +1,23 @@
 /**
- * "Make the LD project look like day 0." A deliberately destructive, user-triggered operation,
- * reachable only behind a preview and three typed confirmations (screens/ProjectResetModal.tsx).
+ * "Take back everything this console wrote to the LD project." A deliberately destructive,
+ * user-triggered operation, reachable only behind a preview and three typed confirmations
+ * (screens/ProjectResetModal.tsx).
  *
  * It runs in two halves so the user sees exactly what will happen before anything happens:
- *   1. `planReset` reads the project and lists everything in it: flags (all environments),
- *      segments, metrics, experiments (archived: LD can't delete them), custom context kinds
- *      (archived: same) and the environments this app created (tagged `migrated-from-statsig`,
- *      or `statsig-migrated` from earlier builds; LD's own environments stay, a project needs
- *      at least one). Nothing is written.
+ *   1. `planReset` reads the project and lists what carries this console's provenance (PLAN §3.3,
+ *      §19.3): flags with the migrated tag and provenance properties (all environments, archived
+ *      ones included), segments, metrics and experiments with the migrated tag (experiments are
+ *      archived: LD can't delete them), context kinds whose description says the console created
+ *      them (archived: same) and the environments it created (tagged `migrated-from-statsig`, or
+ *      `statsig-migrated` from earlier builds; LD's own environments stay, a project needs at
+ *      least one). Anything without that provenance is never in the plan, so a customer's own
+ *      flags survive a reset of a shared project. Nothing is written.
  *   2. `resetProject` executes that plan and only that plan: it deletes the keys the preview
  *      listed, under the project key the preview was built for. Anything created in between
  *      is left alone, and a plan for another project is refused before the first request.
  * Nothing in StatSig is touched, ever.
  */
-import { hasMigratedTag } from '@sslm/canonical';
+import { createdByConsole, hasMigratedTag, readFlagProvenance } from '@sslm/canonical';
 import { LdAuthError, LdWriteError, type LdClient } from '@sslm/ld-client';
 import { ldClient, refreshLdState, reprobe, type LdSession } from './ld.ts';
 import { store } from './store.ts';
@@ -69,6 +73,8 @@ export interface ResetPlan {
   contextKinds: { key: string; name?: string }[];
   /** Listings LD refused (Experimentation without the add-on reads 403). Whatever is there is left alone. */
   unreadable: string[];
+  /** What the project holds without this console's provenance: listed so the preview can say it stays. */
+  kept: Record<'flags' | 'segments' | 'metrics' | 'experiments' | 'contextKinds', number>;
 }
 
 export interface ResetReport {
@@ -147,23 +153,40 @@ export async function planReset(c: Client, projectKey: string, signal?: AbortSig
   };
 
   const envs = await c.listEnvironments(projectKey, signal);
+  const kept: ResetPlan['kept'] = { flags: 0, segments: 0, metrics: 0, experiments: 0, contextKinds: 0 };
+  // Only what carries this console's provenance (the migrated tag; for flags also the provenance
+  // properties) is planned; everything else is counted as kept so the preview can say so.
+  const tagged = (t: { tags?: string[] | null }) => hasMigratedTag(t.tags ?? []);
+  const ours = <T>(what: keyof ResetPlan['kept'], items: T[], isOurs: (t: T) => boolean): T[] => {
+    const mine = items.filter(isOurs);
+    kept[what] += items.length - mine.length;
+    return mine;
+  };
+  const flags = ours('flags', await c.listFlags(projectKey, { signal, includeArchived: true }), (f) => readFlagProvenance({ tags: f.tags ?? [], customProperties: f.customProperties ?? {} }) !== null);
+  const metrics = ours('metrics', await optional('metrics', () => c.listMetrics(projectKey, signal)), tagged);
+  const kinds = ours(
+    'contextKinds',
+    (await c.listContextKinds(projectKey, signal)).items.filter((k) => k.key !== 'user' && !k.archived),
+    (k) => createdByConsole(k.description),
+  );
   const plan: ResetPlan = {
     projectKey,
     projectName: project.name,
     plannedAt: new Date().toISOString(),
     environments: [],
-    flags: (await c.listFlags(projectKey, { signal })).map((f) => ({ key: f.key, ...(f.name ? { name: f.name } : {}) })),
+    flags: flags.map((f) => ({ key: f.key, ...(f.name ? { name: f.name } : {}) })),
     segments: [],
-    metrics: (await optional('metrics', () => c.listMetrics(projectKey, signal))).map((m) => ({ key: m.key, ...(m.name ? { name: m.name } : {}) })),
+    metrics: metrics.map((m) => ({ key: m.key, ...(m.name ? { name: m.name } : {}) })),
     experiments: [],
-    contextKinds: (await c.listContextKinds(projectKey, signal)).items.filter((k) => k.key !== 'user' && !k.archived).map((k) => ({ key: k.key, ...(k.name ? { name: k.name } : {}) })),
+    contextKinds: kinds.map((k) => ({ key: k.key, ...(k.name ? { name: k.name } : {}) })),
     unreadable,
+    kept,
   };
 
   for (const env of envs) {
-    for (const s of await c.listSegments(projectKey, env.key, signal)) plan.segments.push({ env: env.key, key: s.key, name: s.name });
-    for (const x of await optional(`experiments in ${env.key}`, () => c.listExperiments(projectKey, env.key, signal))) {
-      if (x.archivedDate != null) continue;
+    for (const s of ours('segments', await c.listSegments(projectKey, env.key, signal), tagged)) plan.segments.push({ env: env.key, key: s.key, name: s.name });
+    const experiments = (await optional(`experiments in ${env.key}`, () => c.listExperiments(projectKey, env.key, signal))).filter((x) => x.archivedDate == null);
+    for (const x of ours('experiments', experiments, tagged)) {
       const winningTreatmentId = x.currentIteration?.treatments?.[0]?._id;
       plan.experiments.push({ env: env.key, key: x.key, name: x.name, running: x.currentIteration?.status === 'running', ...(winningTreatmentId ? { winningTreatmentId } : {}) });
     }

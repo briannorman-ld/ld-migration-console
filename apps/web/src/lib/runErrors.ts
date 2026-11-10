@@ -1,4 +1,5 @@
 import type { RunRecord, StepRecord } from '@sslm/executor';
+import { csvCell } from '@sslm/monitoring';
 
 /**
  * The failures of a run, grouped so a run of thousands of steps reads as a handful of problems:
@@ -54,11 +55,10 @@ export function runErrorReport(run: RunRecord): string {
 
 /** CSV with one row per failed step: step id, label, operation, key, environment, error. */
 export function runErrorCsv(run: RunRecord): string {
-  const cell = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
   const rows = [['step', 'label', 'operation', 'key', 'ldEnv', 'error'].join(',')];
   for (const s of run.steps) {
     if (s.status !== 'failed') continue;
-    rows.push([s.id, s.label, s.step.op, s.step.key, 'ldEnv' in s.step ? s.step.ldEnv : '', s.error ?? ''].map(cell).join(','));
+    rows.push([s.id, s.label, s.step.op, s.step.key, 'ldEnv' in s.step ? s.step.ldEnv : '', s.error ?? ''].map(csvCell).join(','));
   }
   return rows.join('\n') + '\n';
 }

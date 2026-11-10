@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { ENTITY_KINDS, type EntityKind, type SourceDescriptor, type SourceKind } from '@sslm/canonical';
 import { MAX_SPEC_BYTES } from '@sslm/adapters';
 import { LD_INSTANCES, LdClient, type LdInstanceId, type LdProject } from '@sslm/ld-client';
@@ -14,8 +14,6 @@ import { syncConsoleSource, syncLdSource, uploadSpec } from '../lib/sync.ts';
 
 /** Shortest string we try as a LaunchDarkly token; anything shorter is still being typed. */
 const MIN_LD_TOKEN_LENGTH = 8;
-/** Pause after the last keystroke before the token is tried against the API. */
-const LD_LIST_DEBOUNCE_MS = 400;
 
 /**
  * Add a source: a StatSig project (Console API key, recommended, or an uploaded config spec,
@@ -41,39 +39,34 @@ export function AddSource({ workspaceId, onDone }: { workspaceId: string; onDone
   const [log, setLog] = useState<SyncLogEntry[]>([]);
   const [progress, setProgress] = useState<{ done: number; total: number; endpoint: string }>();
 
-  // A LaunchDarkly token can read many projects: list them as soon as a token is pasted, the way
-  // the target connection does, instead of asking for a key to be typed from memory.
-  useEffect(() => {
-    if (kind !== 'launchdarkly') return;
+  // A LaunchDarkly token can read many projects, so they are listed and one is picked. The
+  // listing is a click, not a keystroke: a token is sent to an API only when the user asks, and
+  // only to the instance chosen at that moment (changing the instance clears the listing).
+  const listLdProjects = async () => {
     const token = key.trim();
+    if (token.length < MIN_LD_TOKEN_LENGTH) return;
+    const ctrl = new AbortController();
+    setLdListing(true);
     setLdProjects(undefined);
     setLdListError(undefined);
     setLdProject('');
-    if (token.length < MIN_LD_TOKEN_LENGTH) {
+    try {
+      const listed = await new LdClient({ instance: ldInstance, token }).listProjects(ctrl.signal);
+      const projects = [...listed].sort((a, b) => a.name.localeCompare(b.name));
+      setLdProjects(projects);
+      if (projects.length === 1) setLdProject(projects[0]!.key);
+    } catch (e) {
+      setLdListError((e as Error).message);
+    } finally {
       setLdListing(false);
-      return;
     }
-    setLdListing(true);
-    const ctrl = new AbortController();
-    const timer = setTimeout(async () => {
-      try {
-        const listed = await new LdClient({ instance: ldInstance, token }).listProjects(ctrl.signal);
-        if (ctrl.signal.aborted) return;
-        const projects = [...listed].sort((a, b) => a.name.localeCompare(b.name));
-        setLdProjects(projects);
-        if (projects.length === 1) setLdProject(projects[0]!.key);
-      } catch (e) {
-        if (ctrl.signal.aborted) return;
-        setLdListError((e as Error).message);
-      } finally {
-        if (!ctrl.signal.aborted) setLdListing(false);
-      }
-    }, LD_LIST_DEBOUNCE_MS);
-    return () => {
-      clearTimeout(timer);
-      ctrl.abort();
-    };
-  }, [kind, key, ldInstance]);
+  };
+  const resetLdListing = () => {
+    setLdProjects(undefined);
+    setLdListError(undefined);
+    setLdProject('');
+  };
+  const ldDisclaimer = LD_INSTANCES[ldInstance].disclaimer;
 
   const add = async () => {
     setBusy(true);
@@ -153,7 +146,14 @@ export function AddSource({ workspaceId, onDone }: { workspaceId: string; onDone
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <Label htmlFor="src-ld-instance">Instance</Label>
-                <Select id="src-ld-instance" value={ldInstance} onChange={(e) => setLdInstance(e.target.value as LdInstanceId)}>
+                <Select
+                  id="src-ld-instance"
+                  value={ldInstance}
+                  onChange={(e) => {
+                    setLdInstance(e.target.value as LdInstanceId);
+                    resetLdListing();
+                  }}
+                >
                   {Object.values(LD_INSTANCES).map((i) => (
                     <option key={i.id} value={i.id}>
                       {i.label}
@@ -163,8 +163,30 @@ export function AddSource({ workspaceId, onDone }: { workspaceId: string; onDone
               </div>
               <div>
                 <Label htmlFor="src-ld-token">Access token (read access to the source project)</Label>
-                <Input id="src-ld-token" type="password" autoComplete="off" spellCheck={false} placeholder="api-…" value={key} onChange={(e) => setKey(e.target.value)} />
+                <Input
+                  id="src-ld-token"
+                  type="password"
+                  autoComplete="off"
+                  spellCheck={false}
+                  placeholder="api-…"
+                  value={key}
+                  onChange={(e) => {
+                    setKey(e.target.value);
+                    resetLdListing();
+                  }}
+                />
               </div>
+            </div>
+            {ldDisclaimer && (
+              <Callout>
+                <b>{ldDisclaimer.title}:</b> {ldDisclaimer.body.join(' ')}
+              </Callout>
+            )}
+            <div className="flex items-center gap-3">
+              <Button variant="secondary" onClick={listLdProjects} disabled={ldListing || key.trim().length < MIN_LD_TOKEN_LENGTH}>
+                {ldListing && <Spinner />} List projects
+              </Button>
+              <span className="text-xs text-fg-muted">Sends the token to {LD_INSTANCES[ldInstance].origin.replace('https://', '')} once, to list the projects it can read.</span>
             </div>
             <div>
               <Label htmlFor="src-ld-project">Project to read</Label>
@@ -182,7 +204,7 @@ export function AddSource({ workspaceId, onDone }: { workspaceId: string; onDone
                         : 'This token can read no project'
                       : ldListError
                         ? 'Could not list projects'
-                        : 'Paste the token first'
+                        : 'Paste the token and list its projects first'
                 }
                 emptyText="No project matches"
                 onChange={setLdProject}

@@ -237,6 +237,62 @@ describe('skipping flags already in sync (PlanRequest.skipInSync)', () => {
   });
 });
 
+describe('LaunchDarkly edited since the last sync (PLAN §8.3 ld_drift_on_sync)', () => {
+  const synced = (plan: Plan, key: string, env: { version?: number; lastModified?: number }) => {
+    const step = plan.steps.find((s) => s.id === `env:test:${key}`) as Extract<PlanStep, { op: 'update_flag_env' }>;
+    return {
+      key,
+      tags: ['migrated-from-statsig', 'migration-src-web'],
+      kind: 'boolean',
+      customProperties: {
+        'migration.id': { value: [key] },
+        'migration.source': { value: ['web'] },
+        'migration.type': { value: ['gate'] },
+        [syncPropertyKey('test')]: { value: [step.provenance.statsigFingerprint, '3', NOW, step.provenance.decisionSetHash] },
+      },
+      environments: { test: { on: true, ...env } },
+    };
+  };
+
+  it('blocks the environment until the user keeps the LaunchDarkly edit or overwrites it', () => {
+    const base = acceptAll(request(['new_checkout_flow']));
+    const first = planMigration(base);
+    const edited = synced(first, 'new_checkout_flow', { version: 9, lastModified: Date.parse(NOW) + 3600_000 });
+    const req: PlanRequest = { ...base, ld: { ...EMPTY_LD, flags: new Map([['new_checkout_flow', edited]]) } };
+    const plan = planMigration(req);
+    const d = plan.decisions.find((x) => x.type === 'ld_drift_on_sync')!;
+    expect(d.severity).toBe('blocking');
+    expect(d.recommended).toBe('keep_ld');
+    expect(plan.items.find((i) => i.entityId === 'new_checkout_flow')).toMatchObject({ status: 'blocked', sync: 'in_sync' });
+    expect(plan.steps.map((s) => s.id)).not.toContain('env:test:new_checkout_flow');
+
+    const keep: Resolution = { id: d.id, type: d.type, optionKey: 'keep_ld', scope: 'resource', fingerprint: d.fingerprint, decidedAt: NOW };
+    const kept = planMigration({ ...req, resolutions: new Map([...req.resolutions, [d.id, keep]]) });
+    expect(kept.items.find((i) => i.entityId === 'new_checkout_flow')).toMatchObject({ status: 'skipped' });
+    expect(kept.steps.map((s) => s.id)).not.toContain('env:test:new_checkout_flow');
+
+    const over = planMigration({ ...req, resolutions: new Map([...req.resolutions, [d.id, { ...keep, optionKey: 'overwrite' }]]) });
+    expect(over.steps.find((s) => s.id === 'env:test:new_checkout_flow')).toMatchObject({ overwriteLdChanges: true });
+
+    // A later LaunchDarkly edit is a new question: the old answer goes stale.
+    const later = synced(first, 'new_checkout_flow', { version: 10, lastModified: Date.parse(NOW) + 7200_000 });
+    const again = planMigration({ ...req, ld: { ...EMPTY_LD, flags: new Map([['new_checkout_flow', later]]) }, resolutions: new Map([...req.resolutions, [d.id, keep]]) });
+    expect(again.items.find((i) => i.entityId === 'new_checkout_flow')).toMatchObject({ status: 'blocked' });
+  });
+
+  it('does not mistake the console’s own provenance write, moments after the sync, for an edit', () => {
+    const base = acceptAll(request(['new_checkout_flow']));
+    const first = planMigration(base);
+    const ours = synced(first, 'new_checkout_flow', { version: 4, lastModified: Date.parse(NOW) + 30_000 });
+    const plan = planMigration({ ...base, ld: { ...EMPTY_LD, flags: new Map([['new_checkout_flow', ours]]) } });
+    expect(plan.decisions.map((d) => d.type)).not.toContain('ld_drift_on_sync');
+    expect(plan.steps.map((s) => s.id)).toContain('env:test:new_checkout_flow');
+    // No per-environment information at all (an older listing): nothing to compare, so no question.
+    const bare = planMigration({ ...base, ld: { ...EMPTY_LD, flags: new Map([['new_checkout_flow', { ...ours, environments: null }]]) } });
+    expect(bare.decisions.map((d) => d.type)).not.toContain('ld_drift_on_sync');
+  });
+});
+
 describe('autotunes (PLAN §11)', () => {
   const auid = (id: string) => web.autotunes.find((a) => a.id === id)!.uid;
 

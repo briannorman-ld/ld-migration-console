@@ -286,7 +286,7 @@ export const COVERAGE: CoverageEntry[] = [
     how: 'The default value is variation 0; each distinct rule value becomes a variation; rules target their variation and partial rollouts split between the rule value and the default.',
     detail:
       'Verified against the StatSig SDK evaluator: a user who matches a rule but falls outside its pass percentage gets the default value, not the next rule. Variations are append-only: a new value seen after one environment was migrated is appended, never reordered.',
-    decisions: ['partial_rollout_rebucket', 'key_collision', 'variation_change_affects_migrated_env', 'flag_size', 'big_segment'],
+    decisions: ['partial_rollout_rebucket', 'key_collision', 'ld_drift_on_sync', 'variation_change_affects_migrated_env', 'flag_size', 'big_segment'],
     edgeCases: ['10.1', '10.2', '10.4', '10.6', '10.8', '10.10', '10.11', '10.12', '15.22'],
     kind: 'config',
     docs: { statsig: `${SS}/dynamic-config`, ld: `${LD}/home/flags/variations` },

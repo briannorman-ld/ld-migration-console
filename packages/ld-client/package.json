@@ -4,6 +4,11 @@
   "private": true,
   "type": "module",
   "description": "LaunchDarkly REST client and capability probe (PLAN §5).",
-  "exports": { ".": "./src/index.ts" },
-  "dependencies": {"@sslm/http": "workspace:*", "zod": "^4.6.5"}
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@sslm/http": "workspace:*",
+    "zod": "^4.6.7"
+  }
 }

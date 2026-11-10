@@ -5,7 +5,7 @@ import type { LdSession } from '../lib/ld.ts';
 import { planLdReset, planSize, resetLdProject, type ResetPlan, type ResetProgress, type ResetReport } from '../lib/reset.ts';
 
 /**
- * A preview, then three typed confirmations, before the LD project is wiped (lib/reset.ts). The
+ * A preview, then three typed confirmations, before what the console wrote to the LD project is removed (lib/reset.ts). The
  * preview is the exact inventory the reset will act on, read from the chosen project before
  * anything is written. The confirmations are exact phrases; the second one is the project key
  * itself, so the name of what is about to be erased passes through the user's own hands.
@@ -16,7 +16,7 @@ function gates(projectKey: string) {
       phrase: 'yes',
       caseSensitive: false,
       title: 'Reset this LaunchDarkly project?',
-      body: 'Everything in the preview you just saw will be deleted or archived, in that project and no other. StatSig is not touched. LaunchDarkly keeps an audit log, but there is no undo for a deleted flag.',
+      body: 'Everything in the preview you just saw will be deleted or archived, in that project and no other. Resources the console did not create stay. StatSig is not touched. LaunchDarkly keeps an audit log, but there is no undo for a deleted flag.',
       prompt: 'Type “yes” to continue to the second of three confirmations.',
     },
     {
@@ -96,11 +96,11 @@ export function ProjectResetModal({ workspaceId, ld, onClose }: { workspaceId: s
   const instance = ld.instance ? LD_INSTANCES[ld.instance].label : undefined;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-overlay p-6 backdrop-blur-[2px]" role="dialog" aria-modal="true" aria-label="Reset LaunchDarkly project">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-overlay p-6 backdrop-blur-[2px]" role="dialog" aria-modal="true" aria-label="Remove migrated resources">
       <Card className="flex max-h-full w-full max-w-2xl flex-col overflow-hidden border-error-line/60 shadow-raised">
         <header className="flex items-center gap-3 border-b border-line px-5 py-3">
           <Badge tone="red">danger</Badge>
-          <h2 className="font-display text-lg font-semibold tracking-tight">Reset LaunchDarkly project “{ld.projectKey}”</h2>
+          <h2 className="font-display text-lg font-semibold tracking-tight">Remove migrated resources from “{ld.projectKey}”</h2>
           {phase.kind === 'confirm' && (
             <span className="text-xs text-fg-muted">
               confirmation {phase.step + 1} of {GATES.length}

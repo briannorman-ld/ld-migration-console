@@ -1,7 +1,12 @@
 import 'fake-indexeddb/auto';
 import { describe, expect, it } from 'vitest';
+import { PROP } from '@sslm/canonical';
 import { LdAuthError, LdWriteError } from '@sslm/ld-client';
 import { planReset, planSize, resetProject } from './reset.ts';
+
+const OURS = ['migrated-from-statsig'];
+/** A flag the console created: the migrated tag plus the provenance properties. */
+const ourFlag = (key: string, name?: string) => ({ key, ...(name ? { name } : {}), tags: OURS, customProperties: { [PROP.id]: { value: [key] }, [PROP.source]: { value: ['web'] } } });
 
 type Client = Parameters<typeof resetProject>[0];
 
@@ -14,7 +19,7 @@ function fakeProject(onDelete?: (key: string, n: number) => void, projectKey = '
     listEnvironments: async () => [{ _id: '1', key: 'test', name: 'Test', color: 'fff', tags: [] } as never],
     listExperiments: async () => [],
     patchExperimentSemantic: async () => ({ key: 'x', name: 'x' }) as never,
-    listFlags: async () => [...flags].map((key) => ({ key, name: key }) as never),
+    listFlags: async () => [...flags].map((key) => ourFlag(key, key) as never),
     deleteFlag: async (_p, key) => {
       flags.delete(key);
       deleted.push(key);
@@ -32,7 +37,7 @@ function fakeProject(onDelete?: (key: string, n: number) => void, projectKey = '
 }
 
 describe('planReset', () => {
-  it('lists everything the reset will touch, and writes nothing', async () => {
+  it('lists what the console created, counts the rest as kept, and writes nothing', async () => {
     const writes: string[] = [];
     const client: Client = {
       getProject: async () => ({ _id: '1', key: 'shop', name: 'Shop' }) as never,
@@ -41,17 +46,29 @@ describe('planReset', () => {
         { _id: '2', key: 'staging', name: 'Staging', tags: ['migrated-from-statsig'] },
         { _id: '3', key: 'qa', name: 'QA', tags: ['statsig-migrated'] },
       ] as never,
-      listFlags: async () => [{ key: 'f1', name: 'Flag one' }, { key: 'f2' }] as never,
-      listSegments: async (_p, env) => (env === 'production' ? ([{ key: 'beta', name: 'Beta users' }] as never) : []),
-      listMetrics: async () => [{ key: 'm1', name: 'Checkout' }] as never,
+      // Ours (tag + provenance), a customer's own flag, a tagged flag without provenance, and an archived one of ours.
+      listFlags: async (_p, opts) => {
+        expect(opts?.includeArchived).toBe(true);
+        return [ourFlag('f1', 'Flag one'), { key: 'hand_made', name: 'Theirs', tags: [] }, { key: 'tag_only', tags: OURS, customProperties: {} }, ourFlag('f2')] as never;
+      },
+      listSegments: async (_p, env) => (env === 'production' ? ([{ key: 'beta', name: 'Beta users', tags: OURS }, { key: 'vip', name: 'Their VIPs', tags: ['team-growth'] }] as never) : []),
+      listMetrics: async () => [{ key: 'm1', name: 'Checkout', tags: OURS }, { key: 'revenue', name: 'Their revenue', tags: [] }] as never,
       listExperiments: async (_p, env) =>
         env === 'production'
           ? ([
-              { key: 'x1', name: 'Running one', currentIteration: { status: 'running', treatments: [{ _id: 't1' }] } },
-              { key: 'x2', name: 'Archived one', archivedDate: 1 },
+              { key: 'x1', name: 'Running one', tags: OURS, currentIteration: { status: 'running', treatments: [{ _id: 't1' }] } },
+              { key: 'x2', name: 'Archived one', tags: OURS, archivedDate: 1 },
+              { key: 'x3', name: 'Their experiment', tags: [], currentIteration: { status: 'running', treatments: [{ _id: 't9' }] } },
             ] as never)
           : [],
-      listContextKinds: async () => ({ items: [{ key: 'user' }, { key: 'org', name: 'Organization' }, { key: 'old', archived: true }] }),
+      listContextKinds: async () => ({
+        items: [
+          { key: 'user' },
+          { key: 'org', name: 'Organization', description: 'StatSig unit type orgID (created by the LaunchDarkly Migration Console).' },
+          { key: 'account', name: 'Account', description: 'Billing account' },
+          { key: 'old', archived: true, description: 'StatSig unit type x (created by the LaunchDarkly Migration Console).' },
+        ],
+      }),
       deleteFlag: async (...a) => void writes.push(a.join(' ')),
       deleteSegment: async (...a) => void writes.push(a.join(' ')),
       deleteMetric: async (...a) => void writes.push(a.join(' ')),
@@ -70,7 +87,11 @@ describe('planReset', () => {
       experiments: [{ env: 'production', key: 'x1', name: 'Running one', running: true, winningTreatmentId: 't1' }],
       contextKinds: [{ key: 'org', name: 'Organization' }],
       unreadable: [],
+      kept: { flags: 2, segments: 1, metrics: 1, experiments: 1, contextKinds: 1 },
     });
+    // A customer's own flag is never in the plan, whatever else the project holds.
+    expect(plan.flags.map((f) => f.key)).not.toContain('hand_made');
+    expect(plan.flags.map((f) => f.key)).not.toContain('tag_only');
     // Both migrated tags count as ours; LD's own environment is kept.
     expect(plan.environments).toEqual([
       { key: 'production', name: 'Production', action: 'keep', reason: 'not created by this console' },

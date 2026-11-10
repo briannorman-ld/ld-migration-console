@@ -129,6 +129,15 @@ describe('config-spec adapter against real StatSig SDK fixtures', () => {
     expect(parsed.version).toBe(2);
   });
 
+  it('drops the project’s client SDK keys from the parsed spec, so they never reach IndexedDB', async () => {
+    const raw = JSON.parse(readFileSync(DIR + 'v2/dcs_target_app_filtering.json', 'utf8')) as Record<string, unknown>;
+    expect(raw.sdk_keys_to_app_ids).toBeDefined();
+    const spec = await load('v2/dcs_target_app_filtering.json');
+    expect(spec.json.sdk_keys_to_app_ids).toBeUndefined();
+    expect(spec.json.hashed_sdk_keys_to_app_ids).toBeUndefined();
+    expect(classifySpec({ feature_gates: [], sdk_keys_to_app_ids: { 'client-abc': 'app' }, hashed_sdk_keys_to_app_ids: { x: 'app' } }).json).toEqual({ feature_gates: [] });
+  });
+
   it('warns when the key was scoped to a target app', async () => {
     const snap = await normalize('v2/dcs_target_app_filtering.json');
     expect(snap.warnings.some((w) => w.code === 'partial_spec')).toBe(true);

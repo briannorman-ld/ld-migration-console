@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { alertsSince, funnel, ldChange, ldVersionsAtSync, lifecycleOf, monitorRows, pruneSamples, shouldSample, statsigZeroSince, statusCsv, statusMarkdown, type LdFlagInfo, type MonitorSample, type MonitoredItem } from '../src/index.ts';
+import { alertsSince, csvCell, funnel, ldChange, ldVersionsAtSync, lifecycleOf, monitorRows, pruneSamples, shouldSample, statsigZeroSince, statusCsv, statusMarkdown, type LdFlagInfo, type MonitorSample, type MonitoredItem } from '../src/index.ts';
 
 const NOW = '2026-10-23T12:00:00.000Z';
 const SYNCED = '2026-10-15T09:00:00.000Z';
@@ -198,6 +198,21 @@ describe('ldVersionsAtSync', () => {
       { steps: [{ status: 'done', ldVersion: 4, step: { op: 'update_flag_env', key: 'a', ldEnv: 'test' } }, { status: 'failed', ldVersion: 2, step: { op: 'update_flag_env', key: 'b', ldEnv: 'test' } }] },
     ];
     expect(ldVersionsAtSync(runs)).toEqual({ 'a|test': 9 });
+  });
+});
+
+describe('csvCell', () => {
+  it('quotes, doubles quotes, and defuses a leading formula trigger (CSV injection)', () => {
+    expect(csvCell('plain')).toBe('"plain"');
+    expect(csvCell('say "hi"')).toBe('"say ""hi"""');
+    expect(csvCell('=HYPERLINK("https://evil.example","x")')).toBe(`"'=HYPERLINK(""https://evil.example"",""x"")"`);
+    expect(csvCell("+cmd|' /C calc'!A0")).toBe(`"'+cmd|' /C calc'!A0"`);
+    expect(csvCell('@SUM(A1)')).toBe(`"'@SUM(A1)"`);
+    expect(csvCell('\tlead')).toBe(`"'\tlead"`);
+    // Numbers, negative ones included, are left as numbers.
+    expect(csvCell(-3)).toBe('"-3"');
+    expect(csvCell('-2.5')).toBe('"-2.5"');
+    expect(csvCell(undefined)).toBe('""');
   });
 });
 

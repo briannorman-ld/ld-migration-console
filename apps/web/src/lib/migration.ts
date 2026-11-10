@@ -40,6 +40,7 @@ import {
   type Plan,
   type PlanMappers,
 } from "@sslm/planner";
+import { csvCell } from "@sslm/monitoring";
 import { STATSIG_CONSOLE_BASE_URL, StatsigConsoleClient } from "@sslm/statsig-client";
 import type { SourceRecord, RunJournalRecord } from "@sslm/store";
 import { demoKey, startDemoMock } from "./demo.ts";
@@ -102,6 +103,8 @@ export function ldFlagState(f: LdFlagSummary): LdFlagState {
     kind: f.kind ?? null,
     archived: f.archived ?? null,
     ...(f.variations ? { variations: f.variations.map((v) => ({ value: v.value, name: v.name ?? null })) } : {}),
+    // Per-environment version and modification time: the planner's ld_drift_on_sync guard.
+    environments: f.environments ?? null,
   };
 }
 
@@ -918,7 +921,6 @@ export function decisionLogMarkdown(
 }
 
 export function decisionLogCsv(items: DecisionInstance[]): string {
-  const esc = (v: string) => `"${v.replace(/"/g, '""')}"`;
   const header = [
     "type",
     "severity",
@@ -940,7 +942,7 @@ export function decisionLogCsv(items: DecisionInstance[]): string {
       i.resolvedWith?.optionKey ?? "",
       i.resolvedWith?.via ?? "",
     ]
-      .map(esc)
+      .map(csvCell)
       .join(","),
   );
   return [header.join(","), ...lines].join("\n") + "\n";

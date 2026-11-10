@@ -53,6 +53,13 @@ export const sourceTag = (alias: string): string => sanitizeTag(`${SOURCE_PREFIX
 export const isMigratedTag = (tag: string): boolean => tag.startsWith(MIGRATED_PREFIX) || tag === LEGACY_TAG_MIGRATED;
 /** True when the tag list marks a resource as created by the console (any source kind). */
 export const hasMigratedTag = (tags: readonly string[]): boolean => tags.some(isMigratedTag);
+
+/**
+ * Context kinds carry no tags or custom properties, so the one the console creates is marked in
+ * its description (written by the executor, read by the project reset so it archives only those).
+ */
+export const CONSOLE_CREATED_MARKER = 'created by the LaunchDarkly Migration Console';
+export const createdByConsole = (description: string | null | undefined): boolean => !!description && description.includes(CONSOLE_CREATED_MARKER);
 /** True when the tag list says the resource came from the attached source `alias`. */
 export const hasSourceTag = (tags: readonly string[], alias: string): boolean =>
   tags.includes(sourceTag(alias)) || tags.includes(sanitizeTag(`${LEGACY_SOURCE_PREFIX}${alias}`));

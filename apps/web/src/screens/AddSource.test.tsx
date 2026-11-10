@@ -105,6 +105,9 @@ describe('AddSource', () => {
     expect(screen.getByRole('button', { name: 'Add source' })).toHaveProperty('disabled', true);
 
     fireEvent.change(screen.getByLabelText(/Access token/), { target: { value: 'api-reader-token' } });
+    // Typing sends nothing; the token goes to the API only when the projects are listed.
+    expect(listProjects).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'List projects' }));
     await waitFor(() => expect(listProjects).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(picker.disabled).toBe(false));
     expect(picker.placeholder).toBe('Search 2 projects…');
@@ -129,9 +132,23 @@ describe('AddSource', () => {
     render(<AddSource workspaceId="w1" onDone={() => undefined} />);
     fireEvent.click(screen.getByRole('button', { name: 'LaunchDarkly project' }));
     fireEvent.change(screen.getByLabelText(/Access token/), { target: { value: 'api-reader-token' } });
+    fireEvent.click(screen.getByRole('button', { name: 'List projects' }));
     const picker = screen.getByLabelText('Project to read') as HTMLInputElement;
     await waitFor(() => expect(picker.value).toContain('Legacy Storefront'));
     expect(screen.getByRole('button', { name: 'Add source' })).toHaveProperty('disabled', false);
+  });
+
+  it('forgets the listing when the instance changes, so the token is not re-sent elsewhere by itself', async () => {
+    render(<AddSource workspaceId="w1" onDone={() => undefined} />);
+    fireEvent.click(screen.getByRole('button', { name: 'LaunchDarkly project' }));
+    fireEvent.change(screen.getByLabelText(/Access token/), { target: { value: 'api-reader-token' } });
+    fireEvent.click(screen.getByRole('button', { name: 'List projects' }));
+    const picker = screen.getByLabelText('Project to read') as HTMLInputElement;
+    await waitFor(() => expect(picker.disabled).toBe(false));
+    fireEvent.change(screen.getByLabelText('Instance'), { target: { value: 'eu' } });
+    expect(picker.disabled).toBe(true);
+    expect(listProjects).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(/EU instance/)).toBeTruthy();
   });
 
   it('shows why a token could not list projects', async () => {
@@ -139,6 +156,7 @@ describe('AddSource', () => {
     render(<AddSource workspaceId="w1" onDone={() => undefined} />);
     fireEvent.click(screen.getByRole('button', { name: 'LaunchDarkly project' }));
     fireEvent.change(screen.getByLabelText(/Access token/), { target: { value: 'api-bad-token' } });
+    fireEvent.click(screen.getByRole('button', { name: 'List projects' }));
     await screen.findByText('LaunchDarkly rejected the token (401).');
     expect(screen.getByRole('button', { name: 'Add source' })).toHaveProperty('disabled', true);
   });

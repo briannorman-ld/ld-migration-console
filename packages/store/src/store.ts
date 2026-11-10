@@ -27,6 +27,9 @@ import type { VaultBlob } from "./vault.ts";
 const SECRET_KEYS =
   /^(token|apiKey|api_key|statsigApiKey|consoleKey|clientKey|ldToken|accessToken|authorization|secret|password|sdkKey|mobileKey)$/i;
 
+/** DCS fields holding the StatSig project's client SDK keys; kept in step with SPEC_SECRET_FIELDS in @sslm/adapters. */
+const SPEC_SDK_KEY_FIELDS = ["sdk_keys_to_app_ids", "hashed_sdk_keys_to_app_ids"] as const;
+
 export class SecretInStoreError extends Error {
   constructor(path: string) {
     super(
@@ -83,6 +86,8 @@ export class WorkspaceStore {
     name: string;
     isDemo?: boolean;
     ld?: WorkspaceRecord["ld"];
+    /** See WorkspaceRecord.tokenStorage; the app passes `memory` on a shared web origin. */
+    tokenStorage?: WorkspaceRecord["tokenStorage"];
   }): Promise<WorkspaceRecord> {
     const name = input.name.trim();
     const ws: WorkspaceRecord = {
@@ -92,6 +97,7 @@ export class WorkspaceStore {
       createdAt: now(),
       updatedAt: now(),
       ...(input.ld ? { ld: input.ld } : {}),
+      ...(input.tokenStorage ? { tokenStorage: input.tokenStorage } : {}),
     };
     assertNoSecrets(ws);
     await this.db.transaction("rw", this.db.workspaces, async () => {
@@ -344,6 +350,14 @@ export class WorkspaceStore {
   async saveSpecUpload(
     rec: Omit<SpecUploadRecord, "id" | "uploadedAt">,
   ): Promise<SpecUploadRecord> {
+    // The raw spec holds customer config values (keys like "token" are legitimate there), so it
+    // is not walked by assertNoSecrets; only the top-level fields that carry the project's own
+    // SDK keys are refused. The parser deletes them (SPEC_SECRET_FIELDS in @sslm/adapters).
+    if (rec.json && typeof rec.json === "object" && !Array.isArray(rec.json)) {
+      for (const k of SPEC_SDK_KEY_FIELDS)
+        if ((rec.json as Record<string, unknown>)[k] !== undefined)
+          throw new SecretInStoreError(`$.json.${k}`);
+    }
     const full: SpecUploadRecord = {
       ...rec,
       id: crypto.randomUUID(),

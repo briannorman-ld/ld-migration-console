@@ -7,7 +7,7 @@
  * baseline live in the browser (PLAN §3.3 item 2).
  */
 import type { Fidelity } from '@sslm/mapper';
-import type { LdFlagState, MigrationStatus } from '@sslm/planner';
+import type { LdFlagEnvInfo, LdFlagState, MigrationStatus } from '@sslm/planner';
 
 /**
  * Drift per (flag, environment).
@@ -48,12 +48,7 @@ export interface MonitoredItem {
   checksPerHour?: number | null;
 }
 
-export interface LdFlagEnvInfo {
-  on?: boolean | null;
-  version?: number | null;
-  /** Epoch milliseconds. */
-  lastModified?: number | null;
-}
+export type { LdFlagEnvInfo };
 
 /** What monitoring needs from an LD flag: the planner's state plus per-environment versions. */
 export interface LdFlagInfo extends LdFlagState {

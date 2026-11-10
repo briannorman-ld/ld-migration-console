@@ -442,3 +442,12 @@ describe("snapshots: payloads kept apart", () => {
     expect((await s.latestSnapshot("web"))?.canonical).toEqual(canonical);
   });
 });
+
+describe("saveSpecUpload", () => {
+  it("refuses a raw spec that still carries the project's SDK keys", async () => {
+    const s = store();
+    const base = { workspaceId: "w", sourceId: "s", filename: "spec.json", bytes: 1, version: 2 as const, snapshotId: "snap" };
+    await expect(s.saveSpecUpload({ ...base, json: { feature_gates: [], sdk_keys_to_app_ids: { "client-abc": "app" } } })).rejects.toBeInstanceOf(SecretInStoreError);
+    await expect(s.saveSpecUpload({ ...base, json: { feature_gates: [] } })).resolves.toMatchObject({ filename: "spec.json" });
+  });
+});

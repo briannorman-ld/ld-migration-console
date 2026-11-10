@@ -6,6 +6,7 @@
  */
 import { hasMigratedTag, hasSourceTag, migrationKindOf, readFlagProvenance, readSync, stableStringify, syncedEnvsOf, syncPropertyKey, type Autotune, type CanonicalSnapshot, type Config, type Gate, type MigrationSourceKind, type NeutralFlag, type Prompt } from '@sslm/canonical';
 import { gateById, neutralFlagByKey, neutralSegmentByKey, segmentById } from '@sslm/mapper';
+import { ldChange, type LdFlagEnvInfo } from './drift.ts';
 import {
   decisionPoint,
   lookupResolution,
@@ -47,6 +48,8 @@ export interface LdFlagState {
   archived?: boolean | null;
   /** The flag's variations, when the LD read included them (append-only guard, PLAN §7). */
   variations?: { value: unknown; name?: string | null }[] | null;
+  /** Per-environment version and modification time, when the LD read included them: the `ld_drift_on_sync` guard (PLAN §8.3). */
+  environments?: Record<string, LdFlagEnvInfo> | null;
 }
 
 export interface LdSegmentState {
@@ -178,6 +181,8 @@ export type PlanStep =
       variations: unknown[];
       desired: DesiredFlagEnv;
       provenance: Provenance;
+      /** The user chose to overwrite targeting edited in LaunchDarkly since the last sync (`ld_drift_on_sync`); without it the executor refuses to write over such an edit. */
+      overwriteLdChanges?: boolean;
     };
 
 export type ItemStatus = 'ready' | 'blocked' | 'skipped' | 'error';
@@ -307,6 +312,38 @@ export function planMigration(req: PlanRequest): Plan {
     });
     const l = lookupResolution(dp, req.resolutions, req.profile);
     if (l.status === 'resolved') return l.optionKey === 'adopt' ? 'adopt' : 'skip';
+    addDecisions(item, [dp], l.stale ? [{ decision: dp, previous: l.stale }] : []);
+    return 'open';
+  };
+
+  /**
+   * Someone changed the flag's targeting in LaunchDarkly after the last sync (PLAN §8.3
+   * `ld_drift_on_sync`). Writing the source's targeting again would revert their edit, so the
+   * item is blocked until the user says which side wins. The fingerprint carries the modification
+   * time, so a further LaunchDarkly edit asks again.
+   */
+  const drift = (item: PlanItem, subject: DecisionPoint['subject'], ldFlag: LdFlagState | undefined, ldEnv: string): 'overwrite' | 'keep' | 'open' | 'none' => {
+    if (!ldFlag) return 'none';
+    const sync = readSync(ldFlag.customProperties, ldEnv);
+    const env = ldFlag.environments?.[ldEnv];
+    const change = ldChange(env, sync?.[2] ?? undefined);
+    if (!change.changed) return 'none';
+    const dp = decisionPoint({
+      type: 'ld_drift_on_sync',
+      severity: 'blocking',
+      subject: { ...subject, location: ldEnv },
+      path: `drift:${ldFlag.key}:${ldEnv}`,
+      title: `LaunchDarkly targeting for “${ldFlag.key}” in ${ldEnv} changed since the last sync`,
+      explanation: `Someone edited this flag's targeting in LaunchDarkly after the console synced it (${change.evidence}). Syncing again would replace that edit with the source's targeting.`,
+      sourceFragment: { key: ldFlag.key, ldEnv, lastModified: env?.lastModified ?? null, version: env?.version ?? null },
+      options: [
+        { key: 'keep_ld', label: 'Keep LaunchDarkly’s targeting (skip this environment)', explanation: 'Nothing is written for this environment on this run. Monitoring keeps showing the item as changed in LaunchDarkly.', resultingFidelity: 'skipped' },
+        { key: 'overwrite', label: 'Overwrite with the source’s targeting', explanation: 'The LaunchDarkly edit is replaced. The state before the write is kept so the run can be undone.', resultingFidelity: 'full' },
+      ],
+      recommended: 'keep_ld',
+    });
+    const l = lookupResolution(dp, req.resolutions, req.profile);
+    if (l.status === 'resolved') return l.optionKey === 'overwrite' ? 'overwrite' : 'keep';
     addDecisions(item, [dp], l.stale ? [{ decision: dp, previous: l.stale }] : []);
     return 'open';
   };
@@ -475,6 +512,9 @@ export function planMigration(req: PlanRequest): Plan {
 
     item.sync = migrationStatus(ldFlag, ldEnv, r).status;
     if (req.skipInSync && item.sync === 'in_sync') return finishItem(item, 'skipped', IN_SYNC_REASON);
+    const ldDrift = drift(item, { sourceId: gate.source.sourceId, kind: 'gate', uid: gate.uid, id: gate.id }, ldFlag, ldEnv);
+    if (ldDrift === 'keep') return finishItem(item, 'skipped', `LaunchDarkly targeting in ${ldEnv} changed since the last sync and is kept`);
+    if (ldDrift === 'open') return finishItem(item, 'blocked', `LaunchDarkly targeting in ${ldEnv} changed since the last sync`);
 
     // Dependencies in the same environment.
     const depSteps: string[] = ensureKinds(r.dependencies);
@@ -511,6 +551,7 @@ export function planMigration(req: PlanRequest): Plan {
       deps: [shellId, ...depSteps],
       op: 'update_flag_env',
       key: r.flagKey,
+      ...(ldDrift === 'overwrite' ? { overwriteLdChanges: true } : {}),
       ldEnv,
       statsigEnv,
       variations: r.shell.variations.map((v) => v.value),
@@ -596,6 +637,9 @@ export function planMigration(req: PlanRequest): Plan {
 
     item.sync = migrationStatus(ldFlag, ldEnv, r).status;
     if (req.skipInSync && item.sync === 'in_sync') return void finishItem(item, 'skipped', IN_SYNC_REASON);
+    const ldDrift = drift(item, { sourceId: config.source.sourceId, kind: 'config', uid: config.uid, id: config.id }, ldFlag, ldEnv);
+    if (ldDrift === 'keep') return void finishItem(item, 'skipped', `LaunchDarkly targeting in ${ldEnv} changed since the last sync and is kept`);
+    if (ldDrift === 'open') return void finishItem(item, 'blocked', `LaunchDarkly targeting in ${ldEnv} changed since the last sync`);
 
     // Dependencies in the same environment.
     const depSteps: string[] = ensureKinds(r.dependencies);
@@ -632,6 +676,7 @@ export function planMigration(req: PlanRequest): Plan {
       deps: [shellId, ...depSteps],
       op: 'update_flag_env',
       key: r.flagKey,
+      ...(ldDrift === 'overwrite' ? { overwriteLdChanges: true } : {}),
       ldEnv,
       statsigEnv,
       variations: r.shell.variations.map((v) => v.value),
@@ -744,6 +789,9 @@ export function planMigration(req: PlanRequest): Plan {
 
     item.sync = migrationStatus(ldFlag, ldEnv, r).status;
     if (req.skipInSync && item.sync === 'in_sync') return void finishItem(item, 'skipped', IN_SYNC_REASON);
+    const ldDrift = drift(item, { sourceId: a.source.sourceId, kind: 'autotune', uid: a.uid, id: a.id }, ldFlag, ldEnv);
+    if (ldDrift === 'keep') return void finishItem(item, 'skipped', `LaunchDarkly targeting in ${ldEnv} changed since the last sync and is kept`);
+    if (ldDrift === 'open') return void finishItem(item, 'blocked', `LaunchDarkly targeting in ${ldEnv} changed since the last sync`);
 
     const depSteps: string[] = ensureKinds(r.dependencies);
     const depProblems: string[] = [];
@@ -781,7 +829,7 @@ export function planMigration(req: PlanRequest): Plan {
     const shellId = `shell:${r.flagKey}`;
     if (!steps.has(shellId)) steps.set(shellId, { id: shellId, deps: [], op: 'upsert_flag_shell', key: r.flagKey, exists: !!ldFlag, adopt, desired: r.shell });
     const envId = `env:${ldEnv}:${r.flagKey}`;
-    steps.set(envId, { id: envId, deps: [shellId, ...depSteps.filter((d) => d.startsWith('context_kind:'))], op: 'update_flag_env', key: r.flagKey, ldEnv, statsigEnv, variations: r.shell.variations.map((v) => v.value), desired: r.env, provenance });
+    steps.set(envId, { id: envId, deps: [shellId, ...depSteps.filter((d) => d.startsWith('context_kind:'))], op: 'update_flag_env', key: r.flagKey, ldEnv, statsigEnv, variations: r.shell.variations.map((v) => v.value), desired: r.env, provenance, ...(ldDrift === 'overwrite' ? { overwriteLdChanges: true } : {}) });
     if (r.bandit) {
       const banditId = `bandit:${ldEnv}:${r.bandit.key}`;
       steps.set(banditId, { id: banditId, deps: [envId, ...depSteps], op: 'create_bandit', key: r.bandit.key, ldEnv, statsigEnv, flagKey: r.flagKey, exists: banditExists, adopt: banditAdopt, desired: r.bandit, provenance });
@@ -893,6 +941,9 @@ export function planMigration(req: PlanRequest): Plan {
 
     item.sync = migrationStatus(ldFlag, ldEnv, r).status;
     if (req.skipInSync && item.sync === 'in_sync') return finishItem(item, 'skipped', IN_SYNC_REASON);
+    const ldDrift = drift(item, { sourceId: snapshot.source.sourceId, kind: 'flag', uid: flag.uid, id: flag.key }, ldFlag, ldEnv);
+    if (ldDrift === 'keep') return finishItem(item, 'skipped', `LaunchDarkly targeting in ${ldEnv} changed since the last sync and is kept`);
+    if (ldDrift === 'open') return finishItem(item, 'blocked', `LaunchDarkly targeting in ${ldEnv} changed since the last sync`);
 
     const depSteps: string[] = ensureKinds(r.dependencies, migrationKindOf(snapshot.source.sourceKind));
     const depProblems: string[] = [];
@@ -927,6 +978,7 @@ export function planMigration(req: PlanRequest): Plan {
       deps: [shellId, ...depSteps],
       op: 'update_flag_env',
       key: r.flagKey,
+      ...(ldDrift === 'overwrite' ? { overwriteLdChanges: true } : {}),
       ldEnv,
       statsigEnv: sourceEnv,
       variations: r.shell.variations.map((v) => v.value),

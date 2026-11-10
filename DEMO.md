@@ -11,7 +11,7 @@ only what you confirm; nothing is written to LaunchDarkly until you click a Migr
 
 ## Before the demo
 
-- Open the deployed site, `https://briannorman-ld.github.io/ld-migration-console/` (GitHub Pages
+- Open the deployed site, `https://briannorman-ld.github.io/ld-migration-console/` (GitHub Pages; a demo-only origin: every Pages site of that account shares it, so the app keeps tokens in memory only there and says so on the start screen. Customer use needs an origin of its own, such as the Vercel deployment. GitHub Pages
   publishes `main` on every push), or run `pnpm dev` and open http://localhost:5173. Rehearse on
   the same URL you will present from, and stop pushing to `main` once you have.
 - Have a LaunchDarkly access token for the `statsig-migration` project at hand. It is held in
