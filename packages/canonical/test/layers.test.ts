@@ -122,9 +122,29 @@ describe('layerReport', () => {
   it('keeps experiments whose layer or gate is missing from the snapshot, and names the gap', () => {
     const orphan = report.unlayered.experiments.find((x) => x.experiment.id === 'orphan')!;
     expect(orphan.missingLayerId).toBe('layer_not_synced');
-    expect(orphan.targeting.gate).toMatchObject({ id: 'gate_not_synced', found: false });
-    expect(orphan.targeting.text).toBe('gate gate_not_synced (not in this snapshot)');
+    expect(orphan.targeting.gate).toMatchObject({ id: 'gate_not_synced', found: false, missing: 'not_found' });
+    expect(orphan.targeting.text).toBe('gate gate_not_synced (not in this snapshot: not found in StatSig: deleted or renamed)');
+    expect(orphan.reason).toContain('Its targeting gate gate_not_synced must be in the snapshot before it can be drafted');
+    expect(report.missingGates).toEqual({ reason: 'not_found', experimentIds: ['orphan'], gateIds: ['gate_not_synced'] });
     expect(row('retired_layer').unknownExperimentIds).toEqual(['ghost_experiment']);
+  });
+
+  it('tells apart a gate outside the crawl scope, a gate list that was not read, and a gate StatSig does not have', () => {
+    const scoped = layerReport(snapshot(), { scope: ['experiment', 'layer'] });
+    expect(scoped.missingGates!.reason).toBe('out_of_scope');
+    // Gates in scope but not read: the gate list fell back to empty with a warning.
+    const s = snapshot();
+    s.gates = [];
+    s.warnings.push({ code: 'fetch_skipped', path: '/gates', message: 'HTTP 500' });
+    const unread = layerReport(s, { scope: ['gate', 'experiment', 'layer'] });
+    expect(unread.missingGates).toEqual({ reason: 'not_read', experimentIds: ['search_v3', 'orphan'], gateIds: ['us_only', 'gate_not_synced'] });
+    expect(unread.unlayered.experiments.find((x) => x.experiment.id === 'search_v3')!.targeting.text).toContain('the gate list could not be read in this sync');
+    // Everything resolved: no banner.
+    const clean = snapshot();
+    clean.experiments = clean.experiments.filter((e) => e.id !== 'orphan');
+    expect(layerReport(clean).missingGates).toBeNull();
+    expect(layerReportMarkdown(scoped)).toContain('**1 experiment target 1 gate not in this snapshot** (gates are outside this source’s crawl scope): `gate_not_synced`. Add gates to the source’s scope');
+    expect(layerReportMarkdown(layerReport(clean))).not.toContain('not in this snapshot**');
   });
 
   it('totals count archived items apart and skippable ones together', () => {
@@ -213,6 +233,7 @@ describe('layerReportMarkdown', () => {
     const loose = doc.slice(doc.indexOf('## Not in a layer'), doc.indexOf('## Archived layers'));
     expect(loose).toContain('| `search_v3` | active | 50% | userID | gate us_only: country any [US] · rule: email str_contains_any [@acme.com] (50% pass) · 2 forced IDs | Wait until it ends |');
     expect(loose).toContain('`orphan` (layer `layer_not_synced` not synced)');
+    expect(loose).toContain('gate gate_not_synced (not in this snapshot: not found in StatSig: deleted or renamed)');
     expect(doc).not.toContain('**Default parameters**\n\n**Experiments**');
   });
 

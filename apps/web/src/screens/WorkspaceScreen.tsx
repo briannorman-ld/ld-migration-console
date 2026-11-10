@@ -883,6 +883,12 @@ export function WorkspaceScreen({
                 sources={visible}
                 snapshots={snapshots ?? {}}
                 onOpenCoverage={(focus) => setView({ kind: "coverage", focus })}
+                onIncludeGates={async (s) => {
+                  // Gates reference segments, so a scope that gains gates gains segments too (model.ts).
+                  const resources = [...new Set([...(s.resources ?? []), "gate" as const, "segment" as const])];
+                  await store.setSourceScope(s.id, resources);
+                  await runSync({ ...s, resources });
+                }}
               />
             ) : (
               <EntityList

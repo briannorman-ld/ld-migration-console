@@ -8,6 +8,8 @@ import {
   layerReport,
   layerReportCsv,
   layerReportMarkdown,
+  MISSING_GATE_ADVICE,
+  MISSING_GATE_LABEL,
   sortLayerRows,
   type CanonicalSnapshot,
   type ExperimentFate,
@@ -21,7 +23,7 @@ import type { SourceRecord } from '@sslm/store';
 import { MappingExplainer } from '../components/MappingExplainer.tsx';
 import { PagerBar, usePager } from '../components/Pager.tsx';
 import { Value } from '../components/Targeting.tsx';
-import { Badge, Button, cx, Input, Select, type Tone } from '../components/ui.tsx';
+import { Badge, Button, Callout, cx, Input, Select, type Tone } from '../components/ui.tsx';
 import { download } from '../lib/migration.ts';
 
 /**
@@ -48,11 +50,14 @@ export function LayersReport({
   sources,
   snapshots,
   onOpenCoverage,
+  onIncludeGates,
 }: {
   sources: SourceRecord[];
   snapshots: Record<string, CanonicalSnapshot | undefined>;
   /** Opens the "What migrates" page at a coverage row. */
   onOpenCoverage?: (focus: string) => void;
+  /** Adds gates to a source's crawl scope and syncs it, for experiments whose targeting gate was never read. */
+  onIncludeGates?: (source: SourceRecord) => void;
 }) {
   const [q, setQ] = useState('');
   const [sort, setSort] = useState<LayerSortKey>('experiments');
@@ -62,7 +67,7 @@ export function LayersReport({
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [allOpen, setAllOpen] = useState(false);
 
-  const reports = useMemo(() => sources.flatMap((s) => (snapshots[s.id] ? [{ s, report: layerReport(snapshots[s.id]!) }] : [])), [sources, snapshots]);
+  const reports = useMemo(() => sources.flatMap((s) => (snapshots[s.id] ? [{ s, report: layerReport(snapshots[s.id]!, s.resources ? { scope: s.resources } : {}) }] : [])), [sources, snapshots]);
   const totals = useMemo(() => {
     const t: LayerReport['totals'] = { layers: 0, archivedLayers: 0, implicitLayers: 0, skippableLayers: 0, experiments: 0, archivedExperiments: 0, runningExperiments: 0, skippableExperiments: 0 };
     for (const { report } of reports) for (const k of Object.keys(t) as (keyof typeof t)[]) t[k] += report.totals[k];
@@ -192,6 +197,27 @@ export function LayersReport({
         </Button>
       </div>
       <MappingExplainer resource="layer" onOpenCoverage={onOpenCoverage} className="mb-3" />
+      {reports
+        .filter(({ report }) => report.missingGates)
+        .map(({ s, report }) => {
+          const m = report.missingGates!;
+          return (
+            <div key={s.id} className="mb-3">
+              <Callout tone="amber">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                  <span>
+                    {sources.length > 1 && <Badge>{s.alias}</Badge>} <b>{m.experimentIds.length.toLocaleString()}</b> {m.experimentIds.length === 1 ? 'experiment targets a gate' : `experiments target ${m.gateIds.length.toLocaleString()} ${m.gateIds.length === 1 ? 'gate' : 'gates'}`} not in this snapshot: {MISSING_GATE_LABEL[m.reason]}. {MISSING_GATE_ADVICE[m.reason]}
+                  </span>
+                  {m.reason === 'out_of_scope' && onIncludeGates && (
+                    <Button variant="secondary" className="py-1 text-xs" onClick={() => onIncludeGates(s)}>
+                      Include gates and sync
+                    </Button>
+                  )}
+                </div>
+              </Callout>
+            </div>
+          );
+        })}
 
       <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
         {card('Layers', String(totals.layers), `${totals.implicitLayers} implicit · ${totals.archivedLayers} archived`)}
@@ -389,7 +415,16 @@ function ExperimentRow({ x, inLayer }: { x: LayerReportExperiment; inLayer: bool
             {t.gate && (
               <div>
                 gate <span className="font-mono">{t.gate.id}</span>
-                {!t.gate.found ? <span className="text-fg-muted"> (not in this snapshot)</span> : t.gate.archived ? <Badge tone="amber">gate archived</Badge> : !t.gate.enabled ? <Badge tone="amber">gate disabled</Badge> : null}
+                {!t.gate.found ? (
+                  <span className="text-fg-muted" title={MISSING_GATE_LABEL[t.gate.missing ?? 'not_found']}>
+                    {' '}
+                    (not in this snapshot: {MISSING_GATE_LABEL[t.gate.missing ?? 'not_found']})
+                  </span>
+                ) : t.gate.archived ? (
+                  <Badge tone="amber">gate archived</Badge>
+                ) : !t.gate.enabled ? (
+                  <Badge tone="amber">gate disabled</Badge>
+                ) : null}
                 {t.gate.rules.length > 0 && <div className="text-fg-muted">{t.gate.rules.join('; ')}</div>}
               </div>
             )}

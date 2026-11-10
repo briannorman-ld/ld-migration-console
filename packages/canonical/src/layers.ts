@@ -1,4 +1,4 @@
-import type { CanonicalSnapshot, Condition, Experiment, Gate, Layer, Rule } from './model.ts';
+import type { CanonicalSnapshot, Condition, EntityKind, Experiment, Gate, Layer, Rule } from './model.ts';
 
 /**
  * The layers and experiments report (Layers page): which experiments sit in which layer, what
@@ -33,9 +33,16 @@ export type LayerFate =
   /** Archived: never migrated. */
   | 'never';
 
+/**
+ * Why a targeting gate an experiment names is not in the snapshot: gates were left out of the
+ * source's crawl scope, the gate list could not be read in this sync (a `fetch_skipped` warning),
+ * or the Console API did list gates and this one was not among them (deleted or renamed).
+ */
+export type MissingGateReason = 'out_of_scope' | 'not_read' | 'not_found';
+
 export interface ExperimentTargetingSummary {
   /** The targeting gate, resolved against the snapshot when it is there. */
-  gate: { id: string; found: boolean; archived: boolean; enabled: boolean; rules: string[] } | null;
+  gate: { id: string; found: boolean; archived: boolean; enabled: boolean; rules: string[]; missing?: MissingGateReason } | null;
   /** Inline targeting rules (Console `inlineTargetingRules`), one line each. */
   inlineRules: string[];
   /** Forced-group overrides: how many IDs. */
@@ -102,17 +109,25 @@ export interface LayerReport {
   rows: LayerReportRow[];
   unlayered: LayerReportRow;
   totals: LayerReportTotals;
+  /** Non-archived experiments whose targeting gate is not in the snapshot, and why. Empty when every gate resolved. */
+  missingGates: { reason: MissingGateReason; experimentIds: string[]; gateIds: string[] } | null;
 }
 
-export function layerReport(snapshot: CanonicalSnapshot): LayerReport {
+export interface LayerReportOptions {
+  /** The source's crawl scope (SourceDescriptor.resources); undefined means everything was read. */
+  scope?: EntityKind[];
+}
+
+export function layerReport(snapshot: CanonicalSnapshot, opts: LayerReportOptions = {}): LayerReport {
   const gates = new Map(snapshot.gates.map((g) => [g.id, g]));
+  const gateReads: MissingGateReason = opts.scope && !opts.scope.includes('gate') ? 'out_of_scope' : (snapshot.warnings ?? []).some((w) => w.code === 'fetch_skipped' && w.path === '/gates') ? 'not_read' : 'not_found';
   const layers = snapshot.layers ?? [];
   const layerIds = new Set(layers.map((l) => l.id));
   const byLayer = new Map<string, LayerReportExperiment[]>();
   const unlayered: LayerReportExperiment[] = [];
   const seen = new Set<string>();
   for (const e of snapshot.experiments ?? []) {
-    const item = describeExperiment(e, gates);
+    const item = describeExperiment(e, gates, gateReads);
     seen.add(e.id);
     if (e.layerId && layerIds.has(e.layerId)) {
       const list = byLayer.get(e.layerId);
@@ -144,9 +159,11 @@ export function layerReport(snapshot: CanonicalSnapshot): LayerReport {
   };
   const all = [...rows.flatMap((r) => r.experiments), ...unlayered];
   const liveLayers = rows.filter((r) => !r.layer!.archived);
+  const orphans = all.filter((x) => !x.archived && x.targeting.gate && !x.targeting.gate.found);
   return {
     rows,
     unlayered: unlayeredRow,
+    missingGates: orphans.length ? { reason: gateReads, experimentIds: orphans.map((x) => x.experiment.id), gateIds: [...new Set(orphans.map((x) => x.targeting.gate!.id))] } : null,
     totals: {
       layers: liveLayers.length,
       archivedLayers: rows.length - liveLayers.length,
@@ -182,9 +199,9 @@ function layerFate(l: Layer, counts: LayerReportRow['counts']): { fate: LayerFat
   return { fate: 'create', reason: `Becomes a LaunchDarkly layer reserving traffic for ${counts.live} experiment${counts.live === 1 ? '' : 's'}; code reading getLayer().get() raises a layer_parameters decision.` };
 }
 
-function describeExperiment(e: Experiment, gates: Map<string, Gate>): LayerReportExperiment {
+function describeExperiment(e: Experiment, gates: Map<string, Gate>, gateReads: MissingGateReason): LayerReportExperiment {
   const archived = e.archived || e.status === 'archived';
-  const targeting = summarizeTargeting(e, gates);
+  const targeting = summarizeTargeting(e, gates, gateReads);
   const { fate, reason } = experimentFate(e, archived, targeting);
   const live = !archived && (fate === 'draft' || fate === 'wait' || fate === 'stopped');
   return { experiment: e, archived, live, fate, reason, targeting };
@@ -216,9 +233,9 @@ function experimentFate(e: Experiment, archived: boolean, t: ExperimentTargeting
   if (archived) return { fate: 'never', reason: 'Archived in StatSig: never migrated.' };
   switch (e.status) {
     case 'active':
-      return { fate: 'wait', reason: `Running in StatSig: migrate after it ends; assignments and results never move.${t.gate ? ` Its targeting gate ${t.gate.id} migrates first.` : ''}` };
+      return { fate: 'wait', reason: `Running in StatSig: migrate after it ends; assignments and results never move.${t.gate ? (t.gate.found ? ` Its targeting gate ${t.gate.id} migrates first.` : ` ${gateGap(t.gate)}`) : ''}` };
     case 'setup':
-      return { fate: 'draft', reason: `Not started: becomes a JSON flag with ${e.groups.length} variation${e.groups.length === 1 ? '' : 's'} and a draft LaunchDarkly experiment at ${pct(e.allocation)}.` };
+      return { fate: 'draft', reason: `Not started: becomes a JSON flag with ${e.groups.length} variation${e.groups.length === 1 ? '' : 's'} and a draft LaunchDarkly experiment at ${pct(e.allocation)}.${t.gate && !t.gate.found ? ` ${gateGap(t.gate)}` : ''}` };
     case 'decision_made': {
       const shipped = e.groups.find((g) => g.id === e.launchedGroupId || g.name === e.launchedGroupId);
       return { fate: 'serve_shipped', reason: `Concluded: the flag serves ${shipped ? `“${shipped.name}”` : 'the shipped group'} at 100%; no layer reservation is needed.` };
@@ -233,17 +250,34 @@ function experimentFate(e: Experiment, archived: boolean, t: ExperimentTargeting
   }
 }
 
-export function summarizeTargeting(e: Experiment, gates: Map<string, Gate>): ExperimentTargetingSummary {
+/** What a draft or wait verdict still needs when the experiment's targeting gate is not in the snapshot. */
+function gateGap(gate: NonNullable<ExperimentTargetingSummary['gate']>): string {
+  return `Its targeting gate ${gate.id} must be in the snapshot before it can be drafted (${MISSING_GATE_LABEL[gate.missing ?? 'not_found']}).`;
+}
+
+export const MISSING_GATE_ADVICE: Record<MissingGateReason, string> = {
+  out_of_scope: 'Add gates to the source’s scope and sync again to see their rules and migrate these experiments.',
+  not_read: 'Sync the source again; the Warnings page has the error.',
+  not_found: 'Check the gate in StatSig; until an experiment targets an existing gate it cannot be drafted.',
+};
+
+export const MISSING_GATE_LABEL: Record<MissingGateReason, string> = {
+  out_of_scope: 'gates are outside this source’s crawl scope',
+  not_read: 'the gate list could not be read in this sync',
+  not_found: 'not found in StatSig: deleted or renamed',
+};
+
+export function summarizeTargeting(e: Experiment, gates: Map<string, Gate>, gateReads: MissingGateReason = 'not_found'): ExperimentTargetingSummary {
   const g = e.targetingGateId ? gates.get(e.targetingGateId) : undefined;
   const gate = e.targetingGateId
     ? g
       ? { id: g.id, found: true, archived: g.archived, enabled: g.enabled, rules: g.rules.map(describeRule) }
-      : { id: e.targetingGateId, found: false, archived: false, enabled: true, rules: [] }
+      : { id: e.targetingGateId, found: false, archived: false, enabled: true, rules: [], missing: gateReads }
     : null;
   const inlineRules = e.targetingRules.map(describeRule);
   const overrideIds = e.overrides.reduce((n, o) => n + o.ids.length, 0);
   const parts: string[] = [];
-  if (gate) parts.push(`gate ${gate.id}${gate.found ? (gate.rules.length ? `: ${gate.rules.join('; ')}` : '') : ' (not in this snapshot)'}`);
+  if (gate) parts.push(`gate ${gate.id}${gate.found ? (gate.rules.length ? `: ${gate.rules.join('; ')}` : '') : ` (not in this snapshot: ${MISSING_GATE_LABEL[gate.missing ?? 'not_found']})`}`);
   if (inlineRules.length) parts.push(`${inlineRules.length === 1 ? 'rule' : `${inlineRules.length} rules`}: ${inlineRules.join('; ')}`);
   if (overrideIds) parts.push(`${overrideIds} forced ID${overrideIds === 1 ? '' : 's'}`);
   if (e.holdoutIds.length) parts.push(`holdout ${e.holdoutIds.join(', ')}`);
@@ -356,6 +390,10 @@ export function layerReportMarkdown(report: LayerReport, opts: LayerReportMarkdo
     'Verdicts follow the migration policy: running experiments end in StatSig and migrate afterwards, archived and abandoned experiments are never migrated, implicit layers are dropped, and a layer is only created while it has an experiment left to keep exclusive.',
     '',
   );
+  if (report.missingGates) {
+    const m = report.missingGates;
+    out.push(`**${plural(m.experimentIds.length, 'experiment')} target ${plural(m.gateIds.length, 'gate')} not in this snapshot** (${MISSING_GATE_LABEL[m.reason]}): ${m.gateIds.map((id) => `\`${md(id)}\``).join(', ')}. ${MISSING_GATE_ADVICE[m.reason]}`, '');
+  }
   // A rule between sections: in a long document the eye needs to see where one layer ends.
   let sectionCount = 0;
   const divider = () => (sectionCount++ ? ['---', ''] : []);

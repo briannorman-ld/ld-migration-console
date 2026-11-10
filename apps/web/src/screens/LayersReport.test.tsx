@@ -108,6 +108,21 @@ describe('LayersReport', () => {
     expect(layerIds()).toEqual(['pricing_layer']);
   });
 
+  it('explains a targeting gate outside the crawl scope and offers to include gates', () => {
+    const onIncludeGates = vi.fn();
+    const scoped: SourceRecord = { ...source, resources: ['experiment', 'layer'] };
+    render(<LayersReport sources={[scoped]} snapshots={{ 's-web': { ...snapshot(), gates: [] } }} onIncludeGates={onIncludeGates} />);
+    const note = screen.getByRole('note');
+    expect(note.textContent).toContain('experiment targets a gate not in this snapshot: gates are outside this source’s crawl scope');
+    fireEvent.click(within(note).getByText('Include gates and sync'));
+    expect(onIncludeGates).toHaveBeenCalledWith(scoped);
+  });
+
+  it('shows no gate banner when every targeting gate resolved', () => {
+    render(<LayersReport sources={[source]} snapshots={{ 's-web': snapshot() }} />);
+    expect(screen.queryByRole('note')).toBeNull();
+  });
+
   it('exports the report as CSV', () => {
     render(<LayersReport sources={[source]} snapshots={{ 's-web': snapshot() }} />);
     fireEvent.click(screen.getByText('Export CSV'));

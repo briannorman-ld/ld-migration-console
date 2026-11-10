@@ -1,4 +1,4 @@
-import type { CanonicalSnapshot, SourceDescriptor } from "@sslm/canonical";
+import type { CanonicalSnapshot, SourceDescriptor, EntityKind } from "@sslm/canonical";
 import type { MappingProfile, Resolution } from "@sslm/mapper";
 import type { RunRecord } from "@sslm/executor";
 import {
@@ -205,6 +205,11 @@ export class WorkspaceStore {
    */
   async renameSource(sourceId: string, label: string): Promise<void> {
     await this.db.sources.update(sourceId, { label });
+  }
+
+  /** Console API sources: the entity kinds the next sync reads (undefined = everything). */
+  async setSourceScope(sourceId: string, resources: EntityKind[] | undefined): Promise<void> {
+    await this.db.sources.update(sourceId, { resources });
   }
 
   listSources(workspaceId: string): Promise<SourceRecord[]> {
