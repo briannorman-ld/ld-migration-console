@@ -502,11 +502,15 @@ export function WorkspaceScreen({
                       aria-label={`Include ${s.label}`}
                       onChange={() => setHidden((h) => toggle(h, s.id))}
                     />
-                    <span className="font-medium">{s.label}</span>
-                    <Badge tone={SOURCE_BADGE[s.kind].tone}>
-                      {SOURCE_BADGE[s.kind].label}
-                    </Badge>
-                    <span className="ml-auto flex items-center gap-1">
+                    <span className="min-w-0 flex-1 truncate font-medium" title={s.label}>
+                      {s.label}
+                    </span>
+                    <span className="shrink-0">
+                      <Badge tone={SOURCE_BADGE[s.kind].tone}>
+                        {SOURCE_BADGE[s.kind].label}
+                      </Badge>
+                    </span>
+                    <span className="flex shrink-0 items-center gap-1">
                       {refreshable(s) && (
                         <button
                           type="button"
