@@ -5,6 +5,7 @@ import {
   LAYER_FATE_LABEL,
   layerReport,
   layerReportCsv,
+  layerReportMarkdown,
   sortLayerRows,
   type CanonicalSnapshot,
   type ExperimentFate,
@@ -130,6 +131,14 @@ export function LayersReport({
     });
     download('layers-report.csv', parts.join(''), 'text/csv');
   };
+  const exportMarkdown = () => {
+    // One document per workspace: a source gets its own report when there are several.
+    const docs = reports.map(({ s, report }) => {
+      const snap = snapshots[s.id]!;
+      return layerReportMarkdown(report, { source: s.alias, ...(snap.projectName ? { project: snap.projectName } : {}), takenAt: snap.takenAt });
+    });
+    download('layers-report.md', docs.join('\n---\n\n'), 'text/markdown');
+  };
 
   const card = (label: string, value: string, note: string, target?: Filter) => (
     <button
@@ -175,6 +184,9 @@ export function LayersReport({
         </Button>
         <Button variant="secondary" className="py-1 text-xs" onClick={exportCsv} disabled={reports.length === 0} title="One row per experiment, plus one per layer without experiments">
           Export CSV
+        </Button>
+        <Button variant="secondary" className="py-1 text-xs" onClick={exportMarkdown} disabled={reports.length === 0} title="One section per layer with its defaults and experiments, for wikis and reviews">
+          Export Markdown
         </Button>
       </div>
       <MappingExplainer resource="layer" onOpenCoverage={onOpenCoverage} className="mb-3" />

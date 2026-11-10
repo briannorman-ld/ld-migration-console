@@ -283,3 +283,83 @@ function csvCell(v: string): string {
 function pct(n: number): string {
   return `${Number.isInteger(n) ? n : n.toFixed(1)}%`;
 }
+
+export interface LayerReportMarkdownOptions {
+  /** Source alias, shown in the title. */
+  source?: string;
+  /** StatSig project name, shown in the title. */
+  project?: string;
+  /** Snapshot time (ISO), shown under the title. */
+  takenAt?: string;
+}
+
+/**
+ * The report as a Markdown document: one section per layer (verdict, default parameters,
+ * experiments), live layers first by experiment count, then experiments outside any layer, then
+ * archived layers. Pastes into wikis and review threads where the CSV's flat rows do not read.
+ */
+export function layerReportMarkdown(report: LayerReport, opts: LayerReportMarkdownOptions = {}): string {
+  const t = report.totals;
+  const live = sortLayerRows(report.rows.filter((r) => !r.layer!.archived), 'experiments');
+  const archived = sortLayerRows(report.rows.filter((r) => r.layer!.archived), 'name', 'asc');
+  const out: string[] = [];
+  const scope = [opts.source, opts.project].filter(Boolean).join(' · ');
+  out.push(`# Layers and experiments${scope ? ` — ${scope}` : ''}`, '');
+  if (opts.takenAt) out.push(`Snapshot taken ${opts.takenAt}.`, '');
+  out.push(
+    `${plural(t.layers, 'live layer')} (${t.implicitLayers} implicit, ${t.archivedLayers} archived) · ${plural(t.experiments, 'live experiment')} (${t.runningExperiments} running, ${t.skippableExperiments} abandoned, ${t.archivedExperiments} archived) · ${plural(t.skippableLayers, 'layer')} could be skipped.`,
+    '',
+    'Verdicts follow the migration policy: running experiments end in StatSig and migrate afterwards, archived and abandoned experiments are never migrated, implicit layers are dropped, and a layer is only created while it has an experiment left to keep exclusive.',
+    '',
+  );
+  for (const r of live) out.push(...layerSection(r));
+  if (report.unlayered.experiments.length) out.push(...layerSection(report.unlayered));
+  if (archived.length) {
+    out.push('## Archived layers', '', 'Archived in StatSig: never migrated.', '');
+    for (const r of archived) out.push(...layerSection(r, 3));
+  }
+  return out.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
+}
+
+function layerSection(r: LayerReportRow, level = 2): string[] {
+  const h = '#'.repeat(level);
+  const l = r.layer;
+  const out: string[] = [];
+  out.push(`${h} ${l ? `\`${l.id}\`` : 'Not in a layer'}${r.fate ? ` — ${LAYER_FATE_LABEL[r.fate]}` : ''}`, '');
+  if (l) {
+    const meta = [l.isImplicit ? 'implicit layer' : '', l.idType, l.owner?.name ?? '', l.description ?? ''].filter(Boolean).join(' · ');
+    if (meta) out.push(md(meta), '');
+  }
+  const counts = [`${r.counts.live} live`, r.counts.ended ? `${r.counts.ended} ended` : '', r.counts.archived ? `${r.counts.archived} archived` : ''].filter(Boolean).join(', ');
+  out.push(`> ${md(r.reason)} (${counts}${r.unknownExperimentIds.length ? `; not in this snapshot: ${r.unknownExperimentIds.map((id) => `\`${id}\``).join(', ')}` : ''})`, '');
+  if (l) {
+    out.push('**Default parameters**', '');
+    if (l.parameters.length === 0) out.push('No parameters.', '');
+    else {
+      out.push('| Parameter | Type | Default |', '|---|---|---|');
+      for (const p of l.parameters) out.push(`| \`${md(p.name)}\` | ${p.type ?? '–'} | \`${md(JSON.stringify(p.defaultValue))}\` |`);
+      out.push('');
+    }
+  }
+  out.push('**Experiments**', '');
+  if (r.experiments.length === 0) out.push('No experiments in this snapshot.', '');
+  else {
+    out.push('| Experiment | Status | Allocation | Unit | Targeting | Migration |', '|---|---|---|---|---|---|');
+    for (const x of r.experiments) {
+      const e = x.experiment;
+      const name = `\`${md(e.id)}\`${x.missingLayerId ? ` (layer \`${md(x.missingLayerId)}\` not synced)` : ''}`;
+      out.push(`| ${name} | ${x.archived ? 'archived' : e.status.replace(/_/g, ' ')} | ${e.allocation}% | ${md(e.idType)} | ${md(x.targeting.text)} | ${EXPERIMENT_FATE_LABEL[x.fate]} |`);
+    }
+    out.push('');
+  }
+  return out;
+}
+
+/** Escapes what would break a Markdown table cell or start unintended formatting. */
+function md(s: string): string {
+  return s.replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
+}
+
+function plural(n: number, noun: string): string {
+  return `${n} ${noun}${n === 1 ? '' : 's'}`;
+}

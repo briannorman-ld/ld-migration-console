@@ -112,4 +112,18 @@ describe('LayersReport', () => {
     expect(csv).toContain('pricing_layer,Skip · nothing left to reserve');
     expect(csv).toContain(',search_v3,active,');
   });
+
+  it('exports the report as Markdown, one section per layer', () => {
+    render(<LayersReport sources={[source]} snapshots={{ 's-web': snapshot() }} />);
+    fireEvent.click(screen.getByText('Export Markdown'));
+    expect(download).toHaveBeenCalledTimes(1);
+    const [name, md, type] = download.mock.calls[0] as [string, string, string];
+    expect(name).toBe('layers-report.md');
+    expect(type).toBe('text/markdown');
+    expect(md).toContain('# Layers and experiments — web');
+    expect(md).toContain('Snapshot taken 2026-11-10T00:00:00Z.');
+    expect(md).toContain('## `checkout_layer` — Create LD layer');
+    expect(md).toContain('| `cta_copy` | active | 40% | userID | none | Wait until it ends |');
+    expect(md).toContain('### `retired_layer` — Never migrated');
+  });
 });

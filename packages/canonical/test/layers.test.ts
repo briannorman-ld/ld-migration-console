@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { describeCondition, describeRule, emptySnapshot, entityUid, layerReport, layerReportCsv, sortLayerRows, type Experiment, type Gate, type Layer, type Rule } from '../src/index.ts';
+import { describeCondition, describeRule, emptySnapshot, entityUid, layerReport, layerReportCsv, layerReportMarkdown, sortLayerRows, type Experiment, type Gate, type Layer, type Rule } from '../src/index.ts';
 
 const SRC = { sourceId: 's-web', sourceKind: 'console_api' as const, alias: 'web' };
 const base = { source: SRC, completeness: { missing: [] }, tags: [], targetApps: [], archived: false };
@@ -153,5 +153,38 @@ describe('describeCondition / describeRule', () => {
     expect(describeCondition({ ...cond('unit_id', 'any', ['c1']), customID: 'companyID' })).toBe('companyID any [c1]');
     expect(describeRule(rule('r', [], 20))).toBe('everyone (20% pass)');
     expect(describeRule(rule('r', [cond('country', 'any', ['US']), cond('app_version', 'version_gte', '2.0')]))).toBe('country any [US] and app_version version_gte 2.0');
+  });
+});
+
+describe('layerReportMarkdown', () => {
+  const report = layerReport(snapshot());
+  const doc = layerReportMarkdown(report, { source: 'web', project: 'Acme Web', takenAt: '2026-11-10T00:00:00Z' });
+  const sections = doc.split('\n').filter((l) => /^#{2,3} /.test(l));
+
+  it('orders sections by live experiments, then the unlayered group, then archived layers', () => {
+    expect(doc.startsWith('# Layers and experiments — web · Acme Web\n\nSnapshot taken 2026-11-10T00:00:00Z.\n')).toBe(true);
+    expect(sections).toEqual(['## `checkout_layer` — Create LD layer', '## `button_color_layer` — Skip layer · experiment still migrates', '## `pricing_layer` — Skip · nothing left to reserve', '## Not in a layer', '## Archived layers', '### `retired_layer` — Never migrated']);
+    expect(doc).toContain('3 live layers (1 implicit, 1 archived) · 7 live experiments (2 running, 1 abandoned, 1 archived) · 2 layers could be skipped.');
+  });
+
+  it('keeps each layer with its defaults table and its experiments table', () => {
+    const checkout = doc.slice(doc.indexOf('## `checkout_layer`'), doc.indexOf('## `button_color_layer`'));
+    expect(checkout).toContain('| `cta_text` | string | `"Place order"` |');
+    expect(checkout).toContain('| `show_badges` | boolean | `false` |');
+    expect(checkout).toContain('| `cta_copy` | active | 40% | userID | none | Wait until it ends |');
+    expect(checkout).toContain('| `old_cta` | archived | 100% | userID | none | Never migrated |');
+    expect(checkout).toContain('> Becomes a LaunchDarkly layer reserving traffic for 2 experiments');
+    expect(checkout).toContain('(2 live, 1 archived)');
+    const loose = doc.slice(doc.indexOf('## Not in a layer'), doc.indexOf('## Archived layers'));
+    expect(loose).toContain('| `search_v3` | active | 50% | userID | gate us_only: country any [US] · rule: email str_contains_any [@acme.com] (50% pass) · 2 forced IDs | Wait until it ends |');
+    expect(loose).toContain('`orphan` (layer `layer_not_synced` not synced)');
+    expect(doc).toContain('not in this snapshot: `ghost_experiment`');
+    expect(doc).not.toContain('**Default parameters**\n\n**Experiments**');
+  });
+
+  it('escapes pipes so table cells stay intact', () => {
+    const s = snapshot();
+    s.layers[0]!.parameters.push({ name: 'label', type: 'string', defaultValue: 'a|b' });
+    expect(layerReportMarkdown(layerReport(s))).toContain('| `label` | string | `"a\\|b"` |');
   });
 });
