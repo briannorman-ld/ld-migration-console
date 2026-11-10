@@ -190,6 +190,14 @@ export class WorkspaceStore {
     return rec;
   }
 
+  /**
+   * A source is named after the project it reads, so the label follows a rename there. Only the
+   * label: the alias is in tags and provenance and never changes (see sourceNaming.ts).
+   */
+  async renameSource(sourceId: string, label: string): Promise<void> {
+    await this.db.sources.update(sourceId, { label });
+  }
+
   listSources(workspaceId: string): Promise<SourceRecord[]> {
     return this.db.sources
       .where("workspaceId")

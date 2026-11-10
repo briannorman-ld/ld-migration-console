@@ -6,6 +6,7 @@ import { LdMark } from '../components/Brand.tsx';
 import { Badge, Button, Card, cx, Dot, PageTitle, Spinner, type Tone } from '../components/ui.tsx';
 import type { LdSession } from '../lib/ld.ts';
 import { SOURCE_BADGE } from '../lib/kinds.ts';
+import { timeAgo } from '../lib/time.ts';
 
 /**
  * The landing page of a workspace: one place to connect StatSig (the sources we read) and one to
@@ -51,6 +52,11 @@ export function ConnectionsView({
           title="Sources"
           icon={<StatsigGlyph />}
           done={statsigDone}
+          action={
+            <Button variant={sources.length === 0 ? 'primary' : 'secondary'} onClick={onAddSource}>
+              {sources.length === 0 ? 'Connect a source' : '+ Add another source'}
+            </Button>
+          }
           status={
             sources.length === 0 ? (
               <StatusLine tone="slate">Not connected</StatusLine>
@@ -68,31 +74,34 @@ export function ConnectionsView({
               read token. Add more than one source to consolidate several projects into the same LaunchDarkly project.
             </p>
           ) : (
-            <ul className="space-y-1.5">
+            <ul className="space-y-2">
               {sources.map((s) => {
                 const sn = snapshots[s.id];
                 return (
-                  <li key={s.id} className="flex items-center gap-2 rounded-md border border-line-soft px-2.5 py-1.5 text-sm">
-                    <span className="font-medium">{s.label}</span>
-                    <Badge tone={SOURCE_BADGE[s.kind].tone}>{SOURCE_BADGE[s.kind].label}</Badge>
-                    <span className="ml-auto text-xs text-fg-muted">{sn ? `synced ${new Date(sn.takenAt).toLocaleString()}` : 'not synced yet'}</span>
-                    <button
-                      type="button"
-                      className="rounded px-1.5 text-xs text-fg-muted hover:bg-surface-hover hover:text-error"
-                      title="Remove this source"
+                  <li key={s.id} className="flex items-center gap-3 rounded-md border border-line-soft px-3 py-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm font-medium" title={s.label}>
+                        {s.label}
+                      </div>
+                      <div className="mt-1 flex items-center gap-2 text-xs text-fg-muted">
+                        <Badge tone={SOURCE_BADGE[s.kind].tone}>{SOURCE_BADGE[s.kind].label}</Badge>
+                        {sn ? <span title={new Date(sn.takenAt).toLocaleString()}>synced {timeAgo(sn.takenAt)}</span> : <span>not synced yet</span>}
+                      </div>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      className="shrink-0 px-2 py-1 text-xs hover:text-error"
+                      title="Remove this source and everything read from it"
                       aria-label={`Remove ${s.label}`}
                       onClick={() => void onRemoveSource(s)}
                     >
                       Remove
-                    </button>
+                    </Button>
                   </li>
                 );
               })}
             </ul>
           )}
-          <Button variant={sources.length === 0 ? 'primary' : 'secondary'} onClick={onAddSource}>
-            {sources.length === 0 ? 'Connect a source' : '+ Add another source'}
-          </Button>
         </ConnectionCard>
 
         <ConnectionCard
@@ -100,6 +109,11 @@ export function ConnectionsView({
           title="LaunchDarkly"
           icon={<LdMark className="h-5 w-5 text-logo" />}
           done={ldDone}
+          action={
+            <Button variant={ld.status === 'connected' ? 'secondary' : 'primary'} onClick={onOpenLd} disabled={ld.status === 'connecting'}>
+              {ld.status === 'connected' ? (ld.projectKey ? 'Manage connection' : 'Choose a project') : 'Connect LaunchDarkly'}
+            </Button>
+          }
           status={
             ld.status === 'connecting' ? (
               <span className="flex items-center gap-2 text-sm text-fg-muted">
@@ -141,9 +155,6 @@ export function ConnectionsView({
             </p>
           )}
           {ld.status === 'error' && ld.error && <p className="text-sm text-error">{ld.error}</p>}
-          <Button variant={ld.status === 'connected' ? 'secondary' : 'primary'} onClick={onOpenLd} disabled={ld.status === 'connecting'}>
-            {ld.status === 'connected' ? (ld.projectKey ? 'Manage connection' : 'Choose a project') : 'Connect LaunchDarkly'}
-          </Button>
         </ConnectionCard>
       </div>
 
@@ -159,7 +170,24 @@ export function ConnectionsView({
   );
 }
 
-function ConnectionCard({ step, title, icon, done, status, children }: { step: number; title: string; icon: ReactNode; done: boolean; status: ReactNode; children: ReactNode }) {
+function ConnectionCard({
+  step,
+  title,
+  icon,
+  done,
+  status,
+  action,
+  children,
+}: {
+  step: number;
+  title: string;
+  icon: ReactNode;
+  done: boolean;
+  status: ReactNode;
+  /** The card's one button, pinned to the bottom so the two cards' buttons line up whatever their content. */
+  action: ReactNode;
+  children: ReactNode;
+}) {
   return (
     <Card className={cx('flex flex-col gap-4 p-5', done && 'border-success-line/60')}>
       <div className="flex items-start gap-3">
@@ -180,7 +208,8 @@ function ConnectionCard({ step, title, icon, done, status, children }: { step: n
           <div className="mt-1">{status}</div>
         </div>
       </div>
-      {children}
+      <div className="flex-1 space-y-3">{children}</div>
+      <div>{action}</div>
     </Card>
   );
 }

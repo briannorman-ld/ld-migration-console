@@ -1,6 +1,6 @@
 import { HttpError, Transport, UnreachableError, type TransportOptions } from '@sslm/http';
 import type { z } from 'zod';
-import { ExposureCountSchema, GateChecksSchema, IdListSchema, PaginationSchema, ProjectSchema, RuleSchema, type StatsigExposureCounts, type StatsigGateChecks, type StatsigIdList, type StatsigProject, type StatsigRule } from './schemas.ts';
+import { ExposureCountSchema, GateChecksSchema, IdListSchema, PaginationSchema, ProjectSchema, ProjectSettingsSchema, RuleSchema, type StatsigExposureCounts, type StatsigGateChecks, type StatsigIdList, type StatsigProject, type StatsigRule } from './schemas.ts';
 
 export const STATSIG_API_VERSION = '20240601';
 export const STATSIG_CONSOLE_BASE_URL = 'https://statsigapi.net/console/v1';
@@ -94,6 +94,21 @@ export class StatsigConsoleClient {
   /** PLAN §4.1: the key is validated first with a single `GET /project`. */
   validateKey(signal?: AbortSignal): Promise<StatsigProject> {
     return this.get('/project', ProjectSchema, {}, signal);
+  }
+
+  /**
+   * The project's name. `GET /project` returns only an id (ExternalProjectDto; the id is the one
+   * in the StatSig console's URL), so the name is a project setting. A key without the settings
+   * scope, or a plan without the endpoint, gets `undefined` rather than a failed add.
+   */
+  async projectName(signal?: AbortSignal): Promise<string | undefined> {
+    try {
+      const settings = await this.get('/settings/project', ProjectSettingsSchema, {}, signal);
+      return settings.name?.trim() || undefined;
+    } catch (e) {
+      if (signal?.aborted) throw e;
+      return undefined;
+    }
   }
 
   /** Single-object endpoint: returns `data`. */

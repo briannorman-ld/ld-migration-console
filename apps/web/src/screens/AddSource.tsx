@@ -109,7 +109,8 @@ export function AddSource({ workspaceId, onDone }: { workspaceId: string; onDone
         const apiKey = key.trim();
         const client = new StatsigConsoleClient({ baseUrl: STATSIG_CONSOLE_BASE_URL, apiKey, transport: { onEvent: handlers.onTransport } });
         const project = await client.validateKey();
-        const label = project.name?.trim() || `StatSig project ${project.id}`;
+        // `GET /project` carries only the id; the name is read from the project settings.
+        const label = (await client.projectName()) || project.name?.trim() || `StatSig project ${project.id}`;
         // Only Console API sources have a crawl scope; a spec file already holds whatever it holds.
         const scope = kinds.size < ENTITY_KINDS.length ? { resources: ENTITY_KINDS.filter((k) => kinds.has(k)) } : {};
         const source: SourceDescriptor = { ...base, alias: deriveAlias(label, taken, 'statsig'), label, baseUrl: STATSIG_CONSOLE_BASE_URL, ...scope };

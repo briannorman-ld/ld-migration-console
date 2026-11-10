@@ -43,7 +43,8 @@ export function normalizeConsoleSnapshot(raw: RawConsoleSnapshot, opts: Normaliz
 
   snap.completeness = { missing: [...CONSOLE_MISSING_FIELDS] };
   snap.companyId = raw.company?.companyID ?? undefined;
-  snap.projectName = raw.project.name ?? undefined;
+  // `GET /project` returns only an id; the name is a project setting.
+  snap.projectName = raw.project.name ?? raw.projectSettings?.name ?? undefined;
   snap.isWarehouseNative = raw.company?.isWarehouseNative ?? undefined;
 
   for (const i of raw.schemaIssues) {

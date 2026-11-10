@@ -30,11 +30,14 @@ vi.mock('@sslm/ld-client', async (orig) => ({
   },
 }));
 
-const validateKey = vi.fn(async () => ({ id: 'p1', name: 'Web' }));
+// Like StatSig: `GET /project` carries only the id, the name is a project setting.
+const validateKey = vi.fn(async () => ({ id: '5ETXMP5xDW3P7AMyQ14tey' }));
+const projectName = vi.fn(async (): Promise<string | undefined> => 'Web');
 vi.mock('@sslm/statsig-client', async (orig) => ({
   ...(await orig<typeof import('@sslm/statsig-client')>()),
   StatsigConsoleClient: class {
     validateKey = () => validateKey();
+    projectName = () => projectName();
   },
 }));
 
@@ -62,12 +65,25 @@ describe('AddSource', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add source' }));
     await waitFor(() => expect(onDone).toHaveBeenCalled());
     expect(validateKey).toHaveBeenCalledTimes(1);
+    expect(projectName).toHaveBeenCalledTimes(1);
     const source = addSource.mock.calls[0]![1];
     expect(source.label).toBe('Web');
     expect(source.alias).toBe('web-2');
     expect(source.kind).toBe('console_api');
     expect(setSecret).toHaveBeenCalledWith('statsig', source.id, 'console-abc', 'w1');
     expect(syncConsoleSource).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to the project id when the key cannot read the project settings', async () => {
+    projectName.mockResolvedValueOnce(undefined);
+    const onDone = vi.fn();
+    render(<AddSource workspaceId="w1" onDone={onDone} />);
+    fireEvent.change(screen.getByLabelText(/Console API key/), { target: { value: 'console-abc' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add source' }));
+    await waitFor(() => expect(onDone).toHaveBeenCalled());
+    const source = addSource.mock.calls[0]![1];
+    expect(source.label).toBe('StatSig project 5ETXMP5xDW3P7AMyQ14tey');
+    expect(source.alias).toBe('statsig-project-5etxmp5x');
   });
 
   it('does not save a Console API source whose key StatSig rejects', async () => {

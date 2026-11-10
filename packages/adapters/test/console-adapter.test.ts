@@ -192,4 +192,19 @@ describe('Console API adapter against the simulated StatSig', () => {
     expect(snap.warnings.find((w) => w.path === '/users/teams')?.code).toBe('fetch_skipped');
     expect(snap.gates.length).toBeGreaterThan(0);
   });
+
+  it('names the project from its settings, because the real GET /project carries only the id', async () => {
+    // ExternalProjectDto is `{ id }`: the demo's `/project` also answers a name, StatSig's does not.
+    mockProject('web');
+    server.use(http.get(`${TEST_BASE('web')}/project`, () => HttpResponse.json({ message: 'ok', data: { id: '5ETXMP5xDW3P7AMyQ14tey' } })));
+    const { snap, client } = await crawlWeb();
+    expect(snap.projectName).toBe('acme-web');
+    await expect(client.projectName()).resolves.toBe('acme-web');
+
+    // A key without the settings scope gets no name, not a failed add or sync.
+    server.use(http.get(`${TEST_BASE('web')}/settings/project`, () => HttpResponse.json({ message: 'Forbidden' }, { status: 403 })));
+    const again = await crawlWeb();
+    expect(again.snap.projectName).toBeUndefined();
+    await expect(again.client.projectName()).resolves.toBeUndefined();
+  });
 });

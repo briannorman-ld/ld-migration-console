@@ -38,6 +38,12 @@ describe('ConnectionsView', () => {
     });
     expect(screen.getByText('acme-web')).toBeTruthy();
     expect(screen.getByText('1 source')).toBeTruthy();
+    // Relative, with the exact time a hover away: the absolute string wrapped onto four lines.
+    const synced = screen.getByText(/^synced /);
+    expect(synced.textContent).toMatch(/ago$/);
+    expect(synced.getAttribute('title')).toBe(new Date('2026-10-22T10:05:00Z').toLocaleString());
+    fireEvent.click(screen.getByRole('button', { name: 'Remove acme-web' }));
+    expect(h.onRemoveSource).toHaveBeenCalledWith(source);
     expect(screen.getByText(/Connected to LaunchDarkly \(commercial, US\)/)).toBeTruthy();
     expect(screen.getByText('statsig-migration')).toBeTruthy();
     expect(screen.getByRole('button', { name: '+ Add another source' })).toBeTruthy();

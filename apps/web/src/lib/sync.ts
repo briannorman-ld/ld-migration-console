@@ -117,7 +117,7 @@ export async function syncConsoleSource(
       },
     });
     await store.saveSnapshot(workspaceId, snapshot);
-    await pruneAfterSync(workspaceId, source.id);
+    await afterConsoleSync(workspaceId, source, snapshot);
     return snapshot;
   }
   const job = pipeline().crawlConsole(
@@ -134,8 +134,19 @@ export async function syncConsoleSource(
   );
   const { snapshot } = await job.promise;
   await store.saveSnapshot(workspaceId, snapshot);
-  await pruneAfterSync(workspaceId, source.id);
+  await afterConsoleSync(workspaceId, source, snapshot);
   return snapshot;
+}
+
+/**
+ * Prune old snapshots and let the source take the project's current name. A source added before
+ * the name could be read (or when the key lacked the settings scope) is labelled after the
+ * project id; a later sync that learns the name replaces that label. The alias is never touched.
+ */
+async function afterConsoleSync(workspaceId: string, source: SourceDescriptor, snapshot: CanonicalSnapshot): Promise<void> {
+  await pruneAfterSync(workspaceId, source.id);
+  const name = snapshot.projectName?.trim();
+  if (name && name !== source.label) await store.renameSource(source.id, name);
 }
 
 /** Upload a config spec for a spec source: parse in the worker, sanity-check, save. */
