@@ -124,6 +124,7 @@ describe('LayersReport', () => {
     expect(md).toContain('Snapshot taken 2026-11-10T00:00:00Z.');
     expect(md).toContain('## `checkout_layer` — Create LD layer');
     expect(md).toContain('| `cta_copy` | active | 40% | userID | none | Wait until it ends |');
-    expect(md).toContain('### `retired_layer` — Never migrated');
+    expect(md).toContain('## Skipped layers (2)');
+    expect(md).toContain('- `retired_layer` — no experiments in this snapshot · 1 parameter');
   });
 });

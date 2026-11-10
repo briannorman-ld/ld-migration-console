@@ -161,10 +161,17 @@ describe('layerReportMarkdown', () => {
   const doc = layerReportMarkdown(report, { source: 'web', project: 'Acme Web', takenAt: '2026-11-10T00:00:00Z' });
   const sections = doc.split('\n').filter((l) => /^#{2,3} /.test(l));
 
-  it('orders sections by live experiments, then the unlayered group, then archived layers', () => {
+  it('gives a section only to layers that will be created, then the unlayered group, then lists the skipped and archived layers by name', () => {
     expect(doc.startsWith('# Layers and experiments — web · Acme Web\n\nSnapshot taken 2026-11-10T00:00:00Z.\n')).toBe(true);
-    expect(sections).toEqual(['## `checkout_layer` — Create LD layer', '## `button_color_layer` — Skip layer · experiment still migrates', '## `pricing_layer` — Skip · nothing left to reserve', '## Not in a layer', '## Archived layers', '### `retired_layer` — Never migrated']);
+    expect(sections).toEqual(['## `checkout_layer` — Create LD layer', '## Not in a layer', '## Skipped layers (2)', '## Archived layers (1)']);
     expect(doc).toContain('3 live layers (1 implicit, 1 archived) · 7 live experiments (2 running, 1 abandoned, 1 archived) · 2 layers could be skipped.');
+    const skipped = doc.slice(doc.indexOf('## Skipped layers'), doc.indexOf('## Archived layers'));
+    expect(skipped).toContain('**Implicit layers (1):**');
+    expect(skipped).toContain('- `button_color_layer` — `button_color` (setup) · 1 parameter');
+    expect(skipped).toContain('**Nothing left to keep exclusive (1):**');
+    expect(skipped).toContain('- `pricing_layer` — `anchor` (decision made), `bundle` (abandoned) · 3 parameters');
+    expect(skipped).not.toContain('Default parameters');
+    expect(doc.slice(doc.indexOf('## Archived layers'))).toContain('- `retired_layer` — `ghost_experiment` (not in this snapshot) · 1 parameter');
   });
 
   it('keeps each layer with its defaults table and its experiments table', () => {
@@ -178,7 +185,6 @@ describe('layerReportMarkdown', () => {
     const loose = doc.slice(doc.indexOf('## Not in a layer'), doc.indexOf('## Archived layers'));
     expect(loose).toContain('| `search_v3` | active | 50% | userID | gate us_only: country any [US] · rule: email str_contains_any [@acme.com] (50% pass) · 2 forced IDs | Wait until it ends |');
     expect(loose).toContain('`orphan` (layer `layer_not_synced` not synced)');
-    expect(doc).toContain('not in this snapshot: `ghost_experiment`');
     expect(doc).not.toContain('**Default parameters**\n\n**Experiments**');
   });
 

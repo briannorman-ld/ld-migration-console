@@ -294,13 +294,18 @@ export interface LayerReportMarkdownOptions {
 }
 
 /**
- * The report as a Markdown document: one section per layer (verdict, default parameters,
- * experiments), live layers first by experiment count, then experiments outside any layer, then
- * archived layers. Pastes into wikis and review threads where the CSV's flat rows do not read.
+ * The report as a Markdown document: one section per layer the migration will create (verdict,
+ * default parameters, experiments), live layers first by experiment count, then experiments
+ * outside any layer. Layers that are skipped or archived all say the same thing, so they are
+ * listed by name with a one-line note each instead of a section apiece. Pastes into wikis and
+ * review threads where the CSV's flat rows do not read.
  */
 export function layerReportMarkdown(report: LayerReport, opts: LayerReportMarkdownOptions = {}): string {
   const t = report.totals;
   const live = sortLayerRows(report.rows.filter((r) => !r.layer!.archived), 'experiments');
+  const created = live.filter((r) => r.fate === 'create');
+  const implicit = sortLayerRows(live.filter((r) => r.fate === 'skip_implicit'), 'name', 'asc');
+  const empty = sortLayerRows(live.filter((r) => r.fate === 'skip_empty'), 'name', 'asc');
   const archived = sortLayerRows(report.rows.filter((r) => r.layer!.archived), 'name', 'asc');
   const out: string[] = [];
   const scope = [opts.source, opts.project].filter(Boolean).join(' · ');
@@ -312,13 +317,38 @@ export function layerReportMarkdown(report: LayerReport, opts: LayerReportMarkdo
     'Verdicts follow the migration policy: running experiments end in StatSig and migrate afterwards, archived and abandoned experiments are never migrated, implicit layers are dropped, and a layer is only created while it has an experiment left to keep exclusive.',
     '',
   );
-  for (const r of live) out.push(...layerSection(r));
+  for (const r of created) out.push(...layerSection(r));
   if (report.unlayered.experiments.length) out.push(...layerSection(report.unlayered));
+  if (implicit.length || empty.length) {
+    out.push(`## Skipped layers (${implicit.length + empty.length})`, '');
+    if (implicit.length) {
+      out.push(`**Implicit layers (${implicit.length}):** one-experiment layers StatSig created implicitly. The layer is dropped; the experiment, when it is live, migrates on its own.`, '');
+      for (const r of implicit) out.push(layerLine(r));
+      out.push('');
+    }
+    if (empty.length) {
+      out.push(`**Nothing left to keep exclusive (${empty.length}):** every experiment has concluded, been abandoned or archived, so there is nothing to reserve.`, '');
+      for (const r of empty) out.push(layerLine(r));
+      out.push('');
+    }
+  }
   if (archived.length) {
-    out.push('## Archived layers', '', 'Archived in StatSig: never migrated.', '');
-    for (const r of archived) out.push(...layerSection(r, 3));
+    out.push(`## Archived layers (${archived.length})`, '', 'Archived in StatSig: never migrated.', '');
+    for (const r of archived) out.push(layerLine(r));
+    out.push('');
   }
   return out.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
+}
+
+/** One bullet for a layer that gets no section: its name, then the experiments in it (or none). */
+function layerLine(r: LayerReportRow): string {
+  const l = r.layer!;
+  const exps = r.experiments.map((x) => `\`${md(x.experiment.id)}\` (${x.archived ? 'archived' : x.experiment.status.replace(/_/g, ' ')})`);
+  const unknown = r.unknownExperimentIds.map((id) => `\`${md(id)}\` (not in this snapshot)`);
+  const all = [...exps, ...unknown];
+  const params = l.parameters.length ? `${plural(l.parameters.length, 'parameter')}` : '';
+  const detail = [all.length ? all.join(', ') : 'no experiments in this snapshot', params].filter(Boolean).join(' · ');
+  return `- \`${md(l.id)}\` — ${detail}`;
 }
 
 function layerSection(r: LayerReportRow, level = 2): string[] {
