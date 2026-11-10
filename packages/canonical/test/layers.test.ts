@@ -199,8 +199,10 @@ describe('layerReportMarkdown', () => {
     expect(checkout).toContain('| `cta_text` | string | `"Place order"` | 1 of 2 experiments (1 keeps the default) |');
     expect(checkout).toContain('| `show_badges` | boolean | `false` | 1 of 2 experiments (1 keeps the default) |');
     expect(checkout).not.toContain('| `cta_copy` |\n');
-    expect(checkout).toContain('| `cta_copy` | active | 40% | userID | cta_text: Control="Place order", Urgent="Complete purchase now"<br>urgency_banner (not on the layer): Urgent=true | none | Wait until it ends |');
-    expect(checkout).toContain('| `old_cta` | archived | 100% | userID | cta_text: Control="Buy", Test="Buy now" | none | Never migrated |');
+    expect(checkout).toContain('| `cta_copy` | active | 40% | userID | 1 of 2: `cta_text`, `urgency_banner`* | none | Wait until it ends |');
+    expect(checkout).toContain('| `old_cta` | archived | 100% | userID | 1 of 2: `cta_text` | none | Never migrated |');
+    expect(checkout).toContain('the values per group are in the CSV export');
+    expect(checkout).not.toContain('Complete purchase now');
     const s = snapshot();
     s.layers[0]!.parameters.push({ name: 'unused', type: 'string', defaultValue: 'x' });
     expect(layerReportMarkdown(layerReport(s))).toContain('| `unused` | string | `"x"` | no experiment (default everywhere) |');

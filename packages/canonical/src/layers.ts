@@ -392,6 +392,14 @@ export function describeParameterUse(r: LayerReportRow, name: string): string {
   return `${users} of ${plural(total, 'experiment')} (${rest} keep${rest === 1 ? 's' : ''} the default)`;
 }
 
+/** "3 of 5: `model`, `modelId`, `effort*`" — the names only; values belong in the CSV. */
+function summarizeOverrides(overrides: ParameterOverride[], declared: number): string {
+  if (overrides.length === 0) return 'none';
+  const names = overrides.map((o) => `\`${md(o.name)}\`${o.declared ? '' : '*'}`).join(', ');
+  const own = overrides.filter((o) => o.declared).length;
+  return `${own} of ${declared}: ${names}`;
+}
+
 /** One bullet for a layer that gets no section: its name, then the experiments in it (or none). */
 function layerLine(r: LayerReportRow): string {
   const l = r.layer!;
@@ -424,6 +432,7 @@ function layerSection(r: LayerReportRow, level = 2): string[] {
     }
   }
   out.push('**Experiments**', '');
+  if (l) out.push('Overrides lists the layer parameters each experiment sets (a parameter the layer does not declare is marked *); the values per group are in the CSV export.', '');
   if (r.experiments.length === 0) out.push('No experiments in this snapshot.', '');
   else {
     const withParams = !!l;
@@ -431,7 +440,7 @@ function layerSection(r: LayerReportRow, level = 2): string[] {
     for (const x of r.experiments) {
       const e = x.experiment;
       const name = `\`${md(e.id)}\`${x.missingLayerId ? ` (layer \`${md(x.missingLayerId)}\` not synced)` : ''}`;
-      const overrides = withParams ? ` ${x.parameters?.length ? x.parameters.map((o) => md(describeOverride(o))).join('<br>') : 'none'} |` : '';
+      const overrides = withParams ? ` ${summarizeOverrides(x.parameters ?? [], l!.parameters.length)} |` : '';
       out.push(`| ${name} | ${x.archived ? 'archived' : e.status.replace(/_/g, ' ')} | ${e.allocation}% | ${md(e.idType)} |${overrides} ${md(x.targeting.text)} | ${EXPERIMENT_FATE_LABEL[x.fate]} |`);
     }
     out.push('');

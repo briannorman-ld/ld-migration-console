@@ -130,7 +130,7 @@ describe('LayersReport', () => {
     expect(md).toContain('# Layers and experiments — web');
     expect(md).toContain('Snapshot taken 2026-11-10T00:00:00Z.');
     expect(md).toContain('## `checkout_layer` — Create LD layer');
-    expect(md).toContain('| `cta_copy` | active | 40% | userID | cta_text: Control="Place order", Urgent="Complete purchase now" | none | Wait until it ends |');
+    expect(md).toContain('| `cta_copy` | active | 40% | userID | 1 of 2: `cta_text` | none | Wait until it ends |');
     expect(md).toContain('## Skipped layers (2)');
     expect(md).toContain('- `retired_layer` — no experiments in this snapshot · 1 parameter');
   });
