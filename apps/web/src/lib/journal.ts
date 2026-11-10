@@ -7,8 +7,10 @@ import type { Journal, RunRecord } from '@sslm/executor';
  * was about as long as the LaunchDarkly requests themselves. Writes are coalesced: while the run
  * is in flight the record is written at most once per `intervalMs` (the latest state wins, since
  * the executor passes the same record), and a terminal state (done, failed, stopped, undone) is
- * written at once and awaited. A tab that dies loses at most one interval of journaling; resume
- * re-checks a step that ran unjournaled, through the create's 409 and the existence read.
+ * written at once and awaited, as is a save the executor marks `immediate` (a pre-image just
+ * captured, a scheduled change just created: resume could recover neither). A tab that dies loses
+ * at most one interval of the other journaling; resume re-checks a step that ran unjournaled,
+ * through the create's 409 and the existence read.
  */
 export function coalescedJournal(write: (run: RunRecord) => Promise<void>, opts: { intervalMs?: number } = {}): Journal & { flush(): Promise<void> } {
   const intervalMs = opts.intervalMs ?? 2000;
@@ -30,9 +32,9 @@ export function coalescedJournal(write: (run: RunRecord) => Promise<void>, opts:
     return chain;
   };
   return {
-    save(run) {
+    save(run, opts) {
       latest = run;
-      if (run.status !== 'running' && run.status !== 'undoing') return flush();
+      if (opts?.immediate || (run.status !== 'running' && run.status !== 'undoing')) return flush();
       if (timer === undefined) {
         const due = Math.max(0, lastWrite + intervalMs - Date.now());
         timer = setTimeout(() => void flush().catch(() => undefined), due);

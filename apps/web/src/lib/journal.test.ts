@@ -28,6 +28,19 @@ describe('coalescedJournal', () => {
     expect(writes).toEqual(['running', 'running', 'done']);
   });
 
+  it('an immediate save is written at once while the run is still running (security review M10)', async () => {
+    const writes: string[] = [];
+    const j = coalescedJournal(async (r) => void writes.push(r.steps.length ? 'with-step' : r.status), { intervalMs: 2000 });
+    const r = run('running');
+    await j.save(r);
+    expect(writes).toEqual([]);
+    r.steps.push({ id: 's', label: 's', status: 'running', step: { id: 's', deps: [], op: 'ensure_context_kind', key: 'org', name: 'org', unitType: 'orgID' } });
+    await j.save(r, { immediate: true });
+    expect(writes).toEqual(['with-step']);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(writes).toEqual(['with-step']);
+  });
+
   it('a failed deferred write neither blocks nor hides the terminal write', async () => {
     let fail = true;
     const writes: string[] = [];

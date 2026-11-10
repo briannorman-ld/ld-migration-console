@@ -10,7 +10,7 @@
  * `array_contains_all`, `on`, `not_array_contains_all` and inlined gate references expand.
  * `[]` never matches; `[[]]` always matches.
  */
-import { normalizeCondition, toArray, type CanonicalSnapshot, type Condition, type Segment } from '@sslm/canonical';
+import { normalizeCondition, ownValue, toArray, type CanonicalSnapshot, type Condition, type Segment } from '@sslm/canonical';
 import { DROP_CONDITION, DROP_RULE, SKIP, type DecisionCollector, plannedContextKinds, plannedKindOptions } from './decisions.ts';
 import { attributeFor, attributeOption, configuredUnit, defaultKindFor, sanitizeKey, unitFromChoice, type UnitTarget } from './profile.ts';
 import { segmentById } from './lookup.ts';
@@ -276,7 +276,7 @@ export function translateCondition(ctx: ConditionContext, c: Condition, loc: Loc
     case 'user_agent':
       return derived(ctx, c, loc);
     default:
-      return unsupported(ctx, c, loc, UNSUPPORTED_WHY[c.type] ?? `StatSig condition type “${c.type}” has no LaunchDarkly equivalent.`);
+      return unsupported(ctx, c, loc, ownValue(UNSUPPORTED_WHY, c.type) ?? `StatSig condition type “${c.type}” has no LaunchDarkly equivalent.`);
   }
 }
 

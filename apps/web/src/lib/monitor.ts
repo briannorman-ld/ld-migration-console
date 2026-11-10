@@ -6,7 +6,7 @@
  */
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
-import { readSync, type CanonicalSnapshot } from '@sslm/canonical';
+import { ownValue, readSync, type CanonicalSnapshot } from '@sslm/canonical';
 import { alertsSince, ldVersionsAtSync, latestSamples, monitorRows, pruneSamples, shouldSample, type MonitorAlert, type MonitorRow, type MonitoredItem } from '@sslm/monitoring';
 import { flagOwner } from '@sslm/planner';
 import type { MonitorSampleRecord, MonitorStateRecord, RunJournalRecord } from '@sslm/store';
@@ -114,7 +114,7 @@ export async function checkMonitor(workspaceId: string, ld: LdSession, snapshots
       if (!owner) continue;
       for (const env of Object.keys(statuses)) {
         if (!readSync(f.customProperties ?? {}, env)) continue;
-        const st = statuses[env]?.[f.key];
+        const st = ownValue(statuses[env], f.key);
         if (!st) continue;
         const next = { flagKey: f.key, ldEnv: env, ldStatus: st.name, lastRequested: st.lastRequested ?? null, statsigChecksPerHour: checks.get(`${owner.source}/${owner.id}`) ?? null };
         if (shouldSample(latest.get(`${f.key}|${env}`), next, now)) fresh.push({ id: crypto.randomUUID(), workspaceId, at: now, ...next });

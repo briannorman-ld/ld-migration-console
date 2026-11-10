@@ -40,4 +40,20 @@ describe('checkMonitor', () => {
     await checkMonitor('w3', ld, [], { reuseListing: true });
     expect(refreshLdState).toHaveBeenCalledTimes(1);
   });
+
+  it('a migrated flag keyed like an Object.prototype member gets no status from a listing without it (security review M4)', async () => {
+    const f = {
+      key: 'constructor',
+      name: 'constructor',
+      tags: ['migrated-from-statsig'],
+      customProperties: { 'migration.id': { name: 'StatSig ID', value: ['constructor'] }, 'migration.source': { name: 'StatSig source', value: ['web'] }, 'migration.sync.test': { name: 'sync', value: ['fp', '1', '2026-01-01T00:00:00Z', 'dh'] } },
+      variations: [],
+      environments: {},
+    };
+    session = { status: 'connected', projectKey: 'p', flags: { items: [f as never], loadedAt: '2026-11-03T09:00:00Z' }, stale: '2026-11-03T09:00:00Z' };
+    listFlagStatuses.mockResolvedValueOnce({});
+    await checkMonitor('w4', ld, [], { reuseListing: true });
+    const { store } = await import('./store.ts');
+    expect(await store.listMonitorSamples('w4')).toEqual([]);
+  });
 });

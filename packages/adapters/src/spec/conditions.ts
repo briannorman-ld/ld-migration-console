@@ -1,4 +1,4 @@
-import type { Condition, ConditionType, SnapshotWarning } from '@sslm/canonical';
+import { ownValue, type Condition, type ConditionType, type SnapshotWarning } from '@sslm/canonical';
 
 /** A DCS condition (v1 inline, or v2 after condition_map resolution). */
 export interface DcsCondition {
@@ -68,7 +68,7 @@ export function normalizeDcsCondition(c: DcsCondition, ctx: ConditionContext): C
 
   switch (c.type) {
     case 'user_field': {
-      const t = field ? USER_FIELDS[field.toLowerCase()] : undefined;
+      const t = ownValue(USER_FIELDS, field?.toLowerCase());
       if (t) return { type: t, ...base };
       return { type: 'custom_field', field, ...base };
     }
@@ -78,7 +78,7 @@ export function normalizeDcsCondition(c: DcsCondition, ctx: ConditionContext): C
       return { type: 'unknown', field, derivedFrom: 'ip', ...base };
     }
     case 'ua_based': {
-      const t = field ? UA_FIELDS[field.toLowerCase()] : undefined;
+      const t = ownValue(UA_FIELDS, field?.toLowerCase());
       if (t) return { type: t, derivedFrom: 'user_agent', ...base };
       ctx.warn({ code: 'unknown_condition', path: ctx.path, message: `User-agent field "${field}" has no canonical type; kept for a decision.` });
       return { type: 'unknown', field, derivedFrom: 'user_agent', ...base };
@@ -113,7 +113,7 @@ export function normalizeDcsCondition(c: DcsCondition, ctx: ConditionContext): C
       return { type: 'unit_id', customID: idType, ...base };
     }
     default: {
-      const t = PASSTHROUGH[c.type];
+      const t = ownValue(PASSTHROUGH, c.type);
       if (t) return { type: t, ...(field ? { field } : {}), ...base };
       ctx.warn({ code: 'unknown_condition', path: ctx.path, message: `Unknown condition type "${c.type}"; kept for a decision.` });
       return { type: 'unknown', field, ...base };

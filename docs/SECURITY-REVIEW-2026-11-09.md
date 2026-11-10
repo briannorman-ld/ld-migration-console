@@ -38,7 +38,22 @@ a resource that is ours but whose `creationDate` / `_creationDate` / `createdAt`
 `run.startedAt` was made by an earlier run: it is adopted with a pre-image, not marked created,
 so undoing this run leaves it; one created after the run started is still this run's).
 
-Still open: M4, M6, M10, every Low and every Info item.
+Fixed on 2026-11-10 (second pass), with tests: **M4** (`ownValue` in `@sslm/canonical` reads a
+data-keyed table only through its own properties; applied to the spec condition tables, the
+mapper's unsupported-type and attribute tables, the profile's unit-type and environment maps, the
+monitor's flag statuses and the app's environment targets; a field, type, unit type, environment
+or flag named `constructor`, `toString` or `__proto__` is now ordinary data), **M6**
+(`assertNoSecrets` takes the paths of maps whose keys are source data, `PROFILE_DATA_KEYED` and
+`MONITOR_DATA_KEYED`; their keys are not tested, their values still are, so a unit type named
+`apiKey` or a flag keyed `secret` saves and a `token` field anywhere else is still refused),
+**M10** (the executor's `Journal.save` takes `immediate`, which the app's coalesced journal
+flushes at once; the executor flushes after every pre-image capture, before the write it
+protects, except for a flag this run created, and after every scheduled change it creates;
+before creating, it lists the flag environment's scheduled changes and replaces any at one of
+this step's execution dates that no journal or provenance knows, so an attempt that died between
+the create and the journal leaves no orphan and no duplicate).
+
+Still open: every Low and every Info item.
 
 ## Summary
 
@@ -155,7 +170,7 @@ upload with a generic error. A legitimate custom field named `constructor` break
 `packages/mapper/src/conditions.ts:279` and `profile.ts:32` have the same pattern.
 
 Fix: `Object.hasOwn` guards, or `Map` / `Object.create(null)` tables. Add tests with
-`field: "constructor"` and `type: "__proto__"`.
+`field: "constructor"` and `type: "__proto__"`. *Fixed 2026-11-10: see Status.*
 
 ### M5. Schema mismatch returns the raw body cast to the schema type; normalizers then crash
 
@@ -179,6 +194,7 @@ type `apiKey`, or an LD flag with key `secret`, makes the profile or monitoring 
 that workspace.
 
 Fix: assert only on app-shaped paths, or store data-keyed maps as `{name, value}` arrays.
+*Fixed 2026-11-10: see Status.*
 
 ### M7. CSV exports do not neutralise spreadsheet formulas
 
@@ -215,7 +231,7 @@ so a crash in the window leaves a scheduled change the next sync does not know t
 resume the "pre-image" re-read is our own targeting.
 
 Fix: flush synchronously around non-idempotent calls, or reconcile via `listScheduledChanges`
-on resume.
+on resume. *Fixed 2026-11-10, both ways: see Status.*
 
 ## Low
 

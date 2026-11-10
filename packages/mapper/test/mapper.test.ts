@@ -490,6 +490,24 @@ describe('profile', () => {
     p.sources[web.source.sourceId]!.envMapping.staging = null;
     expect(reconcileProfile(p, [web], ld, { staging: 'test' }).sources[web.source.sourceId]!.envMapping.staging).toBeNull();
   });
+
+  it('lookups keyed by source data never reach Object.prototype (security review M4)', async () => {
+    const { attributeFor, configuredValue, reconcileProfile } = await import('../src/index.ts');
+    const profile = { version: 1 as const, sources: { web: { envMapping: {}, unitTypeKinds: {} } }, attributes: {}, policies: {} };
+    expect(attributeFor(profile, 'custom_field', 'constructor')).toEqual({ attribute: 'constructor', renamed: false });
+    expect(attributeFor(profile, 'constructor')).toEqual({ attribute: 'constructor', renamed: false });
+    expect(configuredValue(profile, 'web', 'constructor')).toBeUndefined();
+    expect(configuredValue(profile, 'web', 'toString')).toBeUndefined();
+    const snap = { ...web, environments: [{ name: 'constructor' }, { name: '__proto__' }, { name: 'production' }] } as typeof web;
+    const p = reconcileProfile(profile, [snap], [{ key: 'production', name: 'Production' }]);
+    const m = p.sources[web.source.sourceId]!.envMapping;
+    expect(Object.entries(m)).toEqual([
+      ['constructor', null],
+      ['__proto__', null],
+      ['production', 'production'],
+    ]);
+    expect(() => structuredClone(p)).not.toThrow();
+  });
 });
 
 /**

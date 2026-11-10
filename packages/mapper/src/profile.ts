@@ -1,4 +1,4 @@
-import { sanitizeTag, type CanonicalSnapshot } from '@sslm/canonical';
+import { ownValue, sanitizeTag, type CanonicalSnapshot } from '@sslm/canonical';
 
 export { sanitizeTag };
 import type { MappingProfile, SourceProfile } from './types.ts';
@@ -24,12 +24,12 @@ const RESERVED_ATTRIBUTES = new Set(['key', 'kind', '_meta', 'anonymous']);
 export function attributeFor(profile: MappingProfile, conditionType: string, field?: string | null): { attribute: string; renamed: boolean } {
   if (conditionType === 'custom_field') {
     const f = field ?? '';
-    const mapped = profile.attributes[`custom_field:${f}`];
+    const mapped = ownValue(profile.attributes, `custom_field:${f}`);
     if (mapped) return { attribute: mapped, renamed: mapped !== f };
     if (RESERVED_ATTRIBUTES.has(f)) return { attribute: `custom_${f}`, renamed: true };
     return { attribute: f, renamed: false };
   }
-  const a = profile.attributes[conditionType] ?? DEFAULT_ATTRIBUTES[conditionType] ?? conditionType;
+  const a = ownValue(profile.attributes, conditionType) ?? ownValue(DEFAULT_ATTRIBUTES, conditionType) ?? conditionType;
   return { attribute: a, renamed: false };
 }
 
@@ -118,7 +118,7 @@ export function kindFromChoice(choice: string, proposed: string): string {
  */
 export function configuredValue(profile: MappingProfile, sourceId: string, unitType: string): string | undefined {
   const sp = profile.sources[sourceId];
-  const exact = sp?.unitTypeKinds[unitType];
+  const exact = ownValue(sp?.unitTypeKinds, unitType);
   if (exact) return exact;
   const ci = sp && Object.entries(sp.unitTypeKinds).find(([k]) => k.toLowerCase() === unitType.toLowerCase());
   return ci?.[1];
@@ -154,7 +154,7 @@ export function defaultProfile(snapshots: CanonicalSnapshot[], ldEnvs: { key: st
 }
 
 export function autoEnvMapping(snapshot: CanonicalSnapshot, ldEnvs: { key: string; name: string }[]): Record<string, string | null> {
-  const out: Record<string, string | null> = {};
+  const out: Record<string, string | null> = Object.create(null) as Record<string, string | null>;
   const used = new Set<string>();
   for (const e of snapshot.environments) {
     const m = ldEnvs.find((l) => !used.has(l.key) && (l.key.toLowerCase() === e.name.toLowerCase() || l.name.toLowerCase() === e.name.toLowerCase()));
@@ -178,10 +178,10 @@ export function reconcileProfile(profile: MappingProfile, snapshots: CanonicalSn
       if (auto[from] === null && ldEnvs.some((e) => e.key === to) && !Object.values(auto).includes(to)) auto[from] = to;
     }
     const valid = new Set(ldEnvs.map((e) => e.key));
-    const envMapping: Record<string, string | null> = {};
+    const envMapping: Record<string, string | null> = Object.create(null) as Record<string, string | null>;
     for (const e of s.environments) {
-      const prev = existing?.envMapping[e.name];
-      envMapping[e.name] = prev === undefined || (prev !== null && !valid.has(prev)) ? (auto[e.name] ?? null) : prev;
+      const prev = ownValue(existing?.envMapping, e.name);
+      envMapping[e.name] = prev === undefined || (prev !== null && !valid.has(prev)) ? (ownValue(auto, e.name) ?? null) : prev;
     }
     sources[s.source.sourceId] = { envMapping, unitTypeKinds: existing?.unitTypeKinds ?? {} };
   }

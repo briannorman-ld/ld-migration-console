@@ -4,7 +4,7 @@
  * this module wires them to the store, the LD session and the StatSig source.
  */
 import { useSyncExternalStore } from "react";
-import type { Autotune, CanonicalSnapshot, Config, Gate, NeutralFlag, NeutralSegment, Prompt, Segment } from "@sslm/canonical";
+import { ownValue, type Autotune, type CanonicalSnapshot, type Config, type Gate, type NeutralFlag, type NeutralSegment, type Prompt, type Segment } from "@sslm/canonical";
 import { Executor, newRun, type ResourceChange, type RunRecord } from "@sslm/executor";
 import type { CapabilityMatrix, LdFlagSummary } from "@sslm/ld-client";
 import {
@@ -148,8 +148,10 @@ export function envTargets(
     return snapshot.environments.map((e) => ({ statsig: e.name, ld: e.name }));
   const m = profile?.sources[snapshot.source.sourceId]?.envMapping ?? {};
   return snapshot.environments
-    .filter((e) => m[e.name])
-    .map((e) => ({ statsig: e.name, ld: m[e.name]! }));
+    .flatMap((e) => {
+      const ld = ownValue(m, e.name);
+      return ld ? [{ statsig: e.name, ld }] : [];
+    });
 }
 
 export interface MappingInputs {

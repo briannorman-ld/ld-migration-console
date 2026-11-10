@@ -1,6 +1,8 @@
 /**
  * In-tab executor (PLAN §9 steps 4–7, §15). Runs a plan's steps against LD in order:
- * - every step is journaled before and after it runs, so a closed tab resumes where it stopped;
+ * - every step is journaled before and after it runs, so a closed tab resumes where it stopped
+ *   (the app coalesces those writes; a pre-image and a scheduled change's id are journaled at once,
+ *   before the write they protect, because resume could not recover either);
  * - every write is idempotent (a create that already happened is recognized by its provenance);
  * - the state of anything updated is captured first (pre-image), so the run can be undone;
  * - each flag environment is one atomic semantic PATCH that also records provenance.
@@ -12,7 +14,7 @@
  * segments filled by a CSV import. The first write a plan refuses updates the capability matrix.
  */
 import { footer as provenanceFooter, parseFooter as parseProvenanceFooter, PROP, readSync, SOURCE_KIND_LABEL, stableStringify, withFooter as withProvenanceFooter, type FooterInput, CONSOLE_CREATED_MARKER } from '@sslm/canonical';
-import { LdAuthError, LdWriteError, type JsonPatchOp, type LdAiConfig, type LdClient, type LdExperiment, type LdExperimentationSettings, type LdFlag, type LdFlagConfig, type LdMetric, type LdSegment, type SemanticPatch } from '@sslm/ld-client';
+import { LdAuthError, LdSchemaError, LdWriteError, type JsonPatchOp, type LdAiConfig, type LdClient, type LdExperiment, type LdExperimentationSettings, type LdFlag, type LdFlagConfig, type LdMetric, type LdSegment, type SemanticPatch } from '@sslm/ld-client';
 import { flagOwner, ownsSegment, syncPropertyKey, type PlanStep, ldChange } from '@sslm/planner';
 import { FLAG_SIZE_BUDGET, FLAG_SIZE_LIMIT, SOURCE_KIND, type DesiredBandit, type DesiredFlagEnv, type DesiredRule, type DesiredSegment, type VariationOrRollout } from '@sslm/mapper';
 import type { MigrationSourceKind } from '@sslm/canonical';
@@ -136,7 +138,12 @@ export interface RunRecord {
 }
 
 export interface Journal {
-  save(run: RunRecord): Promise<void>;
+  /**
+   * `immediate`: the record must be durable before the executor goes on. Set after a pre-image is
+   * captured (the write that follows would otherwise be undone against our own state) and after
+   * a non-idempotent create whose id only the journal knows (a scheduled change).
+   */
+  save(run: RunRecord, opts?: { immediate?: boolean }): Promise<void>;
 }
 
 /**
@@ -264,6 +271,8 @@ export class Executor {
   private readonly sleep: (ms: number) => Promise<void>;
   /** Flags read during this run, by key (variation IDs for prerequisites). */
   private readonly flags = new Map<string, LdFlag>();
+  /** This run's flag shell step per flag key: an environment step of a flag the run created needs no pre-image flush (undo deletes the flag). */
+  private shellSteps = new Map<string, StepRecord>();
   /** The current run's cancel signal; every LD call gets it, so a cancel also aborts the write in flight. */
   private signal?: AbortSignal;
 
@@ -309,6 +318,7 @@ export class Executor {
     let concurrency = Math.max(1, Math.floor(this.opts.concurrency ?? DEFAULT_CONCURRENCY));
     run.concurrency = concurrency;
     const byId = new Map(run.steps.map((s) => [s.id, s]));
+    this.shellSteps = new Map(run.steps.flatMap((s) => (s.step.op === 'upsert_flag_shell' ? [[s.step.key, s] as const] : [])));
     /** Failed or skipped in this run: their dependents are skipped. */
     const failed = new Set<string>();
     /** Started (or skipped) in this run, so a resumed `failed` step is retried once. */
@@ -574,24 +584,34 @@ export class Executor {
    * step's create; a foreign one is taken over only when the plan said to adopt it, and otherwise
    * the user re-plans, exactly as if a read had found it first.
    */
-  private foundAfterConflict(run: RunRecord, rec: StepRecord, s: { adopt: boolean }, ours: boolean, current: NonNullable<StepRecord['preImage']>, appeared: string): void {
+  private async foundAfterConflict(run: RunRecord, rec: StepRecord, s: { adopt: boolean }, ours: boolean, current: NonNullable<StepRecord['preImage']>, appeared: string): Promise<void> {
     if (ours) {
       // Ours, but created before this run started: an earlier run (or another tab) made it, possibly
       // for other environments too. Undoing this run must not delete it, so it is adopted, not owned.
       const createdAt = createdAtMs(current);
       if (createdAt !== undefined && createdAt < Date.parse(run.startedAt)) {
-        if (rec.preImage === undefined) rec.preImage = current;
+        if (rec.preImage === undefined) await this.keepPreImage(run, rec, current);
         return;
       }
       rec.created = true;
       return;
     }
     if (!s.adopt) throw new Error(appeared);
-    if (rec.preImage === undefined) rec.preImage = current;
+    if (rec.preImage === undefined) await this.keepPreImage(run, rec, current);
   }
 
-  private async save(run: RunRecord) {
-    await this.opts.journal.save(run);
+  /**
+   * The state undo restores, journaled before the write that changes it. A tab that died between
+   * the two would otherwise resume the step, read the item as it is now (our own write) and keep
+   * that as the "pre-image".
+   */
+  private async keepPreImage(run: RunRecord, rec: StepRecord, current: NonNullable<StepRecord['preImage']>): Promise<void> {
+    rec.preImage = current;
+    await this.save(run, { immediate: true });
+  }
+
+  private async save(run: RunRecord, opts?: { immediate?: boolean }) {
+    await this.opts.journal.save(run, opts);
     // A new run object with new step records, so the UI (which compares identities) re-renders;
     // the pre-images and plan steps inside are shared, never mutated once set. Deep-cloning a
     // 3,000-step run with its pre-images twice per step was most of the main thread's work.
@@ -644,7 +664,7 @@ export class Executor {
     let current = this.mustRead(rec, s) ? await this.c.getAiConfig(this.p, s.key, this.signal) : null;
     if (current && !rec.created && rec.preImage === undefined) {
       if (!s.adopt && !ownsSegment({ key: current.key, tags: current.tags ?? [] }, s.provenance.sourceAlias)) throw new Error(`AI Config “${s.key}” appeared since planning and wasn't created by this app. Re-plan to decide.`);
-      rec.preImage = current;
+      await this.keepPreImage(run, rec, current);
     }
     const description = withFooter(d.description, footer(s.provenance, this.now()));
     const maintainer = d.maintainerId ? { maintainerId: d.maintainerId } : d.maintainerTeamKey ? { maintainerTeamKey: d.maintainerTeamKey } : {};
@@ -657,7 +677,7 @@ export class Executor {
         if (!(e instanceof LdWriteError && e.status === 409)) throw e;
         current = await this.c.getAiConfig(this.p, s.key, this.signal);
         if (!current) throw e;
-        this.foundAfterConflict(run, rec, s, ownsSegment({ key: current.key, tags: current.tags ?? [] }, s.provenance.sourceAlias), current, `AI Config “${s.key}” appeared since planning and wasn't created by this app. Re-plan to decide.`);
+        await this.foundAfterConflict(run, rec, s, ownsSegment({ key: current.key, tags: current.tags ?? [] }, s.provenance.sourceAlias), current, `AI Config “${s.key}” appeared since planning and wasn't created by this app. Re-plan to decide.`);
       }
       if (rec.created) return `Created AI Config “${s.key}”. Add its variations in LaunchDarkly: StatSig's API does not expose prompt versions.`;
     }
@@ -681,7 +701,7 @@ export class Executor {
     const units = settings.randomizationUnits ?? [];
     if (units.some((u) => u.randomizationUnit === s.key)) return `Randomization unit “${s.key}” already enabled.`;
     if (run.dryRun) return `Would enable “${s.key}” as a randomization unit.`;
-    if (rec.preImage === undefined) rec.preImage = settings;
+    if (rec.preImage === undefined) await this.keepPreImage(run, rec, settings);
     await this.c.putExperimentationSettings(this.p, { randomizationUnits: [...units.map((u) => ({ randomizationUnit: u.randomizationUnit, ...(u.default ? { default: true } : {}) })), { randomizationUnit: s.key }] }, this.signal);
     rec.created = true;
     return `Enabled “${s.key}” as a randomization unit.`;
@@ -693,7 +713,7 @@ export class Executor {
     if (current && !rec.created && rec.preImage === undefined) {
       const same = current.kind === 'custom' && current.eventKey === d.eventKey;
       if (!s.adopt && !same && !ownsSegment({ tags: current.tags ?? [] }, s.provenance.sourceAlias)) throw new Error(`Metric “${s.key}” appeared since planning and wasn't created by this app. Re-plan to decide.`);
-      rec.preImage = current;
+      await this.keepPreImage(run, rec, current);
     }
     if (!current) {
       if (run.dryRun) return `Would create custom metric “${s.key}” on event “${d.eventKey}”.`;
@@ -707,7 +727,7 @@ export class Executor {
         if (!current) throw e;
         // A metric on the same event is reused, as the read above would have done.
         const same = current.kind === 'custom' && current.eventKey === d.eventKey;
-        this.foundAfterConflict(run, rec, { adopt: s.adopt || same }, ownsSegment({ tags: current.tags ?? [] }, s.provenance.sourceAlias), current, `Metric “${s.key}” appeared since planning and wasn't created by this app. Re-plan to decide.`);
+        await this.foundAfterConflict(run, rec, { adopt: s.adopt || same }, ownsSegment({ tags: current.tags ?? [] }, s.provenance.sourceAlias), current, `Metric “${s.key}” appeared since planning and wasn't created by this app. Re-plan to decide.`);
       }
       if (rec.created) return `Created metric “${s.key}” on event “${d.eventKey}”.`;
     }
@@ -734,7 +754,7 @@ export class Executor {
     let current = this.mustRead(rec, s) ? await this.c.getExperiment(this.p, s.ldEnv, s.key, this.signal) : null;
     if (current && !rec.created && rec.preImage === undefined) {
       if (!s.adopt && !ownsSegment({ tags: current.tags ?? [] }, s.provenance.sourceAlias)) throw new Error(`Experiment “${s.key}” appeared in ${s.ldEnv} since planning and wasn't created by this app. Re-plan to decide.`);
-      rec.preImage = current;
+      await this.keepPreImage(run, rec, current);
     }
     if (!current) {
       if (run.dryRun) return `Would create bandit “${s.key}” in ${s.ldEnv}: ${banditSummary(d)}.`;
@@ -746,7 +766,7 @@ export class Executor {
         if (!(e instanceof LdWriteError && e.status === 409)) throw e;
         current = await this.c.getExperiment(this.p, s.ldEnv, s.key, this.signal);
         if (!current) throw e;
-        this.foundAfterConflict(run, rec, s, ownsSegment({ tags: current.tags ?? [] }, s.provenance.sourceAlias), current, `Experiment “${s.key}” appeared in ${s.ldEnv} since planning and wasn't created by this app. Re-plan to decide.`);
+        await this.foundAfterConflict(run, rec, s, ownsSegment({ tags: current.tags ?? [] }, s.provenance.sourceAlias), current, `Experiment “${s.key}” appeared in ${s.ldEnv} since planning and wasn't created by this app. Re-plan to decide.`);
       }
       if (rec.created) return `Created bandit “${s.key}” in ${s.ldEnv} as a draft: ${banditSummary(d)}.`;
     }
@@ -808,7 +828,7 @@ export class Executor {
     if (current && !rec.created && rec.preImage === undefined) {
       // Re-check ownership: the LD project may have changed since planning.
       if (!s.adopt && !ownsSegment({ key: current.key, tags: current.tags ?? [] }, s.provenance.sourceAlias)) throw new Error(`Segment “${s.key}” appeared in ${s.ldEnv} since planning and wasn't created by this app. Re-plan to decide.`);
-      if (!rec.created) rec.preImage = current;
+      await this.keepPreImage(run, rec, current);
     }
     const description = withFooter(d.description, footer(s.provenance, this.now()));
     if (!current) {
@@ -825,7 +845,7 @@ export class Executor {
         if (!(e instanceof LdWriteError && e.status === 409)) throw e;
         current = await this.c.getSegment(this.p, s.ldEnv, s.key, this.signal);
         if (!current) throw e;
-        this.foundAfterConflict(run, rec, s, ownsSegment({ key: current.key, tags: current.tags ?? [] }, s.provenance.sourceAlias), current, `Segment “${s.key}” appeared in ${s.ldEnv} since planning and wasn't created by this app. Re-plan to decide.`);
+        await this.foundAfterConflict(run, rec, s, ownsSegment({ key: current.key, tags: current.tags ?? [] }, s.provenance.sourceAlias), current, `Segment “${s.key}” appeared in ${s.ldEnv} since planning and wasn't created by this app. Re-plan to decide.`);
       }
     }
     // Checked after the create too: a segment found through a 409 may be of the other kind.
@@ -948,7 +968,7 @@ export class Executor {
     if (flag && !rec.created && rec.preImage === undefined) {
       const owner = flagOwner({ key: flag.key, tags: flag.tags ?? [], customProperties: flag.customProperties ?? {} });
       if (!s.adopt && !owner) throw new Error(`Flag “${s.key}” appeared since planning and wasn't created by this app. Re-plan to decide.`);
-      rec.preImage = flag;
+      await this.keepPreImage(run, rec, flag);
     }
     if (!flag) {
       if (run.dryRun) return d.variations.every((v) => typeof v.value === 'boolean') ? `Would create boolean flag “${s.key}” (${d.tags.join(', ')}).` : `Would create JSON flag “${s.key}” with ${d.variations.length} variations (${d.tags.join(', ')}).`;
@@ -974,7 +994,7 @@ export class Executor {
         flag = await this.c.getFlag(this.p, s.key, this.signal);
         if (!flag) throw e;
         const owner = flagOwner({ key: flag.key, tags: flag.tags ?? [], customProperties: flag.customProperties ?? {} });
-        this.foundAfterConflict(run, rec, s, owner?.id === d.customProperties[PROP.id]?.value[0], flag, `Flag “${s.key}” appeared since planning and wasn't created by this app. Re-plan to decide.`);
+        await this.foundAfterConflict(run, rec, s, owner?.id === d.customProperties[PROP.id]?.value[0], flag, `Flag “${s.key}” appeared since planning and wasn't created by this app. Re-plan to decide.`);
       }
       if (rec.created) {
         this.flags.set(s.key, flag);
@@ -1013,7 +1033,10 @@ export class Executor {
       throw new Error(`Flag “${s.key}” doesn't exist (its settings step didn't run).`);
     }
     this.flags.set(s.key, flag);
-    if (rec.preImage === undefined) rec.preImage = flag;
+    if (rec.preImage === undefined) {
+      if (this.shellSteps.get(s.key)?.created) rec.preImage = flag;
+      else await this.keepPreImage(run, rec, flag);
+    }
     const ids = variationIds(flag, s.variations);
     const d = s.desired;
     const scheduled = d.scheduledChanges ?? [];
@@ -1084,13 +1107,19 @@ export class Executor {
     // Scheduled changes: ours are full-state snapshots, so the earlier ones go and the new set is created.
     const created: string[] = [];
     if (scheduled.length || previous.length) {
-      for (const id of previous) await this.c.deleteScheduledChange(this.p, s.key, s.ldEnv, id).catch(ignore404);
+      // An attempt that died between the create and the journal left a change only LaunchDarkly
+      // knows about. Ours are full states at this step's execution dates, so an existing change
+      // at one of those dates is an earlier attempt's and is replaced with the rest.
+      const orphans = scheduled.length ? await this.orphanScheduledChanges(s.key, s.ldEnv, scheduled.map((c) => Date.parse(c.executionDate)), previous) : [];
+      for (const id of [...previous, ...orphans]) await this.c.deleteScheduledChange(this.p, s.key, s.ldEnv, id).catch(ignore404);
       rec.scheduledChangeIds = [];
       try {
         for (const sc of scheduled) {
           const r = await this.c.createScheduledChange(this.p, s.key, s.ldEnv, { executionDate: Date.parse(sc.executionDate), instructions: await this.stateInstructions(sc.state, flag, s.ldEnv, ids), comment: `${comment}: ${sc.description}` }, { ignoreConflicts: true });
           created.push(r._id);
           rec.scheduledChangeIds = [...created];
+          // The id exists nowhere else until the provenance write below: journal it now.
+          await this.save(run, { immediate: true });
         }
         if (scheduled.length) this.learned(rec, { key: 'scheduled_changes', status: 'available', evidence: `created ${scheduled.length} scheduled change(s) on ${s.key}` });
       } catch (e) {
@@ -1102,6 +1131,20 @@ export class Executor {
     }
     await this.writeProvenance(run, s, created, rec);
     return `Set targeting in ${s.ldEnv}${schedNote ? schedNote.replace(' and ', ' and created ') : ''}: ${summary}.`;
+  }
+
+  /** Scheduled changes on the flag environment at one of `dates` that `known` does not list; `[]` when the listing is refused. */
+  private async orphanScheduledChanges(flagKey: string, ldEnv: string, dates: number[], known: string[]): Promise<string[]> {
+    try {
+      const existing = await this.c.listScheduledChanges(this.p, flagKey, ldEnv, this.signal);
+      return existing.filter((c) => c.executionDate !== undefined && c.executionDate !== null && dates.includes(c.executionDate) && !known.includes(c._id)).map((c) => c._id);
+    } catch (e) {
+      // A token that cannot list them, a plan without them, or an unreadable body: the safety net
+      // is skipped, the step goes on. Anything systemic (401, unreachable) stops the run as usual.
+      const status = (e as { status?: unknown }).status;
+      if ((e instanceof LdAuthError && e.status === 403) || e instanceof LdSchemaError || status === 404 || status === 405) return [];
+      throw e;
+    }
   }
 
   /**

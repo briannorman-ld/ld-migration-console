@@ -42,20 +42,54 @@ export class SecretInStoreError extends Error {
   }
 }
 
-/** Throws if any object key anywhere in `value` looks like a credential. */
-export function assertNoSecrets(value: unknown, path = "$", depth = 0): void {
-  if (depth > 12 || value === null || typeof value !== "object") return;
+/**
+ * Maps inside a record whose *keys* are source data (a unit type, an environment or flag name, an
+ * owner email), not app fields: a StatSig unit type named `apiKey` or an LD flag keyed `secret`
+ * must not make the record unsaveable. Each entry is a path from the record's root; `*` matches
+ * one segment and `[]` an array index. The keys directly under a matching path are not tested
+ * against SECRET_KEYS; their values still are, all the way down.
+ */
+export type DataKeyedPaths = readonly string[];
+
+/** Where a MappingProfile record keeps source-named keys (ProfileRecord.profile). */
+export const PROFILE_DATA_KEYED: DataKeyedPaths = [
+  "profile.sources",
+  "profile.sources.*.envMapping",
+  "profile.sources.*.unitTypeKinds",
+  "profile.maintainers",
+  "profile.teams",
+  "profile.contextKinds",
+];
+
+/** Where monitor state keeps LD environment and flag keys (MonitorStateRecord). */
+export const MONITOR_DATA_KEYED: DataKeyedPaths = ["statuses", "statuses.*", "errors"];
+
+const matchesPath = (pattern: string, path: readonly string[]): boolean => {
+  const segs = pattern.split(".");
+  return segs.length === path.length && segs.every((p, i) => p === "*" || p === path[i]);
+};
+
+/**
+ * Throws if any object key anywhere in `value` looks like a credential, except the keys of the
+ * maps `dataKeyed` names, which are source data.
+ */
+export function assertNoSecrets(value: unknown, opts: { dataKeyed?: DataKeyedPaths } = {}): void {
+  walkForSecrets(value, [], opts.dataKeyed ?? []);
+}
+
+function walkForSecrets(value: unknown, path: string[], dataKeyed: DataKeyedPaths): void {
+  if (path.length > 12 || value === null || typeof value !== "object") return;
   if (Array.isArray(value)) {
     // Snapshots can hold large arrays (ID lists); only objects can carry secret keys.
     for (let i = 0; i < value.length; i++)
-      if (value[i] && typeof value[i] === "object")
-        assertNoSecrets(value[i], `${path}[${i}]`, depth + 1);
+      if (value[i] && typeof value[i] === "object") walkForSecrets(value[i], [...path, "[]"], dataKeyed);
     return;
   }
+  const keysAreData = dataKeyed.some((p) => matchesPath(p, path));
   for (const [k, v] of Object.entries(value)) {
-    if (SECRET_KEYS.test(k) && v !== undefined && v !== null && v !== "")
-      throw new SecretInStoreError(`${path}.${k}`);
-    assertNoSecrets(v, `${path}.${k}`, depth + 1);
+    if (!keysAreData && SECRET_KEYS.test(k) && v !== undefined && v !== null && v !== "")
+      throw new SecretInStoreError(`$.${[...path, k].join(".")}`);
+    walkForSecrets(v, [...path, k], dataKeyed);
   }
 }
 
@@ -417,7 +451,7 @@ export class WorkspaceStore {
     profile: MappingProfile,
   ): Promise<void> {
     const rec: ProfileRecord = { workspaceId, updatedAt: now(), profile };
-    assertNoSecrets(rec);
+    assertNoSecrets(rec, { dataKeyed: PROFILE_DATA_KEYED });
     await this.db.profiles.put(rec);
   }
 
@@ -527,7 +561,7 @@ export class WorkspaceStore {
   }
 
   async saveMonitorState(rec: MonitorStateRecord): Promise<void> {
-    assertNoSecrets(rec);
+    assertNoSecrets(rec, { dataKeyed: MONITOR_DATA_KEYED });
     await this.db.monitorState.put(rec);
   }
 

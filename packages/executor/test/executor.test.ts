@@ -508,6 +508,26 @@ describe('Executor', () => {
   });
 });
 
+describe('pre-images (security review M10)', () => {
+  it('the pre-image of an item this run updates is journaled before the write that changes it', async () => {
+    const ld = fakeLd();
+    ld.flags.set('a', ld.flag('a', { tags: ['migrated-from-statsig'], customProperties: { 'migration.id': { name: 'StatSig ID', value: ['a'] }, 'migration.source': { name: 'StatSig source', value: ['web'] } } }));
+    const { ex, run } = setup(ld.client, [{ ...(shell('a') as Extract<PlanStep, { op: 'upsert_flag_shell' }>), exists: true }, env('a')], {
+      journal: {
+        save: async (r, o) => {
+          if (o?.immediate) ld.calls.push(`journal ${r.steps.filter((s) => s.preImage !== undefined).map((s) => s.id).join(',')}`);
+        },
+      },
+    });
+    const out = await ex.run(run);
+    expect(out.status).toBe('done');
+    const calls = ld.calls.filter((c) => !c.startsWith('get'));
+    expect(calls.indexOf('journal shell:a')).toBeGreaterThanOrEqual(0);
+    expect(calls.indexOf('journal shell:a')).toBeLessThan(calls.findIndex((c) => c.startsWith('json a ') || c.startsWith('semantic a')));
+    expect(calls.indexOf('journal shell:a,env:test:a')).toBeLessThan(calls.indexOf('semantic a test'));
+  });
+});
+
 describe('scheduled changes (PLAN §5.1; time_condition → schedule)', () => {
   const flip = '2027-11-26T05:00:00Z';
   const scheduledEnv = (key: string): PlanStep => ({
@@ -539,6 +559,49 @@ describe('scheduled changes (PLAN §5.1; time_condition → schedule)', () => {
     expect(out.status).toBe('done');
     expect(ld.calls.filter((c) => !c.startsWith('get'))).toEqual(['semantic a test', 'unschedule old-1', 'unschedule old-2', `schedule test/a ${new Date(flip).toISOString()}`, 'json a /customProperties/migration.sync.test']);
     expect(scheduledIdsFrom(['fp', '1', 't', 'dh', 'sc:x', 'sc:y'])).toEqual(['x', 'y']);
+  });
+
+  it('a scheduled change an interrupted attempt created before the journal recorded it is replaced, not duplicated (security review M10)', async () => {
+    const ld = fakeLd();
+    ld.flags.set('a', ld.flag('a', { tags: ['migrated-from-statsig'], customProperties: { 'migration.id': { name: 'StatSig ID', value: ['a'] }, 'migration.source': { name: 'StatSig source', value: ['web'] } } }));
+    // The earlier attempt's change: at this step's execution date, in no journal and no provenance.
+    ld.scheduled.set('orphan-1', { executionDate: Date.parse(flip), instructions: [] });
+    // A change at another date is someone else's and stays.
+    ld.scheduled.set('theirs-1', { executionDate: Date.parse('2027-12-24T00:00:00Z'), instructions: [] });
+    const { ex, run } = setup(ld.client, [scheduledEnv('a')]);
+    run.steps[0]!.step.deps = [];
+    const out = await ex.run(run);
+    expect(out.status).toBe('done');
+    expect(ld.calls.filter((c) => !c.startsWith('get'))).toEqual(['semantic a test', 'unschedule orphan-1', `schedule test/a ${new Date(flip).toISOString()}`, 'json a /customProperties/migration.sync.test']);
+    expect([...ld.scheduled.keys()]).toEqual(['theirs-1', 'sc-1']);
+    expect(out.steps[0]!.scheduledChangeIds).toEqual(['sc-1']);
+  });
+
+  it('the id of a scheduled change is journaled at once, before the provenance write (security review M10)', async () => {
+    const ld = fakeLd();
+    const immediate: (string[] | undefined)[] = [];
+    const { ex, run } = setup(ld.client, [shell('a'), scheduledEnv('a')], {
+      journal: {
+        save: async (r, o) => {
+          if (o?.immediate) {
+            immediate.push(r.steps[1]!.scheduledChangeIds);
+            ld.calls.push('journal');
+          }
+        },
+      },
+    });
+    await ex.run(run);
+    expect(immediate).toContainEqual(['sc-1']);
+    const calls = ld.calls.filter((c) => !c.startsWith('get'));
+    expect(calls.indexOf('journal', calls.indexOf(`schedule test/a ${new Date(flip).toISOString()}`))).toBeLessThan(calls.indexOf('json a /customProperties/migration.sync.test'));
+  });
+
+  it('when the listing of scheduled changes is refused, the step still writes', async () => {
+    const ld = fakeLd({ listScheduledChanges: async () => Promise.reject(new LdWriteError(404, '/scheduled-changes', null)) });
+    const { ex, run } = setup(ld.client, [shell('a'), scheduledEnv('a')]);
+    const out = await ex.run(run);
+    expect(out.status).toBe('done');
+    expect(out.steps[1]!.scheduledChangeIds).toEqual(['sc-1']);
   });
 
   it('when LaunchDarkly refuses the scheduled change, the step fails, the capability is learned and nothing half-scheduled is left', async () => {

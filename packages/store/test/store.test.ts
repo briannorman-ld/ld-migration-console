@@ -297,6 +297,28 @@ describe("monitoring tables (M5)", () => {
     const ws = await s.createWorkspace({ name: "Leaky" });
     await expect(s.saveMonitorState({ workspaceId: ws.id, lastCheckedAt: "x", statuses: {}, alertKeys: [], ...({ token: "sdk-123" } as object) })).rejects.toBeInstanceOf(SecretInStoreError);
   });
+
+  it("source-named keys are data, not secrets: a flag keyed secret or a unit type named apiKey saves (security review M6)", async () => {
+    const s = store();
+    const ws = await s.createWorkspace({ name: "Named" });
+    await s.saveMonitorState({ workspaceId: ws.id, lastCheckedAt: "x", alertKeys: [], statuses: { production: { secret: { name: "active" }, token: { name: "inactive", lastRequested: "2026-11-01T00:00:00Z" } } }, errors: { password: "403" } });
+    expect((await s.getMonitorState(ws.id))?.statuses.production?.secret?.name).toBe("active");
+    await s.saveProfile(ws.id, {
+      version: 1,
+      sources: { apiKey: { envMapping: { secret: "production", token: null }, unitTypeKinds: { apiKey: "api-key", authorization: "attribute:authorization" } } },
+      attributes: { "custom_field:password": "pw" },
+      policies: {},
+      maintainers: { "token@example.com": "unassigned" },
+      teams: { Secret: null },
+      contextKinds: { "api-key": { availableForExperiments: true } },
+    });
+    expect((await s.getProfile(ws.id))?.sources.apiKey?.unitTypeKinds.apiKey).toBe("api-key");
+    // The values under those maps are still checked.
+    await expect(s.saveMonitorState({ workspaceId: ws.id, lastCheckedAt: "x", alertKeys: [], statuses: { production: { f: { name: "active", ...({ token: "sdk-1" } as object) } } } })).rejects.toBeInstanceOf(SecretInStoreError);
+    await expect(s.saveProfile(ws.id, { version: 1, sources: {}, attributes: {}, policies: {}, ...({ token: "api-x" } as object) })).rejects.toBeInstanceOf(SecretInStoreError);
+    expect(() => assertNoSecrets({ statuses: { production: { token: "sdk-1" } } }, { dataKeyed: ["statuses"] })).toThrow(SecretInStoreError);
+    expect(() => assertNoSecrets({ statuses: { production: { token: "sdk-1" } } }, { dataKeyed: ["statuses", "statuses.*"] })).not.toThrow();
+  });
 });
 
 describe("exclusions (items set aside)", () => {
