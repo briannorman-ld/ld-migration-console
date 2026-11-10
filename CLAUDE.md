@@ -10,6 +10,7 @@
 - **Every imperfect mapping becomes a Decision** (PLAN §8). Never silently drop or approximate a condition.
 - Two StatSig source types feed one canonical model: the Console API (read-only key) and an uploaded config spec (DCS v1/v2). A third source kind, another LaunchDarkly project (PLAN §20), fills the snapshot's provider-neutral block (`packages/canonical/src/neutral.ts`) read by `packages/adapters/src/launchdarkly` and mapped by `packages/mapper/src/neutral.ts`; new sources go onto the neutral model, not onto StatSig's vocabulary. GrowthBook is the next one (PLAN §21; spec and SDK fixtures in `reference/growthbook/`).
 - Experiments end in StatSig and launch new in LD; nothing is moved mid-flight.
+- **Nothing archived is ever migrated**, whatever the kind (gates, configs, segments, experiments, layers, holdouts, autotunes, metrics, LD flags). Archived items are listed behind an "archived" toggle and counted apart; they are never selectable, planned or written, and there is no option to include them.
 - A workspace is 1 LD project plus N StatSig sources (consolidation). Keep N-source support in the data model.
 - Tokens are never logged, persisted unencrypted, or put in workspace files. By default they are kept on the device AES-GCM encrypted under a non-extractable WebCrypto key (PLAN §3.4); a passphrase vault or memory-only is the user's choice per workspace. CSP `connect-src` is limited to the StatSig and LD API hosts.
 

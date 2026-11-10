@@ -67,6 +67,7 @@ A **browser-only** web app (a static site with no backend, no accounts and no se
 **Non-goals**
 - Writing to StatSig.
 - Moving historical data or results. These are archived instead.
+- Migrating anything archived in the source: gates, configs, segments, experiments, layers, holdouts, autotunes, metrics, flags. Archived resources are listed for completeness (behind an "archived" toggle, with an archived count where totals are shown) and are never selectable, planned or written. This is not an option to turn on (decided 2026-11-09).
 - Preserving bucket assignments, which is impossible.
 - Moving running experiments mid-flight.
 
@@ -609,7 +610,7 @@ Policy: **no running experiment is moved mid-flight.** What carries over is the 
 | `setup` (not started) | Create the JSON flag (a variation per group) and an LD experiment as a **draft, not started**, with the hypothesis, treatments, allocation, randomization unit and metrics. |
 | `active` | `experiment_running` decision. Default: **wait.** The item shows "Running in StatSig, migrate after it ends". Optional: pre-stage the draft. |
 | `decision_made` / shipped | `experiment_concluded`: the flag serves the shipped group's parameters at 100%. Results are archived (§13). |
-| `abandoned` / `archived` | Skipped by default; listed for completeness. |
+| `abandoned` / `archived` | Never migrated; listed for completeness (Non-goals). |
 
 - **Layers:**
   - Create LD layers so *new* experiments stay mutually exclusive.

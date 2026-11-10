@@ -267,6 +267,15 @@ export function SnapshotsView({
                       {r.summary.gates} gates · {r.summary.configs} configs ·{" "}
                       {r.summary.segments} segments · {r.summary.experiments}{" "}
                       experiments
+                      {(r.summary.archived ?? 0) > 0 && (
+                        <span
+                          className="text-fg-subtle"
+                          title="Archived in StatSig: listed on the resource pages behind “archived”, never migrated"
+                        >
+                          {" "}
+                          · {r.summary.archived} archived
+                        </span>
+                      )}
                       {r.summary.warnings > 0 && (
                         <span className="text-warning">
                           {" "}

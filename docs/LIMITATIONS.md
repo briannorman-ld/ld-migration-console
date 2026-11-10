@@ -91,7 +91,7 @@ Re-randomizing a running experiment invalidates its results: StatSig and LaunchD
 | `setup` (not started) | JSON flag (a variation per group) and a **draft** LaunchDarkly experiment with the hypothesis, treatments, allocation, randomization unit and metrics |
 | `active` | "Running in StatSig, migrate after it ends." Optionally pre-stage the draft |
 | `decision_made` / shipped | Flag serving the shipped group at 100%; results archived |
-| `abandoned` / `archived` | Skipped, listed for completeness |
+| `abandoned` / `archived` | Never migrated, listed for completeness |
 | `experiment_stopped` / `assignment_stopped` | Drafted like a not-started experiment, or skipped |
 
 Only plain A/B experiments (`experimentType: BASE`) have a LaunchDarkly shape. Switchback, geo, grid-search and no-code sidecar experiments are listed as having no equivalent; prompt experiments belong to LaunchDarkly AgentControl.

@@ -23,6 +23,9 @@ import {
 } from "./db.ts";
 import type { VaultBlob } from "./vault.ts";
 
+/** Entities not archived in the source: the ones the console can migrate. */
+const live = (list: readonly { archived: boolean }[]): number => list.filter((e) => !e.archived).length;
+
 /** Property names that must never be persisted (CLAUDE.md: tokens never persisted unencrypted). */
 const SECRET_KEYS =
   /^(token|apiKey|api_key|statsigApiKey|consoleKey|clientKey|ldToken|accessToken|authorization|secret|password|sdkKey|mobileKey)$/i;
@@ -252,10 +255,11 @@ export class WorkspaceStore {
       takenAt: snapshot.takenAt,
       sourceKind: snapshot.source.sourceKind,
       summary: {
-        gates: snapshot.gates.length,
-        configs: snapshot.configs.length,
-        segments: snapshot.segments.length,
-        experiments: snapshot.experiments.length,
+        gates: live(snapshot.gates),
+        configs: live(snapshot.configs),
+        segments: live(snapshot.segments),
+        experiments: live(snapshot.experiments),
+        archived: [snapshot.gates, snapshot.configs, snapshot.segments, snapshot.experiments].reduce((n, list) => n + list.length - live(list), 0),
         warnings: snapshot.warnings.length,
       },
       bytes: approximateJsonBytes(snapshot),

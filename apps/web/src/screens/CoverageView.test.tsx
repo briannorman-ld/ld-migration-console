@@ -112,6 +112,16 @@ describe('EntityList with guidance', () => {
     expect(onOpenCoverage).toHaveBeenCalledWith('experiments.setup');
   });
 
+  it('hides archived items behind a toggle and counts only the live ones, since archived resources are never migrated', () => {
+    const withArchived = { ...snapshot, experiments: [...snapshot.experiments, { ...experiment('old_pricing_test', 'archived'), archived: true }] } as CanonicalSnapshot;
+    render(<EntityList kind="experiment" label="Experiments" sources={[source]} snapshots={{ s1: withArchived }} />);
+    expect(screen.getByRole('heading', { name: 'Experiments' }).nextElementSibling?.textContent).toBe('3');
+    expect(screen.queryByText('old_pricing_test')).toBeNull();
+    fireEvent.click(screen.getByLabelText(/archived \(1\)/));
+    expect(screen.getByText('old_pricing_test')).toBeTruthy();
+    expect(screen.getByText(/Archived in StatSig: not migrated/)).toBeTruthy();
+  });
+
   it('filters by what happens to the items', () => {
     render(<EntityList kind="experiment" label="Experiments" sources={[source]} snapshots={{ s1: snapshot }} />);
     fireEvent.change(screen.getByLabelText('Filter by what happens'), { target: { value: 'guided' } });

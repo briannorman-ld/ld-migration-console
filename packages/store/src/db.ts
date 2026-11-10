@@ -54,12 +54,18 @@ export interface SnapshotRecord {
   sourceId: string;
   takenAt: string;
   sourceKind: CanonicalSnapshot["source"]["sourceKind"];
-  /** Counts for list views without loading the whole snapshot. */
+  /**
+   * Counts for list views without loading the whole snapshot. The per-kind counts are live
+   * entities only, the same numbers the sidebar shows: archived resources are never migrated, so
+   * they are tallied apart in `archived`. Records saved before that split counted them in.
+   */
   summary: {
     gates: number;
     configs: number;
     segments: number;
     experiments: number;
+    /** Archived gates, configs, segments and experiments, which the counts above leave out. */
+    archived?: number;
     warnings: number;
   };
   /** Approximate size of `canonical` as JSON, for the storage view. Absent on records saved before it was tracked. */

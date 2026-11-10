@@ -427,6 +427,22 @@ describe("snapshots: payloads kept apart", () => {
     expect(await s.db.snapshots.count()).toBe(0);
   });
 
+  it("summarizes live resources and counts the archived ones apart (archived resources are never migrated)", async () => {
+    const s = store();
+    const ws = await s.createWorkspace({ name: "x" });
+    await s.addSource(ws.id, source("web"));
+    const entity = (kind: string, id: string, archived: boolean) => ({ kind, id, uid: `web/${kind}/${id}`, archived }) as never;
+    const snap = {
+      ...emptySnapshot(desc, "2026-01-01T00:00:00Z"),
+      gates: [entity("gate", "a", false), entity("gate", "b", true)],
+      configs: [entity("config", "c", true)],
+      segments: [entity("segment", "d", false)],
+      experiments: [entity("experiment", "e", false), entity("experiment", "f", true), entity("experiment", "g", true)],
+    };
+    const saved = await s.saveSnapshot(ws.id, snap);
+    expect(saved.summary).toEqual({ gates: 1, configs: 0, segments: 1, experiments: 1, archived: 4, warnings: 0 });
+  });
+
   it("moves the payloads of snapshots saved before version 10 into their own table on upgrade", async () => {
     const name = `upgrade-${crypto.randomUUID()}`;
     const { default: Dexie } = await import("dexie");

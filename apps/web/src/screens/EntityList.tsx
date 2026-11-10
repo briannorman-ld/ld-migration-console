@@ -12,6 +12,8 @@ import { COVERAGE_TONE } from './coverageTone.ts';
 /**
  * Inventory for resource kinds without a side-by-side explorer yet. Every item carries a verdict
  * from the coverage matrix (what will happen to it and why), so nothing is a bare name in a list.
+ * Archived items are never migrated, so they sit behind the "archived" toggle like in the other
+ * explorers, and the count in the heading is the live one the sidebar shows.
  */
 export function EntityList({
   kind,
@@ -30,10 +32,13 @@ export function EntityList({
   const [q, setQ] = useState('');
   const [status, setStatus] = useState<CoverageStatus | 'all'>('all');
   const [tags, setTags] = useState<Set<string>>(new Set());
-  const rows = useMemo(
+  const [showArchived, setShowArchived] = useState(false);
+  const all = useMemo(
     () => sources.flatMap((s) => entitiesOf(snapshots[s.id]!, kind).map((e) => ({ s, e, g: guidanceFor(e) }))),
     [sources, snapshots, kind],
   );
+  const archivedCount = useMemo(() => all.filter((r) => r.e.archived).length, [all]);
+  const rows = useMemo(() => (showArchived ? all : all.filter((r) => !r.e.archived)), [all, showArchived]);
   const tagChoices = useMemo(() => tagOptions(rows.map((r) => r.e)), [rows]);
   const chosenTags = useMemo(() => pruneTags(tags, tagChoices), [tags, tagChoices]);
   const filtered = useMemo(() => {
@@ -54,7 +59,7 @@ export function EntityList({
     <div>
       <div className="mb-3 flex flex-wrap items-center gap-3">
         <h2 className="font-display text-xl font-semibold tracking-tight">{label}</h2>
-        <Badge>{rows.length}</Badge>
+        <Badge>{all.length - archivedCount}</Badge>
         <Select value={status} onChange={(e) => setStatus(e.target.value as CoverageStatus | 'all')} aria-label="Filter by what happens" className="py-1">
           <option value="all">Everything</option>
           {(Object.keys(counts) as CoverageStatus[]).map((s) => (
@@ -64,6 +69,11 @@ export function EntityList({
           ))}
         </Select>
         <TagFilter options={tagChoices} chosen={chosenTags} onChange={setTags} noun={label.toLowerCase()} />
+        {archivedCount > 0 && (
+          <label className="flex items-center gap-1.5 text-sm text-fg-muted" title="Archived in StatSig: never migrated">
+            <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} /> archived ({archivedCount})
+          </label>
+        )}
         <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder={`Search ${label.toLowerCase()}…`} aria-label={`Search ${label}`} className="ml-auto w-64 py-1" />
       </div>
       <MappingExplainer resource={kind} onOpenCoverage={onOpenCoverage} className="mb-3" />
@@ -95,7 +105,11 @@ export function EntityList({
               </span>
             </li>
           ))}
-          {filtered.length === 0 && <li className="px-3 py-3 text-xs text-fg-muted">{rows.length === 0 ? 'Nothing here.' : 'No matches.'}</li>}
+          {filtered.length === 0 && (
+            <li className="px-3 py-3 text-xs text-fg-muted">
+              {rows.length > 0 ? 'No matches.' : archivedCount > 0 ? `Nothing live here: the ${archivedCount} archived ${label.toLowerCase()} are not migrated.` : 'Nothing here.'}
+            </li>
+          )}
         </ul>
       </Card>
       <PagerBar pager={pager} label={label.toLowerCase()} className="mt-2" />
