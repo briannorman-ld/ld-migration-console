@@ -167,6 +167,7 @@ describe('layerReport', () => {
     expect(ids(sortLayerRows(report.rows, 'parameters'))).toEqual(['pricing_layer', 'checkout_layer', 'button_color_layer', 'retired_layer']);
     expect(ids(sortLayerRows(report.rows, 'running'))[0]).toBe('checkout_layer');
     expect(ids(sortLayerRows(report.rows, 'name', 'asc'))).toEqual(['button_color_layer', 'checkout_layer', 'pricing_layer', 'retired_layer']);
+    expect(ids(sortLayerRows(report.rows, 'fate'))).toEqual(['checkout_layer', 'pricing_layer', 'button_color_layer', 'retired_layer']);
   });
 
   it('exports one CSV row per experiment plus one per empty layer, with layer defaults', () => {

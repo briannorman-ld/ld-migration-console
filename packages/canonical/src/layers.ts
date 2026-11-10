@@ -298,14 +298,17 @@ export function describeRule(r: Rule): string {
   return r.passPercentage < 100 ? `${conds} (${r.passPercentage}% pass)` : conds;
 }
 
-export type LayerSortKey = 'experiments' | 'running' | 'parameters' | 'name';
+export type LayerSortKey = 'experiments' | 'running' | 'parameters' | 'name' | 'fate';
 
-/** Layers by live experiment count (default), running experiments, parameter count or name; ties by name. */
+/** Descending order of the Migration column: layers that will be created first, archived last. */
+const FATE_RANK: Record<LayerFate, number> = { create: 3, skip_empty: 2, skip_implicit: 1, never: 0 };
+
+/** Layers by live experiment count (default), running experiments, parameter count, migration verdict or name; ties by name. */
 export function sortLayerRows(rows: LayerReportRow[], key: LayerSortKey, dir: 'asc' | 'desc' = 'desc'): LayerReportRow[] {
   const sign = dir === 'asc' ? 1 : -1;
   const byName = (a: LayerReportRow, b: LayerReportRow) => (a.layer?.id ?? '').localeCompare(b.layer?.id ?? '');
   const metric = (r: LayerReportRow): number =>
-    key === 'experiments' ? r.counts.live : key === 'running' ? r.experiments.filter((x) => !x.archived && x.fate === 'wait').length : key === 'parameters' ? (r.layer?.parameters.length ?? 0) : 0;
+    key === 'experiments' ? r.counts.live : key === 'running' ? r.experiments.filter((x) => !x.archived && x.fate === 'wait').length : key === 'parameters' ? (r.layer?.parameters.length ?? 0) : key === 'fate' ? (r.fate ? FATE_RANK[r.fate] : -1) : 0;
   return [...rows].sort((a, b) => (key === 'name' ? sign * byName(a, b) : sign * (metric(a) - metric(b)) || byName(a, b)));
 }
 

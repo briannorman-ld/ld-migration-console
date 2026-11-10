@@ -130,6 +130,15 @@ export function LayersReport({
     setOpen(new Set());
   };
 
+  // A header click sorts by that column (counts most-first, names A–Z); a second click flips it.
+  const sortBy = (k: LayerSortKey, defaultDir: 'asc' | 'desc') => {
+    if (k === sort) setDir(dir === 'asc' ? 'desc' : 'asc');
+    else {
+      setSort(k);
+      setDir(defaultDir);
+    }
+  };
+
   const exportCsv = () => {
     const multi = reports.length > 1;
     const parts = reports.map(({ s, report }, i) => {
@@ -166,13 +175,6 @@ export function LayersReport({
       <div className="mb-3 flex flex-wrap items-center gap-3">
         <h2 className="font-display text-xl font-semibold tracking-tight">Layers and experiments</h2>
         <Badge>{totals.layers}</Badge>
-        <Select value={`${sort}:${dir}`} onChange={(e) => { const [k, d] = e.target.value.split(':') as [LayerSortKey, 'asc' | 'desc']; setSort(k); setDir(d); }} aria-label="Sort layers" className="py-1">
-          <option value="experiments:desc">Sort: experiments, most first</option>
-          <option value="experiments:asc">Sort: experiments, fewest first</option>
-          <option value="running:desc">Sort: running experiments</option>
-          <option value="parameters:desc">Sort: parameters, most first</option>
-          <option value="name:asc">Sort: name</option>
-        </Select>
         <Select value={filter} onChange={(e) => setFilter(e.target.value as Filter)} aria-label="Filter layers" className="py-1">
           <option value="all">All layers</option>
           <option value="create">Will be created in LaunchDarkly</option>
@@ -227,11 +229,11 @@ export function LayersReport({
       </div>
 
       <PagerBar pager={pager} label="layers" className="mb-2" />
-      <div className="grid grid-cols-[minmax(0,2fr)_minmax(7rem,1fr)_4rem_minmax(0,1.6fr)] gap-x-3 px-4 py-1.5 text-xs text-fg-muted">
-        <div>Layer</div>
-        <div>Experiments</div>
-        <div className="text-right">Params</div>
-        <div>Migration</div>
+      <div className="grid grid-cols-[minmax(0,2fr)_minmax(7rem,1fr)_4rem_minmax(0,1.6fr)] gap-x-3 px-4 py-1.5 text-xs text-fg-muted" role="row">
+        <SortHeader k="name" label="Layer" sort={sort} dir={dir} onSort={sortBy} defaultDir="asc" />
+        <SortHeader k="experiments" label="Experiments" sort={sort} dir={dir} onSort={sortBy} title="Live experiments in the layer; click again to flip" />
+        <SortHeader k="parameters" label="Params" sort={sort} dir={dir} onSort={sortBy} align="right" />
+        <SortHeader k="fate" label="Migration" sort={sort} dir={dir} onSort={sortBy} title="Layers that will be created first, archived last" />
       </div>
       {/* One panel per layer: with the experiment tables open, rows in a shared card ran into each other. */}
       <ul className="space-y-2 text-sm">
@@ -248,6 +250,18 @@ export function LayersReport({
         )}
       </ul>
       <PagerBar pager={pager} label="layers" className="mt-2" />
+    </div>
+  );
+}
+
+function SortHeader({ k, label, sort, dir, onSort, defaultDir = 'desc', align, title }: { k: LayerSortKey; label: string; sort: LayerSortKey; dir: 'asc' | 'desc'; onSort: (k: LayerSortKey, defaultDir: 'asc' | 'desc') => void; defaultDir?: 'asc' | 'desc'; align?: 'right'; title?: string }) {
+  const active = sort === k;
+  return (
+    <div role="columnheader" aria-sort={active ? (dir === 'asc' ? 'ascending' : 'descending') : 'none'} className={cx(align === 'right' && 'text-right')}>
+      <button type="button" onClick={() => onSort(k, defaultDir)} title={title ?? `Sort by ${label.toLowerCase()}; click again to flip`} className={cx('inline-flex items-center gap-1 hover:text-fg', active && 'font-medium text-fg')}>
+        {label}
+        <span aria-hidden className={cx(!active && 'invisible')}>{dir === 'asc' ? '▲' : '▼'}</span>
+      </button>
     </div>
   );
 }

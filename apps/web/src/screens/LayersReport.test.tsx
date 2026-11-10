@@ -98,12 +98,22 @@ describe('LayersReport', () => {
     expect(within(loose).queryByText('old_banner')).toBeNull();
   });
 
-  it('sorts by name and by parameter count, and searches experiments inside layers', () => {
+  it('sorts by clicking column headers, flips on a second click, and searches experiments inside layers', () => {
     render(<LayersReport sources={[source]} snapshots={{ 's-web': snapshot() }} />);
-    fireEvent.change(screen.getByLabelText('Sort layers'), { target: { value: 'name:asc' } });
+    const header = (label: string) => within(screen.getByRole('row')).getByRole('button', { name: new RegExp(`^${label}`) });
+    const sortOf = (label: string) => header(label).closest('[role="columnheader"]')!.getAttribute('aria-sort');
+    expect(sortOf('Experiments')).toBe('descending');
+    fireEvent.click(header('Experiments'));
+    expect(sortOf('Experiments')).toBe('ascending');
+    expect(layerIds().slice(0, 3)).toEqual(['pricing_layer', 'button_color_layer', 'checkout_layer']);
+    fireEvent.click(header('Layer'));
+    expect(sortOf('Layer')).toBe('ascending');
+    expect(sortOf('Experiments')).toBe('none');
     expect(layerIds().slice(0, 3)).toEqual(['button_color_layer', 'checkout_layer', 'pricing_layer']);
-    fireEvent.change(screen.getByLabelText('Sort layers'), { target: { value: 'parameters:desc' } });
+    fireEvent.click(header('Params'));
     expect(layerIds()[0]).toBe('checkout_layer');
+    fireEvent.click(header('Migration'));
+    expect(layerIds().slice(0, 3)).toEqual(['checkout_layer', 'pricing_layer', 'button_color_layer']);
     fireEvent.change(screen.getByLabelText('Search layers and experiments'), { target: { value: 'anchor' } });
     expect(layerIds()).toEqual(['pricing_layer']);
   });
