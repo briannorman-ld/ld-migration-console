@@ -69,7 +69,7 @@ export async function readLdProject(client: LdSourceReader, projectKey: string, 
   progress(`/projects/${projectKey}/context-kinds`);
   let contextKinds: RawLdSnapshot['contextKinds'] = [];
   try {
-    contextKinds = (await client.listContextKinds(projectKey, opts.signal)).items.map((k) => ({ key: k.key, name: k.name, archived: k.archived }));
+    contextKinds = ((await client.listContextKinds(projectKey, opts.signal)).items ?? []).map((k) => ({ key: k.key, name: k.name, archived: k.archived }));
   } catch (e) {
     skipped.push({ endpoint: `/projects/${projectKey}/context-kinds`, reason: reason(e) });
   }

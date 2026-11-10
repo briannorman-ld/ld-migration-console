@@ -134,7 +134,7 @@ export function normalizeConsoleSnapshot(raw: RawConsoleSnapshot, opts: Normaliz
   const expOverrides = new Map((raw.overrides?.experiments ?? []).map((o) => [o.id, o]));
   for (const [i, e] of raw.experiments.entries()) {
     const idType = e.idType ?? 'userID';
-    const groupNameById = new Map(e.groups.map((g) => [g.id ?? '', g.name]));
+    const groupNameById = new Map((e.groups ?? []).map((g) => [g.id ?? '', g.name]));
     const o = expOverrides.get(e.id);
     const exp: Experiment = {
       kind: 'experiment',
@@ -145,7 +145,7 @@ export function normalizeConsoleSnapshot(raw: RawConsoleSnapshot, opts: Normaliz
       archived: e.status === 'archived',
       status: e.status as ExperimentStatus,
       idType,
-      groups: e.groups.map((g) => ({ id: g.id ?? undefined, name: g.name, size: g.size, parameterValues: (g.parameterValues ?? {}) as Record<string, unknown>, isControl: g.isControl ?? undefined })),
+      groups: (e.groups ?? []).map((g) => ({ id: g.id ?? undefined, name: g.name, size: g.size, parameterValues: (g.parameterValues ?? {}) as Record<string, unknown>, isControl: g.isControl ?? undefined })),
       allocation: e.allocation,
       layerId: e.layerID ?? null,
       targetingGateId: e.targetingGateID || null,
@@ -212,7 +212,7 @@ export function normalizeConsoleSnapshot(raw: RawConsoleSnapshot, opts: Normaliz
       completeness: { missing: [] },
       archived: false,
       idType: a.idType ?? 'userID',
-      variants: a.variants.map((v) => ({ id: v.id ?? v.name, name: v.name, json: v.json, size: v.size ?? undefined })),
+      variants: (a.variants ?? []).map((v) => ({ id: v.id ?? v.name, name: v.name, json: v.json, size: v.size ?? undefined })),
       successEvent: a.successEvent || undefined,
       isStarted: a.isStarted ?? false,
       winner: a.winner ?? null,
@@ -251,7 +251,7 @@ export function normalizeConsoleSnapshot(raw: RawConsoleSnapshot, opts: Normaliz
       completeness: { missing: [] },
       archived: false,
       targetApps: [],
-      parameters: p.parameters.map(paramStoreParam),
+      parameters: (p.parameters ?? []).map(paramStoreParam),
     });
   }
 

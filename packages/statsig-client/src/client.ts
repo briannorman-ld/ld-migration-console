@@ -73,6 +73,21 @@ export class StatsigUnreachableError extends Error {
   }
 }
 
+/**
+ * A response did not match the lenient schema in a way the adapters cannot work around (a single
+ * object or page missing its shape). The crawl records the endpoint as skipped instead of crashing
+ * in a normalizer; a malformed item inside a list is dropped with a SchemaIssue, not raised.
+ */
+export class StatsigSchemaError extends Error {
+  constructor(
+    readonly endpoint: string,
+    readonly issues: SchemaIssue['issues'],
+  ) {
+    super(`StatSig returned an unexpected shape for ${endpoint}: ${issues.map((i) => `${i.path || '(root)'}: ${i.message}`).join('; ')}`);
+    this.name = 'StatsigSchemaError';
+  }
+}
+
 export class StatsigConsoleClient {
   readonly transport: Transport;
   readonly baseUrl: string;
@@ -126,7 +141,10 @@ export class StatsigConsoleClient {
       const data = envelopeData(body);
       const items = Array.isArray(data) ? data : data == null ? [] : [data];
       const offset = out.length;
-      items.forEach((item, i) => out.push(this.check(path, itemSchema, item, offset + i)));
+      items.forEach((item, i) => {
+        const parsed = this.checkItem(path, itemSchema, item, offset + i);
+        if (parsed !== undefined) out.push(parsed);
+      });
       if (!hasNextPage(body, items.length, this.pageSize, (i) => this.issue({ endpoint: path, issues: i }))) break;
     }
     return out;
@@ -186,7 +204,10 @@ export class StatsigConsoleClient {
       if (Array.isArray(c)) rules.push(...c);
       else if (c && typeof c === 'object' && Array.isArray((c as { rules?: unknown }).rules)) rules.push(...(c as { rules: unknown[] }).rules);
     }
-    return rules.map((r, i) => this.check(path, RuleSchema, r, i));
+    return rules.flatMap((r, i) => {
+      const parsed = this.checkItem(path, RuleSchema, r, i);
+      return parsed === undefined ? [] : [parsed];
+    });
   }
 
   /** GET and return the parsed body, mapping errors to StatSig-specific ones. */
@@ -214,23 +235,35 @@ export class StatsigConsoleClient {
     }
   }
 
-  private check<S extends z.ZodType>(endpoint: string, schema: S, data: unknown, index?: number): z.infer<S> {
+  /**
+   * A single object. Lenient: a mismatch is logged and the object handed back as is, since the
+   * adapters tolerate missing or odd fields; a body that is not an object at all cannot be used,
+   * so it is a StatsigSchemaError, which the crawl turns into a skipped endpoint.
+   */
+  private check<S extends z.ZodType>(endpoint: string, schema: S, data: unknown): z.infer<S> {
     const r = schema.safeParse(data);
-    if (!r.success) {
-      this.issue({
-        endpoint,
-        ...(index !== undefined ? { index } : {}),
-        issues: r.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
-      });
-      // Lenient: hand back the raw data; adapters are defensive about missing fields.
-      return data as z.infer<S>;
-    }
-    return r.data;
+    if (r.success) return r.data;
+    const issues = r.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message }));
+    this.issue({ endpoint, issues });
+    if (isPlainObject(data)) return data as z.infer<S>;
+    throw new StatsigSchemaError(endpoint, issues);
+  }
+
+  /** One item of a list: same rule; an item that is not an object is dropped, the rest of the list is kept. */
+  private checkItem<S extends z.ZodType>(endpoint: string, schema: S, data: unknown, index: number): z.infer<S> | undefined {
+    const r = schema.safeParse(data);
+    if (r.success) return r.data;
+    this.issue({ endpoint, index, issues: r.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })) });
+    return isPlainObject(data) ? (data as z.infer<S>) : undefined;
   }
 
   private issue(i: SchemaIssue): void {
     this.onSchemaIssue(i);
   }
+}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
 function envelopeData(body: unknown): unknown {

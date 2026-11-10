@@ -26,7 +26,19 @@ disclaimer shown), **M2** (`sdk_keys_to_app_ids` and its hashed variant are dele
 and refused by the store), **M3** (zod 4.6.7, `pnpm audit --prod` clean), **M7** (`csvCell`
 prefixes a leading formula trigger with an apostrophe in all three CSV exports).
 
-Still open: M4, M5, M6, M8, M9, M10, every Low and every Info item.
+Fixed on 2026-11-10, with tests: **M5** (both API clients keep an object that fails its schema
+and log the issue, drop list items that are not objects, and raise a typed `StatsigSchemaError` /
+`LdSchemaError` only for a body that is not an object at all, which the crawl records as a
+skipped endpoint and a run step reports as its error; the console and LaunchDarkly normalizers
+default every array they read from a raw item), **M8** (`ensure_context_kind` reads the project's
+context kinds once per run before writing: a kind that exists is left as is and never marked
+created, an archived one is unarchived with its own name and `rec.unarchived` makes undo archive
+it again; a listing the token cannot read falls back to the blind write), **M9** (after a 409,
+a resource that is ours but whose `creationDate` / `_creationDate` / `createdAt` predates
+`run.startedAt` was made by an earlier run: it is adopted with a pre-image, not marked created,
+so undoing this run leaves it; one created after the run started is still this run's).
+
+Still open: M4, M6, M10, every Low and every Info item.
 
 ## Summary
 

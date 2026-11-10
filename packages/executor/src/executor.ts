@@ -30,6 +30,7 @@ export type LdWriter = Pick<
   | 'patchSegmentSemantic'
   | 'deleteSegment'
   | 'putContextKind'
+  | 'listContextKinds'
   | 'getMetric'
   | 'createMetric'
   | 'patchMetricJson'
@@ -83,6 +84,8 @@ export interface StepRecord {
   capability?: CapabilityUpdate;
   /** Created by this run: undo deletes (or archives) it. */
   created?: boolean;
+  /** A context kind that already existed, archived, and this run unarchived: undo archives it again. */
+  unarchived?: boolean;
   /** State before this run touched it: undo restores it. Contains customer config; stays local. */
   preImage?: LdFlag | LdSegment | LdMetric | LdExperiment | LdExperimentationSettings;
   /**
@@ -571,8 +574,15 @@ export class Executor {
    * step's create; a foreign one is taken over only when the plan said to adopt it, and otherwise
    * the user re-plans, exactly as if a read had found it first.
    */
-  private foundAfterConflict(rec: StepRecord, s: { adopt: boolean }, ours: boolean, current: NonNullable<StepRecord['preImage']>, appeared: string): void {
+  private foundAfterConflict(run: RunRecord, rec: StepRecord, s: { adopt: boolean }, ours: boolean, current: NonNullable<StepRecord['preImage']>, appeared: string): void {
     if (ours) {
+      // Ours, but created before this run started: an earlier run (or another tab) made it, possibly
+      // for other environments too. Undoing this run must not delete it, so it is adopted, not owned.
+      const createdAt = createdAtMs(current);
+      if (createdAt !== undefined && createdAt < Date.parse(run.startedAt)) {
+        if (rec.preImage === undefined) rec.preImage = current;
+        return;
+      }
       rec.created = true;
       return;
     }
@@ -647,7 +657,7 @@ export class Executor {
         if (!(e instanceof LdWriteError && e.status === 409)) throw e;
         current = await this.c.getAiConfig(this.p, s.key, this.signal);
         if (!current) throw e;
-        this.foundAfterConflict(rec, s, ownsSegment({ key: current.key, tags: current.tags ?? [] }, s.provenance.sourceAlias), current, `AI Config “${s.key}” appeared since planning and wasn't created by this app. Re-plan to decide.`);
+        this.foundAfterConflict(run, rec, s, ownsSegment({ key: current.key, tags: current.tags ?? [] }, s.provenance.sourceAlias), current, `AI Config “${s.key}” appeared since planning and wasn't created by this app. Re-plan to decide.`);
       }
       if (rec.created) return `Created AI Config “${s.key}”. Add its variations in LaunchDarkly: StatSig's API does not expose prompt versions.`;
     }
@@ -697,7 +707,7 @@ export class Executor {
         if (!current) throw e;
         // A metric on the same event is reused, as the read above would have done.
         const same = current.kind === 'custom' && current.eventKey === d.eventKey;
-        this.foundAfterConflict(rec, { adopt: s.adopt || same }, ownsSegment({ tags: current.tags ?? [] }, s.provenance.sourceAlias), current, `Metric “${s.key}” appeared since planning and wasn't created by this app. Re-plan to decide.`);
+        this.foundAfterConflict(run, rec, { adopt: s.adopt || same }, ownsSegment({ tags: current.tags ?? [] }, s.provenance.sourceAlias), current, `Metric “${s.key}” appeared since planning and wasn't created by this app. Re-plan to decide.`);
       }
       if (rec.created) return `Created metric “${s.key}” on event “${d.eventKey}”.`;
     }
@@ -736,7 +746,7 @@ export class Executor {
         if (!(e instanceof LdWriteError && e.status === 409)) throw e;
         current = await this.c.getExperiment(this.p, s.ldEnv, s.key, this.signal);
         if (!current) throw e;
-        this.foundAfterConflict(rec, s, ownsSegment({ tags: current.tags ?? [] }, s.provenance.sourceAlias), current, `Experiment “${s.key}” appeared in ${s.ldEnv} since planning and wasn't created by this app. Re-plan to decide.`);
+        this.foundAfterConflict(run, rec, s, ownsSegment({ tags: current.tags ?? [] }, s.provenance.sourceAlias), current, `Experiment “${s.key}” appeared in ${s.ldEnv} since planning and wasn't created by this app. Re-plan to decide.`);
       }
       if (rec.created) return `Created bandit “${s.key}” in ${s.ldEnv} as a draft: ${banditSummary(d)}.`;
     }
@@ -750,9 +760,20 @@ export class Executor {
 
   private async contextKind(run: RunRecord, rec: StepRecord, s: Extract<PlanStep, { op: 'ensure_context_kind' }>): Promise<string> {
     if (run.dryRun) return `Would create context kind “${s.key}”.`;
+    // The planner adds this step from its cached listing, which may be older than the project: read
+    // before writing, so a kind the customer already has is never renamed, and never archived by undo.
+    const existing = await this.existingContextKind(s.key);
+    if (existing && !existing.archived) return `Context kind “${s.key}” already exists in LaunchDarkly; left as is.`;
     const from = s.sourceKind === 'launchdarkly' ? `Context kind “${s.unitType}” of the source LaunchDarkly project` : `StatSig unit type ${s.unitType}`;
     try {
+      if (existing) {
+        await this.c.putContextKind(this.p, s.key, { name: existing.name ?? s.name, ...(existing.description ? { description: existing.description } : {}), archived: false }, this.signal);
+        rec.unarchived = true;
+        this.contextKinds?.then((m) => m.set(s.key, { ...existing, archived: false }));
+        return `Context kind “${s.key}” existed archived in LaunchDarkly; unarchived (undo archives it again).`;
+      }
       await this.c.putContextKind(this.p, s.key, { name: s.name, description: `${from} (${CONSOLE_CREATED_MARKER}).` }, this.signal);
+      this.contextKinds?.then((m) => m.set(s.key, { key: s.key, name: s.name, archived: false }));
     } catch (e) {
       // A 403 here is a missing createContextKind role, not a dead token: only the items that use this
       // kind are skipped, the rest of the run goes on, and the capability matrix learns it.
@@ -765,6 +786,20 @@ export class Executor {
     this.learned(rec, { key: 'context_kinds', status: 'available', evidence: `created context kind “${s.key}”` });
     rec.created = true;
     return `Created context kind “${s.key}”.`;
+  }
+
+  private contextKinds?: Promise<Map<string, { key: string; name?: string | null; description?: string | null; archived?: boolean | null }>>;
+
+  /** The project's context kinds, read once per executor; a read the token is not allowed falls back to writing blind, as before. */
+  private async existingContextKind(key: string): Promise<{ key: string; name?: string | null; description?: string | null; archived?: boolean | null } | undefined> {
+    this.contextKinds ??= this.c
+      .listContextKinds(this.p, this.signal)
+      .then((r) => new Map(r.items.map((k) => [k.key, k])))
+      .catch((e: unknown) => {
+        if (this.signal?.aborted) throw e;
+        return new Map();
+      });
+    return (await this.contextKinds).get(key);
   }
 
   private async segment(run: RunRecord, rec: StepRecord, s: Extract<PlanStep, { op: 'upsert_segment' }>): Promise<string> {
@@ -790,7 +825,7 @@ export class Executor {
         if (!(e instanceof LdWriteError && e.status === 409)) throw e;
         current = await this.c.getSegment(this.p, s.ldEnv, s.key, this.signal);
         if (!current) throw e;
-        this.foundAfterConflict(rec, s, ownsSegment({ key: current.key, tags: current.tags ?? [] }, s.provenance.sourceAlias), current, `Segment “${s.key}” appeared in ${s.ldEnv} since planning and wasn't created by this app. Re-plan to decide.`);
+        this.foundAfterConflict(run, rec, s, ownsSegment({ key: current.key, tags: current.tags ?? [] }, s.provenance.sourceAlias), current, `Segment “${s.key}” appeared in ${s.ldEnv} since planning and wasn't created by this app. Re-plan to decide.`);
       }
     }
     // Checked after the create too: a segment found through a 409 may be of the other kind.
@@ -939,7 +974,7 @@ export class Executor {
         flag = await this.c.getFlag(this.p, s.key, this.signal);
         if (!flag) throw e;
         const owner = flagOwner({ key: flag.key, tags: flag.tags ?? [], customProperties: flag.customProperties ?? {} });
-        this.foundAfterConflict(rec, s, owner?.id === d.customProperties[PROP.id]?.value[0], flag, `Flag “${s.key}” appeared since planning and wasn't created by this app. Re-plan to decide.`);
+        this.foundAfterConflict(run, rec, s, owner?.id === d.customProperties[PROP.id]?.value[0], flag, `Flag “${s.key}” appeared since planning and wasn't created by this app. Re-plan to decide.`);
       }
       if (rec.created) {
         this.flags.set(s.key, flag);
@@ -1140,7 +1175,7 @@ export class Executor {
     switch (s.op) {
       case 'ensure_context_kind':
         // Context kinds can't be deleted; archiving hides them from targeting.
-        if (rec.created) await this.c.putContextKind(this.p, s.key, { name: s.name, archived: true }, this.signal);
+        if (rec.created || rec.unarchived) await this.c.putContextKind(this.p, s.key, { name: s.name, archived: true }, this.signal);
         return;
       case 'upsert_segment': {
         for (const a of rec.approvals ?? []) if (a.status === 'pending') await this.c.deleteApprovalRequest(a.id).catch(ignore404);
@@ -1587,4 +1622,24 @@ export function envSummary(d: Extract<PlanStep, { op: 'update_flag_env' }>['desi
     `default ${ft}`,
     ...(d.scheduledChanges?.length ? [`${d.scheduledChanges.length} scheduled change${d.scheduledChanges.length === 1 ? '' : 's'}`] : []),
   ].join(', ');
+}
+
+/**
+ * When LaunchDarkly says a resource was created, in epoch ms: flags and segments carry
+ * `creationDate`, metrics and experiments `_creationDate`, AI Configs `createdAt`. Undefined when
+ * the body has none the client recognises.
+ */
+export function createdAtMs(resource: object): number | undefined {
+  const r = resource as Record<string, unknown>;
+  for (const k of ['creationDate', '_creationDate', 'createdAt', '_createdAt']) {
+    const v = r[k];
+    if (typeof v === 'number' && Number.isFinite(v)) return v;
+    if (typeof v === 'string' && v) {
+      const n = Number(v);
+      if (Number.isFinite(n)) return n;
+      const t = Date.parse(v);
+      if (Number.isFinite(t)) return t;
+    }
+  }
+  return undefined;
 }

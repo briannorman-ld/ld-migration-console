@@ -45,6 +45,7 @@ function fakeLd(over: Partial<Record<keyof LdWriter, (...a: never[]) => unknown>
     patchSegmentSemantic: async (_p, _e, key, patch) => (calls.push(`semantic segment ${key} ${patch.instructions.map((i) => `${i.kind}:${Array.isArray(i.values) ? i.values.length : ''}`).join(',')}`), { key, name: key }),
     deleteSegment: async () => undefined,
     putContextKind: async () => undefined,
+    listContextKinds: async () => ({ items: [] }),
     getAiConfig: async (_p, key) => (calls.push(`get ai ${key}`), aiConfigs.get(key) ?? null),
     createAiConfig: async (_p, body) => {
       calls.push(`create ai ${body.key}`);
@@ -174,6 +175,31 @@ describe('Executor', () => {
     expect(out.steps[1]!.message).toMatch(/Skipped: depends on/);
     expect(learned).toContainEqual(expect.objectContaining({ key: 'context_kinds', status: 'not_permitted' }));
     expect(learned).toContainEqual(expect.objectContaining({ key: 'context_kinds', status: 'available' }));
+  });
+
+  it('a context kind the project already has is left as is and never archived by undo; an archived one is unarchived and undo re-archives it (SECURITY-REVIEW M8)', async () => {
+    const puts: [string, Record<string, unknown>][] = [];
+    const ld = fakeLd({
+      listContextKinds: async () => ({ items: [{ key: 'plan', name: 'Plan (theirs)', description: 'Customer-owned' }, { key: 'org', name: 'Org', archived: true }] }),
+      putContextKind: async (_p: string, key: string, body: Record<string, unknown>) => void puts.push([key, body]),
+    });
+    const kind = (key: string): PlanStep => ({ id: `context_kind:${key}`, deps: [], op: 'ensure_context_kind', key, name: key, unitType: `${key}Key` });
+    const ex = new Executor({ client: ld.client, projectKey: 'p', journal: { save: async () => undefined }, now: () => new Date('2026-11-02T00:00:00Z') });
+    const out = await ex.run(newRun({ id: 'r-kinds-2', workspaceId: 'w', projectKey: 'p', label: 'kinds', dryRun: false, steps: [kind('plan'), kind('org'), kind('team')], now: new Date() }));
+    expect(out.steps.map((s) => s.status)).toEqual(['done', 'done', 'done']);
+    expect(out.steps[0]!.message).toMatch(/already exists/);
+    expect(out.steps[0]!.created).toBeUndefined();
+    expect(out.steps[1]!.message).toMatch(/unarchived/);
+    expect(out.steps[1]!.unarchived).toBe(true);
+    expect(out.steps[2]!.created).toBe(true);
+    // Writes: the archived kind keeps its own name, the new one is created; the existing live kind is not touched.
+    expect(puts).toEqual([
+      ['org', { name: 'Org', archived: false }],
+      ['team', { name: 'team', description: expect.stringContaining('StatSig unit type teamKey') }],
+    ]);
+    puts.length = 0;
+    await ex.undo(out);
+    expect(puts.map(([k, b]) => [k, b.archived])).toEqual([['team', true], ['org', true]]);
   });
 
   it('a 400 for the flag size limit names the cause and the remedy instead of echoing LaunchDarkly (KNOWN-EDGE-CASES 15.22)', async () => {
@@ -1063,6 +1089,16 @@ describe('reads before writes', () => {
     expect(done.steps[0]!.status).toBe('done');
     expect(done.steps[0]!.created).toBe(true);
     expect(ours.reads).toEqual(['beta_testers']);
+
+    // Ours, but created before this run started: an earlier run made it, so this run adopts it and undo leaves it (SECURITY-REVIEW M9).
+    const earlier = segmentLd({ key: 'beta_testers', name: 'Beta testers', tags: ['migrated-from-statsig', 'migration-src-web'], included: [], creationDate: Date.parse('2026-10-20T00:00:00Z') });
+    const adopted = await exec(earlier.ld, [plain(false)]);
+    expect(adopted.steps[0]!.status).toBe('done');
+    expect(adopted.steps[0]!.created).toBeUndefined();
+    expect(adopted.steps[0]!.preImage).toMatchObject({ key: 'beta_testers' });
+    // Ours and created after the run started (an interrupted attempt of this run): still this run's create.
+    const sameRun = segmentLd({ key: 'beta_testers', name: 'Beta testers', tags: ['migrated-from-statsig', 'migration-src-web'], included: [], creationDate: Date.parse('2026-11-02T00:00:01Z') });
+    expect((await exec(sameRun.ld, [plain(false)])).steps[0]!.created).toBe(true);
 
     const foreign = segmentLd({ key: 'beta_testers', name: 'Beta testers', tags: ['theirs'], included: [] });
     const failed = await exec(foreign.ld, [plain(false)]);

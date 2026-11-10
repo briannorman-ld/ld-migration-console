@@ -69,6 +69,21 @@ export class LdAuthError extends Error {
   }
 }
 
+/**
+ * A read came back in a shape the schema does not accept and nothing could be salvaged. Callers
+ * that read optional data skip the endpoint; a run step fails with this message instead of a
+ * TypeError deep in a normalizer.
+ */
+export class LdSchemaError extends Error {
+  constructor(
+    readonly path: string,
+    readonly issues: LdSchemaIssue['issues'],
+  ) {
+    super(`LaunchDarkly returned an unexpected shape for ${path}: ${issues.map((i) => `${i.path || '(root)'}: ${i.message}`).join('; ')}`);
+    this.name = 'LdSchemaError';
+  }
+}
+
 export interface ProbeResult {
   path: string;
   status: number | 'unreachable';
@@ -530,10 +545,28 @@ export class LdClient {
     }
     const out = stripSdkKeys(res.body);
     if (!schema) return out as z.output<S>;
-    const parsed = schema.safeParse(out);
+    // The write happened: a mismatch in the echoed body must not make the step look failed, so a
+    // list is salvaged item by item and anything else is handed back as is, with the issue logged.
+    return this.lenient(path, schema, out) ?? (out as z.output<S>);
+  }
+
+  /**
+   * Validates a body. Lenient on a mismatch: the issue is logged and an object is handed back as
+   * is (consumers tolerate missing fields); items of a list that are not objects are dropped. Only
+   * a body that is not an object at all is unusable, and comes back as `undefined`.
+   */
+  private lenient<S extends z.ZodType>(path: string, schema: S, body: unknown): z.output<S> | undefined {
+    const parsed = schema.safeParse(body);
     if (parsed.success) return parsed.data;
     this.onSchemaIssue({ path, issues: parsed.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })) });
-    return out as z.output<S>;
+    if (typeof body !== 'object' || body === null || Array.isArray(body)) return undefined;
+    const items = (body as { items?: unknown }).items;
+    if (Array.isArray(items)) {
+      const kept = items.filter((item) => typeof item === 'object' && item !== null && !Array.isArray(item));
+      if (kept.length !== items.length) this.onSchemaIssue({ path, issues: [{ path: 'items', message: `${items.length - kept.length} item(s) that were not objects dropped` }] });
+      return { ...(body as object), items: kept } as z.output<S>;
+    }
+    return body as z.output<S>;
   }
 
   listContextKinds(projectKey: string, signal?: AbortSignal) {
@@ -564,10 +597,10 @@ export class LdClient {
       throw e;
     }
     const body = stripSdkKeys(res.body);
+    const out = this.lenient(path, schema, body);
+    if (out !== undefined) return out;
     const parsed = schema.safeParse(body);
-    if (parsed.success) return parsed.data;
-    this.onSchemaIssue({ path, issues: parsed.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })) });
-    return body as z.output<S>;
+    throw new LdSchemaError(path, parsed.success ? [] : parsed.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })));
   }
 
   private request(path: string, opts: { beta?: boolean; query?: Record<string, string>; signal?: AbortSignal }) {

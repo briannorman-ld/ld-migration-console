@@ -40,7 +40,7 @@ export function normalizeLdSnapshot(raw: RawLdSnapshot, opts: NormalizeLdOptions
       const c = f.environments?.[env];
       if (!c) {
         warn({ code: 'partial_spec', path: `${path}/environments/${env}`, message: `LaunchDarkly returned no configuration for environment “${env}”; treated as off with no rules.` });
-        environments.push({ env, on: false, offVariation: f.defaults?.offVariation ?? Math.max(0, f.variations.length - 1), fallthrough: { variation: f.defaults?.onVariation ?? 0 }, rules: [], targets: [], prerequisites: [] });
+        environments.push({ env, on: false, offVariation: f.defaults?.offVariation ?? Math.max(0, (f.variations ?? []).length - 1), fallthrough: { variation: f.defaults?.onVariation ?? 0 }, rules: [], targets: [], prerequisites: [] });
         continue;
       }
       environments.push(flagEnv(env, c, f, warn, `${path}/environments/${env}`));
@@ -58,8 +58,8 @@ export function normalizeLdSnapshot(raw: RawLdSnapshot, opts: NormalizeLdOptions
       key: f.key,
       name: f.name,
       description: f.description ?? '',
-      flagKind: f.kind === 'multivariate' || f.variations.length !== 2 || !f.variations.every((v) => typeof v.value === 'boolean') ? 'multivariate' : 'boolean',
-      variations: f.variations.map((v) => ({ value: v.value, ...(v.name ? { name: v.name } : {}), ...(v.description ? { description: v.description } : {}) })),
+      flagKind: f.kind === 'multivariate' || (f.variations ?? []).length !== 2 || !(f.variations ?? []).every((v) => typeof v.value === 'boolean') ? 'multivariate' : 'boolean',
+      variations: (f.variations ?? []).map((v) => ({ value: v.value, ...(v.name ? { name: v.name } : {}), ...(v.description ? { description: v.description } : {}) })),
       tags: f.tags ?? [],
       temporary: f.temporary ?? true,
       archived: f.archived ?? false,
@@ -115,7 +115,7 @@ function serve(v: { variation?: number | null; rollout?: { variations: { variati
       rollout: {
         contextKind: v.rollout.contextKind ?? 'user',
         ...(v.rollout.bucketBy ? { bucketBy: v.rollout.bucketBy } : {}),
-        variations: v.rollout.variations.map((w) => ({ variation: w.variation, weight: w.weight })),
+        variations: (v.rollout.variations ?? []).map((w) => ({ variation: w.variation, weight: w.weight })),
       },
     };
   }
@@ -134,7 +134,7 @@ function flagEnv(env: string, c: LdFlagConfig, f: LdFlag, warn: (w: SnapshotWarn
   const rules: NeutralRule[] = (c.rules ?? []).map((r, i) => ({
     ...(r._id ? { id: r._id } : {}),
     description: r.description ?? '',
-    clauses: r.clauses.map(clause),
+    clauses: (r.clauses ?? []).map(clause),
     ...serve(r, warn, `${path}/rules[${i}]`),
     ...((r as { disabled?: boolean | null }).disabled ? { disabled: true } : {}),
     ...(r.trackEvents ? { trackEvents: true } : {}),
@@ -156,7 +156,7 @@ function flagEnv(env: string, c: LdFlagConfig, f: LdFlag, warn: (w: SnapshotWarn
   return {
     env,
     on: c.on,
-    offVariation: c.offVariation ?? f.defaults?.offVariation ?? Math.max(0, f.variations.length - 1),
+    offVariation: c.offVariation ?? f.defaults?.offVariation ?? Math.max(0, (f.variations ?? []).length - 1),
     fallthrough: serve(c.fallthrough, warn, `${path}/fallthrough`),
     rules,
     targets: [...targets.values()].sort((a, b) => `${a.contextKind}|${a.variation}`.localeCompare(`${b.contextKind}|${b.variation}`)),
@@ -180,7 +180,7 @@ function segmentEnv(env: string, s: LdSegment, _warn: (w: SnapshotWarning) => vo
     rules: (s.rules ?? []).map((r) => ({
       ...(r._id ? { id: r._id } : {}),
       description: r.description ?? '',
-      clauses: r.clauses.map(clause),
+      clauses: (r.clauses ?? []).map(clause),
       ...(r.weight != null ? { weight: r.weight, rolloutContextKind: r.rolloutContextKind ?? 'user' } : {}),
       ...(r.bucketBy ? { bucketBy: r.bucketBy } : {}),
     })),

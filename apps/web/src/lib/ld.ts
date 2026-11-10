@@ -408,9 +408,9 @@ async function readLdState(workspaceId: string, c: LdClient, p: string, seq: num
     const onPage = (read: number, total?: number) => set(workspaceId, { refreshProgress: `Reading flags: ${read.toLocaleString()}${total ? ` of ${total.toLocaleString()}` : ''}…` });
     const kept = keepsListing(s, opts.flags);
     const flags = kept
-      ? c.listContextKinds(p).then((kinds) => apply({ contextKinds: kinds.items.filter((k) => !k.archived).map((k) => k.key) }))
+      ? c.listContextKinds(p).then((kinds) => apply({ contextKinds: (kinds.items ?? []).filter((k) => !k.archived).map((k) => k.key) }))
       : Promise.all([c.listFlags(p, { onPage }), c.listContextKinds(p)]).then(([items, kinds]) =>
-          apply({ flags: { items, loadedAt: new Date().toISOString() }, contextKinds: kinds.items.filter((k) => !k.archived).map((k) => k.key) }),
+          apply({ flags: { items, loadedAt: new Date().toISOString() }, contextKinds: (kinds.items ?? []).filter((k) => !k.archived).map((k) => k.key) }),
         );
     const perEnv = envs.map(async (env) => {
       const [segments, experiments] = await Promise.all([c.listSegments(p, env), optional(() => c.listExperiments(p, env))]);
@@ -475,7 +475,7 @@ export async function refreshLdLists(workspaceId: string, needs: LdListNeeds): P
   const defaultUnit = settings?.randomizationUnits?.find((u) => u.default)?.randomizationUnit;
   appliedSeq = ++refreshSeq;
   set(workspaceId, {
-    ...(kinds ? { contextKinds: kinds.items.filter((k) => !k.archived).map((k) => k.key) } : {}),
+    ...(kinds ? { contextKinds: (kinds.items ?? []).filter((k) => !k.archived).map((k) => k.key) } : {}),
     ...(metrics ? { metrics } : {}),
     ...(settings ? { randomizationUnits: (settings.randomizationUnits ?? []).map((u) => u.randomizationUnit) } : {}),
     ...(defaultUnit ? { defaultRandomizationUnit: defaultUnit } : {}),
