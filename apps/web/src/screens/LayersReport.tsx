@@ -241,7 +241,7 @@ function LayerRow({ r, multi, open, onToggle, showArchived, onOpenCoverage }: { 
           {multi && <Badge>{s.alias}</Badge>}
           {l?.isImplicit && <Badge title="A one-experiment layer StatSig created implicitly">implicit</Badge>}
           {l?.archived && <Badge>archived</Badge>}
-          {l && <span className="text-xs text-fg-muted">{l.idType}{l.owner?.name ? ` · ${l.owner.name}` : ''}</span>}
+          {l && <span className="text-xs text-fg-muted" title="Unit type the layer buckets on, and its owner">unit type {l.idType}{l.owner?.name ? ` · owner ${l.owner.name}` : ''}</span>}
         </div>
         <div className="text-xs tabular-nums text-fg-muted">{counts}</div>
         <div className="text-right text-xs tabular-nums text-fg-muted">{l ? l.parameters.length : '–'}</div>

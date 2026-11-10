@@ -176,6 +176,7 @@ describe('layerReportMarkdown', () => {
 
   it('keeps each layer with its defaults table and its experiments table', () => {
     const checkout = doc.slice(doc.indexOf('## `checkout_layer`'), doc.indexOf('## `button_color_layer`'));
+    expect(checkout).toContain('unit type: userID');
     expect(checkout).toContain('| `cta_text` | string | `"Place order"` |');
     expect(checkout).toContain('| `show_badges` | boolean | `false` |');
     expect(checkout).toContain('| `cta_copy` | active | 40% | userID | none | Wait until it ends |');

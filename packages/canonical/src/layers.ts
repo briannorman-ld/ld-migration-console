@@ -357,7 +357,7 @@ function layerSection(r: LayerReportRow, level = 2): string[] {
   const out: string[] = [];
   out.push(`${h} ${l ? `\`${l.id}\`` : 'Not in a layer'}${r.fate ? ` — ${LAYER_FATE_LABEL[r.fate]}` : ''}`, '');
   if (l) {
-    const meta = [l.isImplicit ? 'implicit layer' : '', l.idType, l.owner?.name ?? '', l.description ?? ''].filter(Boolean).join(' · ');
+    const meta = [l.isImplicit ? 'implicit layer' : '', `unit type: ${l.idType}`, l.owner?.name ? `owner: ${l.owner.name}` : '', l.description ?? ''].filter(Boolean).join(' · ');
     if (meta) out.push(md(meta), '');
   }
   const counts = [`${r.counts.live} live`, r.counts.ended ? `${r.counts.ended} ended` : '', r.counts.archived ? `${r.counts.archived} archived` : ''].filter(Boolean).join(', ');
