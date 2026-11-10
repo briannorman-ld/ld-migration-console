@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import {
   describeDefaults,
+  describeOverride,
   EXPERIMENT_FATE_LABEL,
   LAYER_FATE_LABEL,
   layerReport,
@@ -276,19 +277,26 @@ function LayerRow({ r, multi, open, onToggle, showArchived, onOpenCoverage }: { 
                     <tr>
                       <th className="py-0.5 pr-3 font-normal">Parameter</th>
                       <th className="py-0.5 pr-3 font-normal">Type</th>
-                      <th className="py-0.5 font-normal">Default</th>
+                      <th className="py-0.5 pr-3 font-normal">Default</th>
+                      <th className="py-0.5 font-normal" title="Experiments in this layer that set the parameter (archived ones excluded)">Set by</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {l.parameters.map((p) => (
-                      <tr key={p.name} className="border-t border-line-soft">
-                        <td className="py-0.5 pr-3 font-mono">{p.name}</td>
-                        <td className="py-0.5 pr-3 text-fg-muted">{p.type ?? '–'}</td>
-                        <td className="py-0.5 font-mono">
-                          <Value v={p.defaultValue} />
-                        </td>
-                      </tr>
-                    ))}
+                    {l.parameters.map((p) => {
+                      const users = row.parameterUse[p.name] ?? [];
+                      return (
+                        <tr key={p.name} className="border-t border-line-soft">
+                          <td className="py-0.5 pr-3 font-mono">{p.name}</td>
+                          <td className="py-0.5 pr-3 text-fg-muted">{p.type ?? '–'}</td>
+                          <td className="py-0.5 pr-3 font-mono">
+                            <Value v={p.defaultValue} />
+                          </td>
+                          <td className="py-0.5">
+                            {users.length ? <span className="font-mono">{users.join(', ')}</span> : <span className="text-fg-muted">no experiment (default everywhere)</span>}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               )}
@@ -306,13 +314,14 @@ function LayerRow({ r, multi, open, onToggle, showArchived, onOpenCoverage }: { 
                     <th className="py-0.5 pr-3 font-normal">Experiment</th>
                     <th className="py-0.5 pr-3 font-normal">Status</th>
                     <th className="py-0.5 pr-3 text-right font-normal">Alloc</th>
+                    {l && <th className="py-0.5 pr-3 font-normal" title="Layer parameters this experiment sets, with the value per group">Overrides</th>}
                     <th className="py-0.5 pr-3 font-normal">Targeting</th>
                     <th className="py-0.5 font-normal">Migration</th>
                   </tr>
                 </thead>
                 <tbody>
                   {experiments.map((x) => (
-                    <ExperimentRow key={x.experiment.uid} x={x} />
+                    <ExperimentRow key={x.experiment.uid} x={x} inLayer={!!l} />
                   ))}
                 </tbody>
               </table>
@@ -324,9 +333,10 @@ function LayerRow({ r, multi, open, onToggle, showArchived, onOpenCoverage }: { 
   );
 }
 
-function ExperimentRow({ x }: { x: LayerReportExperiment }) {
+function ExperimentRow({ x, inLayer }: { x: LayerReportExperiment; inLayer: boolean }) {
   const e = x.experiment;
   const t = x.targeting;
+  const overrides = x.parameters ?? [];
   return (
     <tr className={cx('border-t border-line-soft align-top', x.archived && 'text-fg-muted')}>
       <td className="py-1 pr-3">
@@ -342,6 +352,35 @@ function ExperimentRow({ x }: { x: LayerReportExperiment }) {
         <Badge tone={x.archived ? 'slate' : (STATUS_TONE[e.status] ?? 'slate')}>{x.archived ? 'archived' : e.status.replace(/_/g, ' ')}</Badge>
       </td>
       <td className="py-1 pr-3 text-right tabular-nums">{e.allocation}%</td>
+      {inLayer && (
+        <td className="py-1 pr-3">
+          {overrides.length === 0 ? (
+            <span className="text-fg-muted">none</span>
+          ) : (
+            <ul className="space-y-0.5">
+              {overrides.map((o) => (
+                <li key={o.name} title={describeOverride(o)}>
+                  <span className="font-mono">{o.name}</span>
+                  {!o.declared && (
+                    <Badge tone="amber" title="The experiment sets a parameter the layer does not declare">
+                      not on the layer
+                    </Badge>
+                  )}
+                  <span className="text-fg-muted">
+                    {' '}
+                    {Object.entries(o.byGroup).map(([g, v], i) => (
+                      <span key={g}>
+                        {i > 0 && ' · '}
+                        {g}: <Value v={v} />
+                      </span>
+                    ))}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </td>
+      )}
       <td className="py-1 pr-3">
         {t.text === 'none' ? (
           <span className="text-fg-muted">none</span>

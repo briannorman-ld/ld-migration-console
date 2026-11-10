@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { describeCondition, describeRule, emptySnapshot, entityUid, layerReport, layerReportCsv, layerReportMarkdown, sortLayerRows, type Experiment, type Gate, type Layer, type Rule } from '../src/index.ts';
+import { describeCondition, describeOverride, describeRule, emptySnapshot, entityUid, layerReport, layerReportCsv, layerReportMarkdown, sortLayerRows, type Experiment, type Gate, type Layer, type Rule } from '../src/index.ts';
 
 const SRC = { sourceId: 's-web', sourceKind: 'console_api' as const, alias: 'web' };
 const base = { source: SRC, completeness: { missing: [] }, tags: [], targetApps: [], archived: false };
@@ -57,9 +57,9 @@ function snapshot() {
     layer('retired_layer', ['ghost_experiment'], { archived: true }),
   ];
   s.experiments = [
-    experiment('cta_copy', { status: 'active', allocation: 40, layerId: 'checkout_layer' }),
-    experiment('trust_badges', { status: 'setup', allocation: 30, layerId: 'checkout_layer' }),
-    experiment('old_cta', { status: 'archived', layerId: 'checkout_layer' }),
+    experiment('cta_copy', { status: 'active', allocation: 40, layerId: 'checkout_layer', groups: [{ name: 'Control', size: 50, parameterValues: { cta_text: 'Place order' } }, { name: 'Urgent', size: 50, parameterValues: { cta_text: 'Complete purchase now', urgency_banner: true } }] }),
+    experiment('trust_badges', { status: 'setup', allocation: 30, layerId: 'checkout_layer', groups: [{ name: 'Control', size: 50, parameterValues: { show_badges: false } }, { name: 'Badges', size: 50, parameterValues: { show_badges: true } }] }),
+    experiment('old_cta', { status: 'archived', layerId: 'checkout_layer', groups: [{ name: 'Control', size: 50, parameterValues: { cta_text: 'Buy' } }, { name: 'Test', size: 50, parameterValues: { cta_text: 'Buy now' } }] }),
     experiment('anchor', { status: 'decision_made', layerId: 'pricing_layer', launchedGroupId: 'Test' }),
     experiment('bundle', { status: 'abandoned', layerId: 'pricing_layer' }),
     experiment('button_color', { status: 'setup', layerId: 'button_color_layer' }),
@@ -91,6 +91,21 @@ describe('layerReport', () => {
     const fates = Object.fromEntries([...report.rows, report.unlayered].flatMap((r) => r.experiments).map((x) => [x.experiment.id, x.fate]));
     expect(fates).toEqual({ cta_copy: 'wait', trust_badges: 'draft', old_cta: 'never', anchor: 'serve_shipped', bundle: 'never', button_color: 'draft', search_v3: 'wait', orphan: 'draft' });
     expect(report.rows.flatMap((r) => r.experiments).find((x) => x.experiment.id === 'anchor')!.reason).toContain('“Test”');
+  });
+
+  it('shows which layer parameters each experiment overrides, per group, and which experiments set each parameter', () => {
+    const checkout = row('checkout_layer');
+    const cta = checkout.experiments.find((x) => x.experiment.id === 'cta_copy')!;
+    expect(cta.parameters).toEqual([
+      { name: 'cta_text', declared: true, defaultValue: 'Place order', byGroup: { Control: 'Place order', Urgent: 'Complete purchase now' } },
+      { name: 'urgency_banner', declared: false, defaultValue: undefined, byGroup: { Urgent: true } },
+    ]);
+    expect(cta.parameters!.map(describeOverride)).toEqual(['cta_text: Control="Place order", Urgent="Complete purchase now"', 'urgency_banner (not on the layer): Urgent=true']);
+    expect(checkout.experiments.find((x) => x.experiment.id === 'trust_badges')!.parameters!.map((o) => o.name)).toEqual(['show_badges']);
+    // Archived experiments keep their overrides for the record but do not count as users of a parameter.
+    expect(checkout.parameterUse).toEqual({ cta_text: ['cta_copy'], show_badges: ['trust_badges'] });
+    expect(row('pricing_layer').parameterUse).toEqual({ anchor: [], bundle: [], tier: [] });
+    expect(report.unlayered.experiments[0]!.parameters).toBeUndefined();
   });
 
   it('summarizes targeting: the gate resolved to its rules, inline rules, forced IDs', () => {
@@ -137,7 +152,7 @@ describe('layerReport', () => {
   it('exports one CSV row per experiment plus one per empty layer, with layer defaults', () => {
     const csv = layerReportCsv(report);
     const lines = csv.trim().split('\n');
-    expect(lines[0]).toBe('layer,layer_fate,layer_implicit,layer_archived,layer_parameters,layer_defaults,experiment,status,experiment_archived,allocation_pct,groups,unit_type,targeting,experiment_fate,reason');
+    expect(lines[0]).toBe('layer,layer_fate,layer_implicit,layer_archived,layer_parameters,layer_defaults,experiment,status,experiment_archived,allocation_pct,groups,unit_type,parameters_overridden,targeting,experiment_fate,reason');
     expect(lines).toHaveLength(1 + 8 + 1);
     expect(lines.find((l) => l.startsWith('checkout_layer,') && l.includes(',cta_copy,'))).toContain('"cta_text=""Place order""; show_badges=false"');
     expect(lines.find((l) => l.includes(',search_v3,'))).toContain('(not in a layer)');
@@ -177,10 +192,13 @@ describe('layerReportMarkdown', () => {
   it('keeps each layer with its defaults table and its experiments table', () => {
     const checkout = doc.slice(doc.indexOf('## `checkout_layer`'), doc.indexOf('## `button_color_layer`'));
     expect(checkout).toContain('unit type: userID');
-    expect(checkout).toContain('| `cta_text` | string | `"Place order"` |');
-    expect(checkout).toContain('| `show_badges` | boolean | `false` |');
-    expect(checkout).toContain('| `cta_copy` | active | 40% | userID | none | Wait until it ends |');
-    expect(checkout).toContain('| `old_cta` | archived | 100% | userID | none | Never migrated |');
+    expect(checkout).toContain('| `cta_text` | string | `"Place order"` | `cta_copy` |');
+    expect(checkout).toContain('| `show_badges` | boolean | `false` | `trust_badges` |');
+    expect(checkout).toContain('| `cta_copy` | active | 40% | userID | cta_text: Control="Place order", Urgent="Complete purchase now"<br>urgency_banner (not on the layer): Urgent=true | none | Wait until it ends |');
+    expect(checkout).toContain('| `old_cta` | archived | 100% | userID | cta_text: Control="Buy", Test="Buy now" | none | Never migrated |');
+    const s = snapshot();
+    s.layers[0]!.parameters.push({ name: 'unused', type: 'string', defaultValue: 'x' });
+    expect(layerReportMarkdown(layerReport(s))).toContain('| `unused` | string | `"x"` | no experiment (default everywhere) |');
     expect(checkout).toContain('> Becomes a LaunchDarkly layer reserving traffic for 2 experiments');
     expect(checkout).toContain('(2 live, 1 archived)');
     const loose = doc.slice(doc.indexOf('## Not in a layer'), doc.indexOf('## Archived layers'));

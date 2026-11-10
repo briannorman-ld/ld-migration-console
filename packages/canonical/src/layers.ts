@@ -56,6 +56,18 @@ export interface LayerReportExperiment {
   targeting: ExperimentTargetingSummary;
   /** The experiment names a layer the snapshot does not have (spec sources, partial crawls). */
   missingLayerId?: string;
+  /** Layer parameters this experiment sets, with the value each group gives them. Only for experiments in a layer the snapshot has. */
+  parameters?: ParameterOverride[];
+}
+
+/** One layer parameter as an experiment sets it: the layer default and the value per group. */
+export interface ParameterOverride {
+  name: string;
+  /** False when the experiment sets a parameter the layer does not declare. */
+  declared: boolean;
+  defaultValue: unknown;
+  /** Group name → value. Groups that leave the parameter alone are absent. */
+  byGroup: Record<string, unknown>;
 }
 
 export interface LayerReportRow {
@@ -68,6 +80,8 @@ export interface LayerReportRow {
   reason: string;
   /** Experiment IDs the layer lists that the snapshot does not contain. */
   unknownExperimentIds: string[];
+  /** Per layer parameter, the non-archived experiments that set it; a parameter no experiment sets is served at its default everywhere. */
+  parameterUse: Record<string, string[]>;
 }
 
 export interface LayerReportTotals {
@@ -110,12 +124,14 @@ export function layerReport(snapshot: CanonicalSnapshot): LayerReport {
     }
   }
   const rows = layers.map((l): LayerReportRow => {
-    const experiments = byLayer.get(l.id) ?? [];
+    const experiments = (byLayer.get(l.id) ?? []).map((x) => ({ ...x, parameters: parameterOverrides(l, x.experiment) }));
     const listed = new Set(experiments.map((x) => x.experiment.id));
     const unknownExperimentIds = l.experimentIds.filter((id) => !listed.has(id) && !seen.has(id));
     const counts = countExperiments(experiments);
     const { fate, reason } = layerFate(l, counts);
-    return { layer: l, experiments, counts, fate, reason, unknownExperimentIds };
+    const parameterUse: Record<string, string[]> = Object.fromEntries(l.parameters.map((p) => [p.name, []]));
+    for (const x of experiments) if (!x.archived) for (const o of x.parameters ?? []) if (o.declared) parameterUse[o.name]!.push(x.experiment.id);
+    return { layer: l, experiments, counts, fate, reason, unknownExperimentIds, parameterUse };
   });
   const unlayeredRow: LayerReportRow = {
     layer: null,
@@ -124,6 +140,7 @@ export function layerReport(snapshot: CanonicalSnapshot): LayerReport {
     fate: null,
     reason: 'Experiments outside any layer: each migrates on its own.',
     unknownExperimentIds: [],
+    parameterUse: {},
   };
   const all = [...rows.flatMap((r) => r.experiments), ...unlayered];
   const liveLayers = rows.filter((r) => !r.layer!.archived);
@@ -171,6 +188,28 @@ function describeExperiment(e: Experiment, gates: Map<string, Gate>): LayerRepor
   const { fate, reason } = experimentFate(e, archived, targeting);
   const live = !archived && (fate === 'draft' || fate === 'wait' || fate === 'stopped');
   return { experiment: e, archived, live, fate, reason, targeting };
+}
+
+/** Which of the layer's parameters the experiment overrides, group by group; layer order first, undeclared names after. */
+export function parameterOverrides(l: Layer, e: Experiment): ParameterOverride[] {
+  const declared = new Map(l.parameters.map((p) => [p.name, p.defaultValue]));
+  const seen = new Map<string, ParameterOverride>();
+  for (const g of e.groups) {
+    for (const [name, value] of Object.entries(g.parameterValues ?? {})) {
+      let o = seen.get(name);
+      if (!o) seen.set(name, (o = { name, declared: declared.has(name), defaultValue: declared.get(name), byGroup: {} }));
+      o.byGroup[g.name] = value;
+    }
+  }
+  const inLayerOrder = l.parameters.map((p) => seen.get(p.name)).filter((o): o is ParameterOverride => !!o);
+  const extra = [...seen.values()].filter((o) => !o.declared);
+  return [...inLayerOrder, ...extra];
+}
+
+/** "cta_text: Control=\"Place order\", Urgent=\"Complete purchase now\"" — undeclared parameters are marked. */
+export function describeOverride(o: ParameterOverride): string {
+  const groups = Object.entries(o.byGroup).map(([g, v]) => `${g}=${JSON.stringify(v)}`).join(', ');
+  return `${o.name}${o.declared ? '' : ' (not on the layer)'}: ${groups}`;
 }
 
 function experimentFate(e: Experiment, archived: boolean, t: ExperimentTargetingSummary): { fate: ExperimentFate; reason: string } {
@@ -254,18 +293,18 @@ export const LAYER_FATE_LABEL: Record<LayerFate, string> = {
 /** One CSV row per experiment, plus a row for every layer without experiments, so nothing is lost in the export. `source` adds a leading column (workspaces with several sources). */
 export function layerReportCsv(report: LayerReport, opts: { source?: string } = {}): string {
   const sourceCol = opts.source !== undefined ? [opts.source] : [];
-  const header = [...(opts.source !== undefined ? ['source'] : []), 'layer', 'layer_fate', 'layer_implicit', 'layer_archived', 'layer_parameters', 'layer_defaults', 'experiment', 'status', 'experiment_archived', 'allocation_pct', 'groups', 'unit_type', 'targeting', 'experiment_fate', 'reason'];
+  const header = [...(opts.source !== undefined ? ['source'] : []), 'layer', 'layer_fate', 'layer_implicit', 'layer_archived', 'layer_parameters', 'layer_defaults', 'experiment', 'status', 'experiment_archived', 'allocation_pct', 'groups', 'unit_type', 'parameters_overridden', 'targeting', 'experiment_fate', 'reason'];
   const lines: string[][] = [];
   for (const row of [...report.rows, report.unlayered]) {
     const l = row.layer;
     const layerCells = [...sourceCol, l?.id ?? '(not in a layer)', row.fate ? LAYER_FATE_LABEL[row.fate] : '', l ? String(l.isImplicit) : '', l ? String(l.archived) : '', l ? String(l.parameters.length) : '', l ? describeDefaults(l) : ''];
     if (row.experiments.length === 0) {
-      lines.push([...layerCells, '', '', '', '', '', '', '', '', row.reason]);
+      lines.push([...layerCells, '', '', '', '', '', '', '', '', '', row.reason]);
       continue;
     }
     for (const x of row.experiments) {
       const e = x.experiment;
-      lines.push([...layerCells, e.id, e.status, String(x.archived), String(e.allocation), e.groups.map((g) => `${g.name} ${g.size}%`).join('; '), e.idType, x.targeting.text, EXPERIMENT_FATE_LABEL[x.fate], x.reason]);
+      lines.push([...layerCells, e.id, e.status, String(x.archived), String(e.allocation), e.groups.map((g) => `${g.name} ${g.size}%`).join('; '), e.idType, (x.parameters ?? []).map(describeOverride).join('; '), x.targeting.text, EXPERIMENT_FATE_LABEL[x.fate], x.reason]);
     }
   }
   return [header, ...lines].map((cells) => cells.map(csvCell).join(',')).join('\n') + '\n';
@@ -366,19 +405,24 @@ function layerSection(r: LayerReportRow, level = 2): string[] {
     out.push('**Default parameters**', '');
     if (l.parameters.length === 0) out.push('No parameters.', '');
     else {
-      out.push('| Parameter | Type | Default |', '|---|---|---|');
-      for (const p of l.parameters) out.push(`| \`${md(p.name)}\` | ${p.type ?? '–'} | \`${md(JSON.stringify(p.defaultValue))}\` |`);
+      out.push('| Parameter | Type | Default | Set by |', '|---|---|---|---|');
+      for (const p of l.parameters) {
+        const users = r.parameterUse[p.name] ?? [];
+        out.push(`| \`${md(p.name)}\` | ${p.type ?? '–'} | \`${md(JSON.stringify(p.defaultValue))}\` | ${users.length ? users.map((id) => `\`${md(id)}\``).join(', ') : 'no experiment (default everywhere)'} |`);
+      }
       out.push('');
     }
   }
   out.push('**Experiments**', '');
   if (r.experiments.length === 0) out.push('No experiments in this snapshot.', '');
   else {
-    out.push('| Experiment | Status | Allocation | Unit | Targeting | Migration |', '|---|---|---|---|---|---|');
+    const withParams = !!l;
+    out.push(withParams ? '| Experiment | Status | Allocation | Unit | Overrides | Targeting | Migration |' : '| Experiment | Status | Allocation | Unit | Targeting | Migration |', withParams ? '|---|---|---|---|---|---|---|' : '|---|---|---|---|---|---|');
     for (const x of r.experiments) {
       const e = x.experiment;
       const name = `\`${md(e.id)}\`${x.missingLayerId ? ` (layer \`${md(x.missingLayerId)}\` not synced)` : ''}`;
-      out.push(`| ${name} | ${x.archived ? 'archived' : e.status.replace(/_/g, ' ')} | ${e.allocation}% | ${md(e.idType)} | ${md(x.targeting.text)} | ${EXPERIMENT_FATE_LABEL[x.fate]} |`);
+      const overrides = withParams ? ` ${x.parameters?.length ? x.parameters.map((o) => md(describeOverride(o))).join('<br>') : 'none'} |` : '';
+      out.push(`| ${name} | ${x.archived ? 'archived' : e.status.replace(/_/g, ' ')} | ${e.allocation}% | ${md(e.idType)} |${overrides} ${md(x.targeting.text)} | ${EXPERIMENT_FATE_LABEL[x.fate]} |`);
     }
     out.push('');
   }

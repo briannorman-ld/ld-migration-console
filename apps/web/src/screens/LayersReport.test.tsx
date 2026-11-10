@@ -26,7 +26,7 @@ function snapshot(): CanonicalSnapshot {
     layer('retired_layer', [], { archived: true }),
   ];
   s.experiments = [
-    experiment('cta_copy', { status: 'active', allocation: 40, layerId: 'checkout_layer' }),
+    experiment('cta_copy', { status: 'active', allocation: 40, layerId: 'checkout_layer', groups: [{ name: 'Control', size: 50, parameterValues: { cta_text: 'Place order' } }, { name: 'Urgent', size: 50, parameterValues: { cta_text: 'Complete purchase now' } }] }),
     experiment('trust_badges', { status: 'setup', allocation: 30, layerId: 'checkout_layer' }),
     experiment('anchor', { status: 'decision_made', layerId: 'pricing_layer', launchedGroupId: 'Test' }),
     experiment('bundle', { status: 'abandoned', layerId: 'pricing_layer' }),
@@ -81,6 +81,12 @@ describe('LayersReport', () => {
     expect(within(cta).getByText('active')).toBeTruthy();
     expect(within(cta).getByText('40%')).toBeTruthy();
     expect(within(cta).getByText('Wait until it ends')).toBeTruthy();
+    expect(within(cta).getByText('cta_text')).toBeTruthy();
+    expect(within(cta).getByText('Complete purchase now')).toBeTruthy();
+    expect(within(within(exps).getByText('trust_badges').closest('tr')!).getByText('none', { selector: 'td:nth-child(4) *' })).toBeTruthy();
+    const ctaRow = within(params).getByText('cta_text').closest('tr')!;
+    expect(within(ctaRow).getByText('cta_copy')).toBeTruthy();
+    expect(within(within(params).getByText('show_badges').closest('tr')!).getByText('no experiment (default everywhere)')).toBeTruthy();
     expect(within(within(exps).getByText('trust_badges').closest('tr')!).getByText('Draft experiment')).toBeTruthy();
 
     fireEvent.click(screen.getByLabelText('Expand experiments not in a layer'));
@@ -123,7 +129,7 @@ describe('LayersReport', () => {
     expect(md).toContain('# Layers and experiments — web');
     expect(md).toContain('Snapshot taken 2026-11-10T00:00:00Z.');
     expect(md).toContain('## `checkout_layer` — Create LD layer');
-    expect(md).toContain('| `cta_copy` | active | 40% | userID | none | Wait until it ends |');
+    expect(md).toContain('| `cta_copy` | active | 40% | userID | cta_text: Control="Place order", Urgent="Complete purchase now" | none | Wait until it ends |');
     expect(md).toContain('## Skipped layers (2)');
     expect(md).toContain('- `retired_layer` — no experiments in this snapshot · 1 parameter');
   });
