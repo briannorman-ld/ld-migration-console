@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import {
   describeDefaults,
   describeOverride,
+  describeParameterUse,
   EXPERIMENT_FATE_LABEL,
   LAYER_FATE_LABEL,
   layerReport,
@@ -277,7 +278,7 @@ function LayerRow({ r, multi, open, onToggle, showArchived, onOpenCoverage }: { 
                       <th className="py-0.5 pr-3 font-normal">Parameter</th>
                       <th className="py-0.5 pr-3 font-normal">Type</th>
                       <th className="py-0.5 pr-3 font-normal">Default</th>
-                      <th className="py-0.5 font-normal" title="Experiments in this layer that set the parameter (archived ones excluded)">Set by</th>
+                      <th className="py-0.5 font-normal" title="How many experiments in this layer set the parameter (archived ones excluded); hover a cell for their names">Overridden by</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -290,8 +291,8 @@ function LayerRow({ r, multi, open, onToggle, showArchived, onOpenCoverage }: { 
                           <td className="py-0.5 pr-3 font-mono">
                             <Value v={p.defaultValue} />
                           </td>
-                          <td className="py-0.5">
-                            {users.length ? <span className="font-mono">{users.join(', ')}</span> : <span className="text-fg-muted">no experiment (default everywhere)</span>}
+                          <td className={cx('py-0.5', users.length === 0 && 'text-fg-muted')} title={users.length ? users.join(', ') : undefined}>
+                            {describeParameterUse(row, p.name)}
                           </td>
                         </tr>
                       );

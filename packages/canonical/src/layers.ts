@@ -382,6 +382,16 @@ export function layerReportMarkdown(report: LayerReport, opts: LayerReportMarkdo
   return out.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
 }
 
+/** "12 of 135 experiments (123 keep the default)", or "no experiment (default everywhere)". Archived experiments are not counted. */
+export function describeParameterUse(r: LayerReportRow, name: string): string {
+  const users = r.parameterUse[name]?.length ?? 0;
+  const total = r.counts.live + r.counts.ended;
+  if (users === 0) return 'no experiment (default everywhere)';
+  if (users === total) return `all ${plural(total, 'experiment')}`;
+  const rest = total - users;
+  return `${users} of ${plural(total, 'experiment')} (${rest} keep${rest === 1 ? 's' : ''} the default)`;
+}
+
 /** One bullet for a layer that gets no section: its name, then the experiments in it (or none). */
 function layerLine(r: LayerReportRow): string {
   const l = r.layer!;
@@ -408,11 +418,8 @@ function layerSection(r: LayerReportRow, level = 2): string[] {
     out.push('**Default parameters**', '');
     if (l.parameters.length === 0) out.push('No parameters.', '');
     else {
-      out.push('| Parameter | Type | Default | Set by |', '|---|---|---|---|');
-      for (const p of l.parameters) {
-        const users = r.parameterUse[p.name] ?? [];
-        out.push(`| \`${md(p.name)}\` | ${p.type ?? '–'} | \`${md(JSON.stringify(p.defaultValue))}\` | ${users.length ? users.map((id) => `\`${md(id)}\``).join(', ') : 'no experiment (default everywhere)'} |`);
-      }
+      out.push('| Parameter | Type | Default | Overridden by |', '|---|---|---|---|');
+      for (const p of l.parameters) out.push(`| \`${md(p.name)}\` | ${p.type ?? '–'} | \`${md(JSON.stringify(p.defaultValue))}\` | ${describeParameterUse(r, p.name)} |`);
       out.push('');
     }
   }

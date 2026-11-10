@@ -196,13 +196,16 @@ describe('layerReportMarkdown', () => {
   it('keeps each layer with its defaults table and its experiments table', () => {
     const checkout = doc.slice(doc.indexOf('## `checkout_layer`'), doc.indexOf('## `button_color_layer`'));
     expect(checkout).toContain('unit type: userID');
-    expect(checkout).toContain('| `cta_text` | string | `"Place order"` | `cta_copy` |');
-    expect(checkout).toContain('| `show_badges` | boolean | `false` | `trust_badges` |');
+    expect(checkout).toContain('| `cta_text` | string | `"Place order"` | 1 of 2 experiments (1 keeps the default) |');
+    expect(checkout).toContain('| `show_badges` | boolean | `false` | 1 of 2 experiments (1 keeps the default) |');
+    expect(checkout).not.toContain('| `cta_copy` |\n');
     expect(checkout).toContain('| `cta_copy` | active | 40% | userID | cta_text: Control="Place order", Urgent="Complete purchase now"<br>urgency_banner (not on the layer): Urgent=true | none | Wait until it ends |');
     expect(checkout).toContain('| `old_cta` | archived | 100% | userID | cta_text: Control="Buy", Test="Buy now" | none | Never migrated |');
     const s = snapshot();
     s.layers[0]!.parameters.push({ name: 'unused', type: 'string', defaultValue: 'x' });
     expect(layerReportMarkdown(layerReport(s))).toContain('| `unused` | string | `"x"` | no experiment (default everywhere) |');
+    s.experiments.find((e) => e.id === 'trust_badges')!.groups.forEach((g) => (g.parameterValues = { ...g.parameterValues, cta_text: 'x' }));
+    expect(layerReportMarkdown(layerReport(s))).toContain('| `cta_text` | string | `"Place order"` | all 2 experiments |');
     expect(checkout).toContain('> Becomes a LaunchDarkly layer reserving traffic for 2 experiments');
     expect(checkout).toContain('(2 live, 1 archived)');
     const loose = doc.slice(doc.indexOf('## Not in a layer'), doc.indexOf('## Archived layers'));

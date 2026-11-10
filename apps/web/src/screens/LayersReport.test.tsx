@@ -85,7 +85,8 @@ describe('LayersReport', () => {
     expect(within(cta).getByText('Complete purchase now')).toBeTruthy();
     expect(within(within(exps).getByText('trust_badges').closest('tr')!).getByText('none', { selector: 'td:nth-child(4) *' })).toBeTruthy();
     const ctaRow = within(params).getByText('cta_text').closest('tr')!;
-    expect(within(ctaRow).getByText('cta_copy')).toBeTruthy();
+    const use = within(ctaRow).getByText('1 of 2 experiments (1 keeps the default)');
+    expect(use.getAttribute('title')).toBe('cta_copy');
     expect(within(within(params).getByText('show_badges').closest('tr')!).getByText('no experiment (default everywhere)')).toBeTruthy();
     expect(within(within(exps).getByText('trust_badges').closest('tr')!).getByText('Draft experiment')).toBeTruthy();
 
