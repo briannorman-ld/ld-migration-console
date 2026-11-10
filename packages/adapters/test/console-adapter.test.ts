@@ -82,7 +82,7 @@ describe('Console API adapter against the simulated StatSig', () => {
     expect(issues).toEqual([]);
     expect(snap.gates).toHaveLength(d.gates.length); // includes the archived gate
     expect(snap.gates.find((g) => g.id === 'legacy_wishlist')?.archived).toBe(true);
-    expect(countsByKind(snap)).toMatchObject({ gate: d.gates.length - 1, config: d.dynamicConfigs.length, segment: 11, experiment: 7, layer: 2, holdout: 2, autotune: 6, metric: 7, param_store: 1 });
+    expect(countsByKind(snap)).toMatchObject({ gate: d.gates.length - 1, config: d.dynamicConfigs.length, segment: 11, experiment: 9, layer: 3, holdout: 2, autotune: 6, metric: 7, param_store: 1 });
     expect(snap.environments.map((e) => e.name)).toEqual(['development', 'staging', 'production', 'qa']);
     expect(snap.unitTypes.map((u) => u.name)).toEqual(['userID', 'stableID', 'companyID']);
     expect(snap.completeness.missing).toEqual(['salts']);

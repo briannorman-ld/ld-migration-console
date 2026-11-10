@@ -226,6 +226,7 @@ availability and provenance (`migration.type = config`) work exactly as for gate
 | 11.16 | Experiment types | `experimentType`: `BASE`, `GEO`, `SWITCHBACK`, `PROMPT`, `SIDECAR` (no-code), `GRID_SEARCH`. | Unit-randomized experiments only; prompts belong to AgentControl. | 📅 Only `BASE` will be drafted; the others are listed as *no equivalent* on the coverage page. | — |
 | 11.17 | Holdout percentage range | API `passPercentage` 0–10 (default 5); UI docs say 1–50 %. | `holdoutamount` string percent. | 📅 Pass through whatever the API returns. | `global_holdout` 2 % |
 | 11.18 | Experiments enabled in non-production environments | `enabledNonProdEnvironments[]` decides where an experiment runs besides production. | Experiments are created per environment. | 📅 Draft only in the mapped environments the experiment is enabled in. | — |
+| 11.19 | Layer with nothing left to keep exclusive | A layer stays after every experiment in it has concluded, been abandoned or archived; config specs omit archived experiments, so the two source kinds would list different experiments on it. | A layer only reserves traffic for experiments that still run. | ⚙️ Both adapters list live experiments only on `Layer.experimentIds` (archived ones still name the layer through their own `layerId`). The Layers report marks such a layer *skip, nothing left to reserve*, and implicit layers *skip, experiment still migrates*; tests in `packages/canonical/test/layers.test.ts`. | `pricing_layer` (concluded + abandoned + archived) |
 
 ## 12. Metrics
 

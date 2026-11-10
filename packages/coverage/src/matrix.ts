@@ -618,7 +618,7 @@ export const COVERAGE: CoverageEntry[] = [
     statsig: 'Layers (explicit) and layer parameters',
     ld: 'LaunchDarkly layers with reservations',
     status: 'planned',
-    how: 'Layers are created so new experiments stay mutually exclusive; code reading getLayer().get() gets a layer_parameters decision.',
+    how: 'Layers are created so new experiments stay mutually exclusive; code reading getLayer().get() gets a layer_parameters decision. The Layers page reports every layer with its experiments, default parameters and targeting, sorted by experiment count, and marks the layers that can be skipped (implicit, or nothing left to keep exclusive).',
     detail: 'Implicit (one-experiment) layers are dropped. StatSig layers carry separate parameter sets for users who fail the targeting gate and for each holdout; LaunchDarkly layers only reserve traffic for whole experiments, so those defaults land on the flags.',
     edgeCases: ['11.6'],
     kind: 'layer',

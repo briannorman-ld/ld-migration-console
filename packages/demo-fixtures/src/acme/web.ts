@@ -947,6 +947,60 @@ export function acmeWeb(): ProjectSeed {
         ],
         primaryMetrics: [{ name: 'revenue', type: 'sum' }],
       },
+      {
+        // Layers report: a layer whose experiments have all ended or been archived has nothing left to
+        // keep exclusive, so the console marks it "skip, nothing left to reserve" (PLAN §11).
+        id: 'pricing_anchor_test',
+        description: 'Anchor price shown next to the sale price. Shipped the anchor.',
+        hypothesis: 'An anchor price increases conversion on discounted items.',
+        owner: P.marco,
+        tags: ['growth'],
+        status: 'decision_made',
+        allocation: 60,
+        layerID: 'pricing_layer',
+        launchedGroup: 'Anchor',
+        groups: [
+          { name: 'Control', size: 50, parameterValues: { show_anchor: false } },
+          { name: 'Anchor', size: 50, parameterValues: { show_anchor: true } },
+        ],
+        primaryMetrics: [{ name: 'checkout_conversion', type: 'ratio' }],
+        startedDaysAgo: 90,
+        endedDaysAgo: 45,
+        decisionReason: 'Anchor won on conversion (+1.8%).',
+      },
+      {
+        id: 'pricing_bundle_test',
+        description: 'Bundle discount on the cart page. Abandoned.',
+        hypothesis: 'A bundle discount increases items per order.',
+        owner: P.marco,
+        tags: ['growth'],
+        status: 'abandoned',
+        allocation: 40,
+        layerID: 'pricing_layer',
+        groups: [
+          { name: 'Control', size: 50, parameterValues: { bundle_discount_pct: 0 } },
+          { name: 'Bundle', size: 50, parameterValues: { bundle_discount_pct: 10 } },
+        ],
+        startedDaysAgo: 30,
+        endedDaysAgo: 25,
+        decisionReason: 'Discount applied twice at checkout.',
+      },
+      {
+        id: 'pricing_old_tiers',
+        description: 'Early price-tier test. Archived.',
+        hypothesis: 'Three tiers beat two.',
+        owner: P.former,
+        tags: ['growth'],
+        status: 'archived',
+        allocation: 100,
+        layerID: 'pricing_layer',
+        groups: [
+          { name: 'Control', size: 50, parameterValues: { price_tiers: 2 } },
+          { name: 'Three', size: 50, parameterValues: { price_tiers: 3 } },
+        ],
+        startedDaysAgo: 300,
+        endedDaysAgo: 280,
+      },
     ],
     layers: [
       {
@@ -966,6 +1020,17 @@ export function acmeWeb(): ProjectSeed {
         isImplicitLayer: true,
         parameters: [{ name: 'color', type: 'string', defaultValue: 'blue' }],
         experimentIds: ['checkout_button_color'],
+      },
+      {
+        id: 'pricing_layer',
+        description: 'Pricing experiments on the product and cart pages. Every experiment has ended: nothing left to reserve.',
+        owner: P.marco,
+        parameters: [
+          { name: 'show_anchor', type: 'boolean', defaultValue: false },
+          { name: 'bundle_discount_pct', type: 'number', defaultValue: 0 },
+          { name: 'price_tiers', type: 'number', defaultValue: 2 },
+        ],
+        experimentIds: ['pricing_anchor_test', 'pricing_bundle_test', 'pricing_old_tiers'],
       },
     ],
     holdouts: [

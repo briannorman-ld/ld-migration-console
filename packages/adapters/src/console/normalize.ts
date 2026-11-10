@@ -178,7 +178,10 @@ export function normalizeConsoleSnapshot(raw: RawConsoleSnapshot, opts: Normaliz
       idType: l.idType ?? 'userID',
       isImplicit: l.isImplicitLayer ?? false,
       parameters: (l.parameters ?? []).map((p) => ({ name: p.name, type: (p.type ?? undefined) as never, defaultValue: p.defaultValue })),
-      experimentIds: raw.experiments.filter((e) => e.layerID === l.id).map((e) => e.id),
+      // Live experiments only: archived ones are never migrated and config specs do not carry them,
+      // so both source kinds list the same experiments. Archived experiments still reference the
+      // layer through their own layerId (the Layers report shows them under it, counted apart).
+      experimentIds: raw.experiments.filter((e) => e.layerID === l.id && e.status !== 'archived').map((e) => e.id),
       holdoutIds: l.holdoutIDs ?? [],
     });
   }

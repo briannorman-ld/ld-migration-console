@@ -61,6 +61,7 @@ const FlagSideBySide = lazyNamed(() => import("./GatesSideBySide.tsx"), "FlagSid
 const SegmentsSideBySide = lazyNamed(() => import("./SegmentsSideBySide.tsx"), "SegmentsSideBySide");
 const AutotunesSideBySide = lazyNamed(() => import("./AutotunesSideBySide.tsx"), "AutotunesSideBySide");
 const LdSourceSideBySide = lazyNamed(() => import("./LdSourceSideBySide.tsx"), "LdSourceSideBySide");
+const LayersReport = lazyNamed(() => import("./LayersReport.tsx"), "LayersReport");
 const DecisionsView = lazyNamed(() => import("./DecisionsView.tsx"), "DecisionsView");
 const RunsView = lazyNamed(() => import("./RunsView.tsx"), "RunsView");
 const MonitoringView = lazyNamed(() => import("./MonitoringView.tsx"), "MonitoringView");
@@ -877,6 +878,12 @@ export function WorkspaceScreen({
                   setSelected={setSelected}
                 />
               )
+            ) : view.resource === "layer" ? (
+              <LayersReport
+                sources={visible}
+                snapshots={snapshots ?? {}}
+                onOpenCoverage={(focus) => setView({ kind: "coverage", focus })}
+              />
             ) : (
               <EntityList
                 kind={view.resource}

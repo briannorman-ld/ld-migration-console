@@ -6,3 +6,4 @@ export * from './inventory.ts';
 export * from './diff.ts';
 export * from './provenance.ts';
 export * from './neutral.ts';
+export * from './layers.ts';
