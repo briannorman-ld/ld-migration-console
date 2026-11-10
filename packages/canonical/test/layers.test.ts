@@ -179,6 +179,10 @@ describe('layerReportMarkdown', () => {
   it('gives a section only to layers that will be created, then the unlayered group, then lists the skipped and archived layers by name', () => {
     expect(doc.startsWith('# Layers and experiments — web · Acme Web\n\nSnapshot taken 2026-11-10T00:00:00Z.\n')).toBe(true);
     expect(sections).toEqual(['## `checkout_layer` — Create LD layer', '## Not in a layer', '## Skipped layers (2)', '## Archived layers (1)']);
+    // A horizontal rule separates every section from the next, and none sits before the first.
+    expect(doc.split('\n').filter((l) => l === '---')).toHaveLength(3);
+    expect(doc.indexOf('---')).toBeGreaterThan(doc.indexOf('## `checkout_layer`'));
+    expect(doc.indexOf('---')).toBeLessThan(doc.indexOf('## Not in a layer'));
     expect(doc).toContain('3 live layers (1 implicit, 1 archived) · 7 live experiments (2 running, 1 abandoned, 1 archived) · 2 layers could be skipped.');
     const skipped = doc.slice(doc.indexOf('## Skipped layers'), doc.indexOf('## Archived layers'));
     expect(skipped).toContain('**Implicit layers (1):**');

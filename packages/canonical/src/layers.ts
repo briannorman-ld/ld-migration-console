@@ -356,10 +356,13 @@ export function layerReportMarkdown(report: LayerReport, opts: LayerReportMarkdo
     'Verdicts follow the migration policy: running experiments end in StatSig and migrate afterwards, archived and abandoned experiments are never migrated, implicit layers are dropped, and a layer is only created while it has an experiment left to keep exclusive.',
     '',
   );
-  for (const r of created) out.push(...layerSection(r));
-  if (report.unlayered.experiments.length) out.push(...layerSection(report.unlayered));
+  // A rule between sections: in a long document the eye needs to see where one layer ends.
+  let sectionCount = 0;
+  const divider = () => (sectionCount++ ? ['---', ''] : []);
+  for (const r of created) out.push(...divider(), ...layerSection(r));
+  if (report.unlayered.experiments.length) out.push(...divider(), ...layerSection(report.unlayered));
   if (implicit.length || empty.length) {
-    out.push(`## Skipped layers (${implicit.length + empty.length})`, '');
+    out.push(...divider(), `## Skipped layers (${implicit.length + empty.length})`, '');
     if (implicit.length) {
       out.push(`**Implicit layers (${implicit.length}):** one-experiment layers StatSig created implicitly. The layer is dropped; the experiment, when it is live, migrates on its own.`, '');
       for (const r of implicit) out.push(layerLine(r));
@@ -372,7 +375,7 @@ export function layerReportMarkdown(report: LayerReport, opts: LayerReportMarkdo
     }
   }
   if (archived.length) {
-    out.push(`## Archived layers (${archived.length})`, '', 'Archived in StatSig: never migrated.', '');
+    out.push(...divider(), `## Archived layers (${archived.length})`, '', 'Archived in StatSig: never migrated.', '');
     for (const r of archived) out.push(layerLine(r));
     out.push('');
   }

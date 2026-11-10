@@ -20,7 +20,7 @@ import type { SourceRecord } from '@sslm/store';
 import { MappingExplainer } from '../components/MappingExplainer.tsx';
 import { PagerBar, usePager } from '../components/Pager.tsx';
 import { Value } from '../components/Targeting.tsx';
-import { Badge, Button, Card, cx, Input, Select, type Tone } from '../components/ui.tsx';
+import { Badge, Button, cx, Input, Select, type Tone } from '../components/ui.tsx';
 import { download } from '../lib/migration.ts';
 
 /**
@@ -200,27 +200,26 @@ export function LayersReport({
       </div>
 
       <PagerBar pager={pager} label="layers" className="mb-2" />
-      <Card>
-        <div className="grid grid-cols-[minmax(0,2fr)_minmax(7rem,1fr)_4rem_minmax(0,1.6fr)] gap-x-3 border-b border-line-soft px-3 py-1.5 text-xs text-fg-muted">
-          <div>Layer</div>
-          <div>Experiments</div>
-          <div className="text-right">Params</div>
-          <div>Migration</div>
-        </div>
-        <ul className="divide-y divide-line-soft text-sm">
-          {pager.slice.map((r) => (
-            <LayerRow key={keyOf(r)} r={r} multi={sources.length > 1} open={isOpen(r)} onToggle={() => toggleRow(r)} showArchived={showArchived} onOpenCoverage={onOpenCoverage} />
-          ))}
-          {unlayeredVisible.map((r) => (
-            <LayerRow key={keyOf(r)} r={r} multi={sources.length > 1} open={isOpen(r)} onToggle={() => toggleRow(r)} showArchived={showArchived} onOpenCoverage={onOpenCoverage} />
-          ))}
-          {visible.length === 0 && unlayeredVisible.length === 0 && (
-            <li className="px-3 py-3 text-xs text-fg-muted">
-              {layerRows.length + unlayered.length > 0 ? 'No matches.' : 'No layers or experiments in this snapshot.'}
-            </li>
-          )}
-        </ul>
-      </Card>
+      <div className="grid grid-cols-[minmax(0,2fr)_minmax(7rem,1fr)_4rem_minmax(0,1.6fr)] gap-x-3 px-4 py-1.5 text-xs text-fg-muted">
+        <div>Layer</div>
+        <div>Experiments</div>
+        <div className="text-right">Params</div>
+        <div>Migration</div>
+      </div>
+      {/* One panel per layer: with the experiment tables open, rows in a shared card ran into each other. */}
+      <ul className="space-y-2 text-sm">
+        {pager.slice.map((r) => (
+          <LayerRow key={keyOf(r)} r={r} multi={sources.length > 1} open={isOpen(r)} onToggle={() => toggleRow(r)} showArchived={showArchived} onOpenCoverage={onOpenCoverage} />
+        ))}
+        {unlayeredVisible.map((r) => (
+          <LayerRow key={keyOf(r)} r={r} multi={sources.length > 1} open={isOpen(r)} onToggle={() => toggleRow(r)} showArchived={showArchived} onOpenCoverage={onOpenCoverage} />
+        ))}
+        {visible.length === 0 && unlayeredVisible.length === 0 && (
+          <li className="rounded-lg border border-line bg-surface px-3 py-3 text-xs text-fg-muted shadow-card">
+            {layerRows.length + unlayered.length > 0 ? 'No matches.' : 'No layers or experiments in this snapshot.'}
+          </li>
+        )}
+      </ul>
       <PagerBar pager={pager} label="layers" className="mt-2" />
     </div>
   );
@@ -232,8 +231,8 @@ function LayerRow({ r, multi, open, onToggle, showArchived, onOpenCoverage }: { 
   const experiments = showArchived ? row.experiments : row.experiments.filter((x) => !x.archived);
   const counts = [`${row.counts.live} live`, row.counts.ended ? `${row.counts.ended} ended` : '', row.counts.archived ? `${row.counts.archived} archived` : ''].filter(Boolean).join(' · ');
   return (
-    <li className={cx(l?.archived && 'opacity-70')}>
-      <div className="grid grid-cols-[minmax(0,2fr)_minmax(7rem,1fr)_4rem_minmax(0,1.6fr)] items-start gap-x-3 px-3 py-2">
+    <li className={cx('rounded-lg border bg-surface shadow-card', open ? 'border-line-strong' : 'border-line', l?.archived && 'opacity-70')}>
+      <div className="grid grid-cols-[minmax(0,2fr)_minmax(7rem,1fr)_4rem_minmax(0,1.6fr)] items-start gap-x-3 px-3 py-2.5">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           <button type="button" onClick={onToggle} aria-expanded={open} aria-label={`${open ? 'Collapse' : 'Expand'} ${l?.id ?? 'experiments not in a layer'}`} className="text-fg-muted hover:text-fg">
             {open ? '▾' : '▸'}
@@ -257,7 +256,7 @@ function LayerRow({ r, multi, open, onToggle, showArchived, onOpenCoverage }: { 
         {l?.description && <div className="col-span-4 mt-0.5 truncate text-xs text-fg-muted">{l.description}</div>}
       </div>
       {open && (
-        <div className="space-y-3 border-t border-line-soft bg-surface-2/40 px-3 py-3 pl-9 text-xs">
+        <div className="space-y-3 rounded-b-lg border-t border-line-soft bg-surface-2/40 px-3 py-3 pl-9 text-xs">
           <p className="text-fg-muted">
             {row.reason}{' '}
             {onOpenCoverage && (
