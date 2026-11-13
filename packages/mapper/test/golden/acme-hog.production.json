@@ -1,6 +1,60 @@
 {
   "flags": [
     {
+      "flag": "hog-anniversary",
+      "flagKind": "boolean",
+      "fidelity": "partial",
+      "notes": [
+        "partial: Dropped the rule because of its clause with operator “is_date_exact”. [rule “Condition set 1” › clause 1]"
+      ],
+      "decisions": [
+        "blocking unsupported_condition (rule “Condition set 1” › clause 1) → no default"
+      ],
+      "dependencies": [],
+      "shell": {
+        "name": "hog-anniversary",
+        "description": "Accounts whose signup day is exactly 1 March 2025.",
+        "tags": [
+          "migrated-from-posthog",
+          "migration-src-hog",
+          "promo"
+        ],
+        "variations": [
+          {
+            "value": true,
+            "name": "true"
+          },
+          {
+            "value": false,
+            "name": "false"
+          }
+        ],
+        "customProperties": [
+          "migration.id",
+          "migration.kind",
+          "migration.source",
+          "migration.type",
+          "migration.version"
+        ],
+        "clientSideAvailability": {
+          "usingEnvironmentId": true,
+          "usingMobileKey": true
+        }
+      },
+      "env": {
+        "ldEnv": "production",
+        "statsigEnv": "Acme Hog",
+        "on": true,
+        "offVariation": 1,
+        "fallthrough": {
+          "variation": 1
+        },
+        "rules": [],
+        "targets": [],
+        "prerequisites": []
+      }
+    },
+    {
       "flag": "hog-archived-promo",
       "flagKind": "boolean",
       "skipped": "archived in PostHog",
@@ -10,6 +64,110 @@
       ],
       "decisions": [],
       "dependencies": []
+    },
+    {
+      "flag": "hog-checkout-copy",
+      "flagKind": "multivariate",
+      "fidelity": "partial",
+      "notes": [
+        "full: Contexts outside the 60% rollout get what “Condition set 2” serves (it matches everyone), folded into this rule's rollout. [rule “Condition set 1”]",
+        "partial: 80% / 20% rollout re-buckets contexts (new flag, new salt). [rule “Condition set 1”]",
+        "partial: 50% / 50% rollout re-buckets contexts (new flag, new salt). [rule “Condition set 2”]",
+        "full: PostHog hashes rollouts without a per-flag salt (the same contexts fall into equal percentages across flags); LaunchDarkly salts per flag, so that correlation is not carried. [rollouts]"
+      ],
+      "decisions": [
+        "choice multivariate_no_match (variations) → add",
+        "choice case_insensitive_match (rule “Condition set 1” › clause 1) → regex",
+        "acknowledge partial_rollout_rebucket (rule “Condition set 1”) → acknowledge",
+        "acknowledge partial_rollout_rebucket (rule “Condition set 2”) → acknowledge"
+      ],
+      "dependencies": [],
+      "shell": {
+        "name": "hog-checkout-copy",
+        "description": "Canadian visitors mostly get the test copy; everyone else is split.",
+        "tags": [
+          "migrated-from-posthog",
+          "migration-src-hog",
+          "checkout"
+        ],
+        "variations": [
+          {
+            "value": "control",
+            "name": "Control"
+          },
+          {
+            "value": "test",
+            "name": "Test"
+          },
+          {
+            "value": "",
+            "name": "Not served"
+          }
+        ],
+        "customProperties": [
+          "migration.id",
+          "migration.kind",
+          "migration.source",
+          "migration.type",
+          "migration.version"
+        ],
+        "clientSideAvailability": {
+          "usingEnvironmentId": true,
+          "usingMobileKey": true
+        }
+      },
+      "env": {
+        "ldEnv": "production",
+        "statsigEnv": "Acme Hog",
+        "on": true,
+        "offVariation": 2,
+        "fallthrough": {
+          "rollout": {
+            "contextKind": "user",
+            "variations": [
+              {
+                "variation": 0,
+                "weight": 50000
+              },
+              {
+                "variation": 1,
+                "weight": 50000
+              }
+            ]
+          }
+        },
+        "rules": [
+          {
+            "description": "Condition set 1",
+            "clauses": [
+              {
+                "contextKind": "user",
+                "attribute": "country",
+                "op": "matches",
+                "values": [
+                  "^[cC][aA]$"
+                ],
+                "negate": false
+              }
+            ],
+            "rollout": {
+              "contextKind": "user",
+              "variations": [
+                {
+                  "variation": 1,
+                  "weight": 80000
+                },
+                {
+                  "variation": 0,
+                  "weight": 20000
+                }
+              ]
+            }
+          }
+        ],
+        "targets": [],
+        "prerequisites": []
+      }
     },
     {
       "flag": "hog-checkout-redesign",
@@ -101,6 +259,74 @@
                 "op": "segmentMatch",
                 "values": [
                   "design-partners"
+                ],
+                "negate": false
+              }
+            ],
+            "variation": 0
+          }
+        ],
+        "targets": [],
+        "prerequisites": []
+      }
+    },
+    {
+      "flag": "hog-churn-risk-offer",
+      "flagKind": "boolean",
+      "fidelity": "full",
+      "notes": [],
+      "decisions": [],
+      "dependencies": [
+        "segment:churn-risk"
+      ],
+      "shell": {
+        "name": "hog-churn-risk-offer",
+        "description": "A retention offer for accounts the churn model flags.",
+        "tags": [
+          "migrated-from-posthog",
+          "migration-src-hog",
+          "retention"
+        ],
+        "variations": [
+          {
+            "value": true,
+            "name": "true"
+          },
+          {
+            "value": false,
+            "name": "false"
+          }
+        ],
+        "customProperties": [
+          "migration.id",
+          "migration.kind",
+          "migration.source",
+          "migration.type",
+          "migration.version"
+        ],
+        "clientSideAvailability": {
+          "usingEnvironmentId": true,
+          "usingMobileKey": true
+        }
+      },
+      "env": {
+        "ldEnv": "production",
+        "statsigEnv": "Acme Hog",
+        "on": true,
+        "offVariation": 1,
+        "fallthrough": {
+          "variation": 1
+        },
+        "rules": [
+          {
+            "description": "Condition set 1",
+            "clauses": [
+              {
+                "contextKind": "user",
+                "attribute": "key",
+                "op": "segmentMatch",
+                "values": [
+                  "churn-risk"
                 ],
                 "negate": false
               }
@@ -632,6 +858,66 @@
       }
     },
     {
+      "flag": "hog-enterprise-upsell",
+      "flagKind": "boolean",
+      "fidelity": "full",
+      "notes": [
+        "full: Dependency on “hog-pricing-page” hoisted to a flag prerequisite (every rule required it, so this is exact). [prerequisites]",
+        "full: Prerequisites need an Enterprise plan; the target's plan is checked on the first write. [prerequisites]"
+      ],
+      "decisions": [],
+      "dependencies": [
+        "flag:hog-pricing-page"
+      ],
+      "shell": {
+        "name": "hog-enterprise-upsell",
+        "description": "Only where the pricing page serves the enterprise variant.",
+        "tags": [
+          "migrated-from-posthog",
+          "migration-src-hog",
+          "pricing"
+        ],
+        "variations": [
+          {
+            "value": true,
+            "name": "true"
+          },
+          {
+            "value": false,
+            "name": "false"
+          }
+        ],
+        "customProperties": [
+          "migration.id",
+          "migration.kind",
+          "migration.source",
+          "migration.type",
+          "migration.version"
+        ],
+        "clientSideAvailability": {
+          "usingEnvironmentId": true,
+          "usingMobileKey": true
+        }
+      },
+      "env": {
+        "ldEnv": "production",
+        "statsigEnv": "Acme Hog",
+        "on": true,
+        "offVariation": 1,
+        "fallthrough": {
+          "variation": 0
+        },
+        "rules": [],
+        "targets": [],
+        "prerequisites": [
+          {
+            "key": "hog-pricing-page",
+            "variation": 2
+          }
+        ]
+      }
+    },
+    {
       "flag": "hog-eu-rollout",
       "flagKind": "boolean",
       "fidelity": "partial",
@@ -726,6 +1012,60 @@
             "variation": 0
           }
         ],
+        "targets": [],
+        "prerequisites": []
+      }
+    },
+    {
+      "flag": "hog-has-plan",
+      "flagKind": "boolean",
+      "fidelity": "partial",
+      "notes": [
+        "partial: Dropped the rule because of its clause with operator “exact with an empty value (a truthiness check)”. [rule “Condition set 1” › clause 1]"
+      ],
+      "decisions": [
+        "blocking unsupported_condition (rule “Condition set 1” › clause 1) → no default"
+      ],
+      "dependencies": [],
+      "shell": {
+        "name": "hog-has-plan",
+        "description": "Anyone with any plan set.",
+        "tags": [
+          "migrated-from-posthog",
+          "migration-src-hog",
+          "growth"
+        ],
+        "variations": [
+          {
+            "value": true,
+            "name": "true"
+          },
+          {
+            "value": false,
+            "name": "false"
+          }
+        ],
+        "customProperties": [
+          "migration.id",
+          "migration.kind",
+          "migration.source",
+          "migration.type",
+          "migration.version"
+        ],
+        "clientSideAvailability": {
+          "usingEnvironmentId": true,
+          "usingMobileKey": true
+        }
+      },
+      "env": {
+        "ldEnv": "production",
+        "statsigEnv": "Acme Hog",
+        "on": true,
+        "offVariation": 1,
+        "fallthrough": {
+          "variation": 1
+        },
+        "rules": [],
         "targets": [],
         "prerequisites": []
       }
@@ -1107,6 +1447,145 @@
       }
     },
     {
+      "flag": "hog-newsletter-wave",
+      "flagKind": "boolean",
+      "fidelity": "full",
+      "notes": [],
+      "decisions": [],
+      "dependencies": [
+        "segment:newsletter-subscribers"
+      ],
+      "shell": {
+        "name": "hog-newsletter-wave",
+        "description": "The new digest layout for every newsletter subscriber.",
+        "tags": [
+          "migrated-from-posthog",
+          "migration-src-hog",
+          "marketing"
+        ],
+        "variations": [
+          {
+            "value": true,
+            "name": "true"
+          },
+          {
+            "value": false,
+            "name": "false"
+          }
+        ],
+        "customProperties": [
+          "migration.id",
+          "migration.kind",
+          "migration.source",
+          "migration.type",
+          "migration.version"
+        ],
+        "clientSideAvailability": {
+          "usingEnvironmentId": true,
+          "usingMobileKey": true
+        }
+      },
+      "env": {
+        "ldEnv": "production",
+        "statsigEnv": "Acme Hog",
+        "on": true,
+        "offVariation": 1,
+        "fallthrough": {
+          "variation": 1
+        },
+        "rules": [
+          {
+            "description": "Condition set 1",
+            "clauses": [
+              {
+                "contextKind": "user",
+                "attribute": "key",
+                "op": "segmentMatch",
+                "values": [
+                  "newsletter-subscribers"
+                ],
+                "negate": false
+              }
+            ],
+            "variation": 0
+          }
+        ],
+        "targets": [],
+        "prerequisites": []
+      }
+    },
+    {
+      "flag": "hog-no-email",
+      "flagKind": "boolean",
+      "fidelity": "partial",
+      "notes": [
+        "partial: Contexts without “email” no longer match (negated clause on a missing attribute). [rule “Condition set 2” › clause 1]"
+      ],
+      "decisions": [
+        "blocking null_check (rule “Condition set 1” › clause 1) → no default",
+        "acknowledge negated_missing_attribute (rule “Condition set 2” › clause 1) → acknowledge"
+      ],
+      "dependencies": [],
+      "shell": {
+        "name": "hog-no-email",
+        "description": "People without an email, or with one that is not at acme.example.",
+        "tags": [
+          "migrated-from-posthog",
+          "migration-src-hog",
+          "growth"
+        ],
+        "variations": [
+          {
+            "value": true,
+            "name": "true"
+          },
+          {
+            "value": false,
+            "name": "false"
+          }
+        ],
+        "customProperties": [
+          "migration.id",
+          "migration.kind",
+          "migration.source",
+          "migration.type",
+          "migration.version"
+        ],
+        "clientSideAvailability": {
+          "usingEnvironmentId": true,
+          "usingMobileKey": true
+        }
+      },
+      "env": {
+        "ldEnv": "production",
+        "statsigEnv": "Acme Hog",
+        "on": true,
+        "offVariation": 1,
+        "fallthrough": {
+          "variation": 1
+        },
+        "rules": [
+          {
+            "description": "Condition set 2",
+            "clauses": [
+              {
+                "contextKind": "user",
+                "attribute": "email",
+                "op": "matches",
+                "values": [
+                  ".*@acme\\.example$"
+                ],
+                "negate": true
+              }
+            ],
+            "variation": 0
+          }
+        ],
+        "targets": [],
+        "prerequisites": []
+      }
+    },
+    {
       "flag": "hog-not-between",
       "flagKind": "boolean",
       "fidelity": "full",
@@ -1176,6 +1655,129 @@
                 "op": "greaterThan",
                 "values": [
                   50
+                ],
+                "negate": false
+              }
+            ],
+            "variation": 0
+          }
+        ],
+        "targets": [],
+        "prerequisites": []
+      }
+    },
+    {
+      "flag": "hog-orphan-dependency",
+      "flagKind": "boolean",
+      "fidelity": "partial",
+      "notes": [
+        "full: Dependency on “flag-1023” hoisted to a flag prerequisite (every rule required it, so this is exact). [prerequisites]",
+        "partial: Prerequisite “flag-1023” dropped (missing in PostHog). [prerequisite “flag-1023”]"
+      ],
+      "decisions": [
+        "blocking missing_reference (prerequisite “flag-1023”) → no default"
+      ],
+      "dependencies": [],
+      "shell": {
+        "name": "hog-orphan-dependency",
+        "description": "Depends on a flag that was deleted.",
+        "tags": [
+          "migrated-from-posthog",
+          "migration-src-hog",
+          "legacy"
+        ],
+        "variations": [
+          {
+            "value": true,
+            "name": "true"
+          },
+          {
+            "value": false,
+            "name": "false"
+          }
+        ],
+        "customProperties": [
+          "migration.id",
+          "migration.kind",
+          "migration.source",
+          "migration.type",
+          "migration.version"
+        ],
+        "clientSideAvailability": {
+          "usingEnvironmentId": true,
+          "usingMobileKey": true
+        }
+      },
+      "env": {
+        "ldEnv": "production",
+        "statsigEnv": "Acme Hog",
+        "on": true,
+        "offVariation": 1,
+        "fallthrough": {
+          "variation": 0
+        },
+        "rules": [],
+        "targets": [],
+        "prerequisites": []
+      }
+    },
+    {
+      "flag": "hog-paying-customers",
+      "flagKind": "boolean",
+      "fidelity": "full",
+      "notes": [],
+      "decisions": [],
+      "dependencies": [
+        "segment:paying-customers"
+      ],
+      "shell": {
+        "name": "hog-paying-customers",
+        "description": "Paying customers, test accounts excluded.",
+        "tags": [
+          "migrated-from-posthog",
+          "migration-src-hog",
+          "billing"
+        ],
+        "variations": [
+          {
+            "value": true,
+            "name": "true"
+          },
+          {
+            "value": false,
+            "name": "false"
+          }
+        ],
+        "customProperties": [
+          "migration.id",
+          "migration.kind",
+          "migration.source",
+          "migration.type",
+          "migration.version"
+        ],
+        "clientSideAvailability": {
+          "usingEnvironmentId": true,
+          "usingMobileKey": true
+        }
+      },
+      "env": {
+        "ldEnv": "production",
+        "statsigEnv": "Acme Hog",
+        "on": true,
+        "offVariation": 1,
+        "fallthrough": {
+          "variation": 1
+        },
+        "rules": [
+          {
+            "description": "Condition set 1",
+            "clauses": [
+              {
+                "contextKind": "user",
+                "attribute": "key",
+                "op": "segmentMatch",
+                "values": [
+                  "paying-customers"
                 ],
                 "negate": false
               }
@@ -1380,6 +1982,77 @@
       }
     },
     {
+      "flag": "hog-promo-banner",
+      "flagKind": "boolean",
+      "fidelity": "partial",
+      "notes": [
+        "partial: Payloads not served: true → {\"banner\":\"spring\",\"cta\":\"Shop the sale\"}. [variations]"
+      ],
+      "decisions": [
+        "blocking variant_payloads (variations) → no default",
+        "choice case_insensitive_match (rule “Condition set 1” › clause 1) → regex"
+      ],
+      "dependencies": [],
+      "shell": {
+        "name": "hog-promo-banner",
+        "description": "Spring banner for US visitors.",
+        "tags": [
+          "migrated-from-posthog",
+          "migration-src-hog",
+          "promo"
+        ],
+        "variations": [
+          {
+            "value": true,
+            "name": "true"
+          },
+          {
+            "value": false,
+            "name": "false"
+          }
+        ],
+        "customProperties": [
+          "migration.id",
+          "migration.kind",
+          "migration.source",
+          "migration.type",
+          "migration.version"
+        ],
+        "clientSideAvailability": {
+          "usingEnvironmentId": true,
+          "usingMobileKey": true
+        }
+      },
+      "env": {
+        "ldEnv": "production",
+        "statsigEnv": "Acme Hog",
+        "on": true,
+        "offVariation": 1,
+        "fallthrough": {
+          "variation": 1
+        },
+        "rules": [
+          {
+            "description": "Condition set 1",
+            "clauses": [
+              {
+                "contextKind": "user",
+                "attribute": "country",
+                "op": "matches",
+                "values": [
+                  "^[uU][sS]$"
+                ],
+                "negate": false
+              }
+            ],
+            "variation": 0
+          }
+        ],
+        "targets": [],
+        "prerequisites": []
+      }
+    },
+    {
       "flag": "hog-remote-config",
       "flagKind": "multivariate",
       "fidelity": "full",
@@ -1507,6 +2180,406 @@
       }
     },
     {
+      "flag": "hog-seat-bands",
+      "flagKind": "boolean",
+      "fidelity": "full",
+      "notes": [],
+      "decisions": [
+        "choice unit_type_kind (workspace) → create:workspace"
+      ],
+      "dependencies": [
+        "context_kind:workspace"
+      ],
+      "shell": {
+        "name": "hog-seat-bands",
+        "description": "Under 100 seats with at least 2; or at most 3 seats; or a workspace that bought more than 10.",
+        "tags": [
+          "migrated-from-posthog",
+          "migration-src-hog",
+          "growth"
+        ],
+        "variations": [
+          {
+            "value": true,
+            "name": "true"
+          },
+          {
+            "value": false,
+            "name": "false"
+          }
+        ],
+        "customProperties": [
+          "migration.id",
+          "migration.kind",
+          "migration.source",
+          "migration.type",
+          "migration.version"
+        ],
+        "clientSideAvailability": {
+          "usingEnvironmentId": true,
+          "usingMobileKey": true
+        }
+      },
+      "env": {
+        "ldEnv": "production",
+        "statsigEnv": "Acme Hog",
+        "on": true,
+        "offVariation": 1,
+        "fallthrough": {
+          "variation": 1
+        },
+        "rules": [
+          {
+            "description": "Condition set 1",
+            "clauses": [
+              {
+                "contextKind": "user",
+                "attribute": "seats",
+                "op": "lessThan",
+                "values": [
+                  100
+                ],
+                "negate": false
+              },
+              {
+                "contextKind": "user",
+                "attribute": "seats",
+                "op": "greaterThanOrEqual",
+                "values": [
+                  2
+                ],
+                "negate": false
+              }
+            ],
+            "variation": 0
+          },
+          {
+            "description": "Condition set 2",
+            "clauses": [
+              {
+                "contextKind": "user",
+                "attribute": "seats",
+                "op": "lessThanOrEqual",
+                "values": [
+                  3
+                ],
+                "negate": false
+              }
+            ],
+            "variation": 0
+          },
+          {
+            "description": "Condition set 3",
+            "clauses": [
+              {
+                "contextKind": "workspace",
+                "attribute": "seats_purchased",
+                "op": "greaterThan",
+                "values": [
+                  10
+                ],
+                "negate": false
+              }
+            ],
+            "variation": 0
+          }
+        ],
+        "targets": [],
+        "prerequisites": []
+      }
+    },
+    {
+      "flag": "hog-seats-text",
+      "flagKind": "boolean",
+      "fidelity": "partial",
+      "notes": [
+        "partial: Dropped the rule because of its clause with operator “gte against a non-numeric value \"many\"”. [rule “Condition set 1” › clause 1]"
+      ],
+      "decisions": [
+        "blocking unsupported_condition (rule “Condition set 1” › clause 1) → no default"
+      ],
+      "dependencies": [],
+      "shell": {
+        "name": "hog-seats-text",
+        "description": "Accounts with \"many\" seats.",
+        "tags": [
+          "migrated-from-posthog",
+          "migration-src-hog",
+          "growth"
+        ],
+        "variations": [
+          {
+            "value": true,
+            "name": "true"
+          },
+          {
+            "value": false,
+            "name": "false"
+          }
+        ],
+        "customProperties": [
+          "migration.id",
+          "migration.kind",
+          "migration.source",
+          "migration.type",
+          "migration.version"
+        ],
+        "clientSideAvailability": {
+          "usingEnvironmentId": true,
+          "usingMobileKey": true
+        }
+      },
+      "env": {
+        "ldEnv": "production",
+        "statsigEnv": "Acme Hog",
+        "on": true,
+        "offVariation": 1,
+        "fallthrough": {
+          "variation": 1
+        },
+        "rules": [],
+        "targets": [],
+        "prerequisites": []
+      }
+    },
+    {
+      "flag": "hog-semver-pins",
+      "flagKind": "boolean",
+      "fidelity": "full",
+      "notes": [],
+      "decisions": [],
+      "dependencies": [],
+      "shell": {
+        "name": "hog-semver-pins",
+        "description": "Exactly 4.0.0; or 3.0.0 < v <= 4.9.9 except 3.9.9; or anything below 2.0.0.",
+        "tags": [
+          "migrated-from-posthog",
+          "migration-src-hog",
+          "mobile"
+        ],
+        "variations": [
+          {
+            "value": true,
+            "name": "true"
+          },
+          {
+            "value": false,
+            "name": "false"
+          }
+        ],
+        "customProperties": [
+          "migration.id",
+          "migration.kind",
+          "migration.source",
+          "migration.type",
+          "migration.version"
+        ],
+        "clientSideAvailability": {
+          "usingEnvironmentId": true,
+          "usingMobileKey": true
+        }
+      },
+      "env": {
+        "ldEnv": "production",
+        "statsigEnv": "Acme Hog",
+        "on": true,
+        "offVariation": 1,
+        "fallthrough": {
+          "variation": 1
+        },
+        "rules": [
+          {
+            "description": "Condition set 1",
+            "clauses": [
+              {
+                "contextKind": "user",
+                "attribute": "app_version",
+                "op": "semVerEqual",
+                "values": [
+                  "4.0.0"
+                ],
+                "negate": false
+              }
+            ],
+            "variation": 0
+          },
+          {
+            "description": "Condition set 2",
+            "clauses": [
+              {
+                "contextKind": "user",
+                "attribute": "app_version",
+                "op": "semVerEqual",
+                "values": [
+                  "3.9.9"
+                ],
+                "negate": true
+              },
+              {
+                "contextKind": "user",
+                "attribute": "app_version",
+                "op": "semVerGreaterThan",
+                "values": [
+                  "3.0.0"
+                ],
+                "negate": false
+              },
+              {
+                "contextKind": "user",
+                "attribute": "app_version",
+                "op": "semVerGreaterThan",
+                "values": [
+                  "4.9.9"
+                ],
+                "negate": true
+              }
+            ],
+            "variation": 0
+          },
+          {
+            "description": "Condition set 3",
+            "clauses": [
+              {
+                "contextKind": "user",
+                "attribute": "app_version",
+                "op": "semVerLessThan",
+                "values": [
+                  "2.0.0"
+                ],
+                "negate": false
+              }
+            ],
+            "variation": 0
+          }
+        ],
+        "targets": [],
+        "prerequisites": []
+      }
+    },
+    {
+      "flag": "hog-semver-ranges",
+      "flagKind": "boolean",
+      "fidelity": "full",
+      "notes": [],
+      "decisions": [],
+      "dependencies": [],
+      "shell": {
+        "name": "hog-semver-ranges",
+        "description": "App versions 4.2.x, 0.3.x from 0.3.1 up, or any 5.x.",
+        "tags": [
+          "migrated-from-posthog",
+          "migration-src-hog",
+          "mobile"
+        ],
+        "variations": [
+          {
+            "value": true,
+            "name": "true"
+          },
+          {
+            "value": false,
+            "name": "false"
+          }
+        ],
+        "customProperties": [
+          "migration.id",
+          "migration.kind",
+          "migration.source",
+          "migration.type",
+          "migration.version"
+        ],
+        "clientSideAvailability": {
+          "usingEnvironmentId": true,
+          "usingMobileKey": true
+        }
+      },
+      "env": {
+        "ldEnv": "production",
+        "statsigEnv": "Acme Hog",
+        "on": true,
+        "offVariation": 1,
+        "fallthrough": {
+          "variation": 1
+        },
+        "rules": [
+          {
+            "description": "Condition set 1",
+            "clauses": [
+              {
+                "contextKind": "user",
+                "attribute": "app_version",
+                "op": "semVerLessThan",
+                "values": [
+                  "4.2.0"
+                ],
+                "negate": true
+              },
+              {
+                "contextKind": "user",
+                "attribute": "app_version",
+                "op": "semVerLessThan",
+                "values": [
+                  "4.3.0"
+                ],
+                "negate": false
+              }
+            ],
+            "variation": 0
+          },
+          {
+            "description": "Condition set 2",
+            "clauses": [
+              {
+                "contextKind": "user",
+                "attribute": "app_version",
+                "op": "semVerLessThan",
+                "values": [
+                  "0.3.1"
+                ],
+                "negate": true
+              },
+              {
+                "contextKind": "user",
+                "attribute": "app_version",
+                "op": "semVerLessThan",
+                "values": [
+                  "0.4.0"
+                ],
+                "negate": false
+              }
+            ],
+            "variation": 0
+          },
+          {
+            "description": "Condition set 3",
+            "clauses": [
+              {
+                "contextKind": "user",
+                "attribute": "app_version",
+                "op": "semVerLessThan",
+                "values": [
+                  "5.0.0"
+                ],
+                "negate": true
+              },
+              {
+                "contextKind": "user",
+                "attribute": "app_version",
+                "op": "semVerLessThan",
+                "values": [
+                  "6.0.0"
+                ],
+                "negate": false
+              }
+            ],
+            "variation": 0
+          }
+        ],
+        "targets": [],
+        "prerequisites": []
+      }
+    },
+    {
       "flag": "hog-server-only",
       "flagKind": "boolean",
       "fidelity": "partial",
@@ -1557,6 +2630,102 @@
           "variation": 0
         },
         "rules": [],
+        "targets": [],
+        "prerequisites": []
+      }
+    },
+    {
+      "flag": "hog-signup-window",
+      "flagKind": "boolean",
+      "fidelity": "partial",
+      "notes": [
+        "partial: Relative date -1y frozen to 2025-10-22T12:00:00.000Z; it no longer moves with time. [rule “Condition set 1” › clause 2]",
+        "partial: Relative date -2w frozen to 2026-10-08T12:00:00.000Z; it no longer moves with time. [rule “Condition set 2” › clause 1]"
+      ],
+      "decisions": [
+        "choice relative_date (rule “Condition set 1” › clause 2) → freeze",
+        "choice relative_date (rule “Condition set 2” › clause 1) → freeze"
+      ],
+      "dependencies": [],
+      "shell": {
+        "name": "hog-signup-window",
+        "description": "Signed up before 2026 but within the last year; or ordered in the last two weeks.",
+        "tags": [
+          "migrated-from-posthog",
+          "migration-src-hog",
+          "growth"
+        ],
+        "variations": [
+          {
+            "value": true,
+            "name": "true"
+          },
+          {
+            "value": false,
+            "name": "false"
+          }
+        ],
+        "customProperties": [
+          "migration.id",
+          "migration.kind",
+          "migration.source",
+          "migration.type",
+          "migration.version"
+        ],
+        "clientSideAvailability": {
+          "usingEnvironmentId": true,
+          "usingMobileKey": true
+        }
+      },
+      "env": {
+        "ldEnv": "production",
+        "statsigEnv": "Acme Hog",
+        "on": true,
+        "offVariation": 1,
+        "fallthrough": {
+          "variation": 1
+        },
+        "rules": [
+          {
+            "description": "Condition set 1",
+            "clauses": [
+              {
+                "contextKind": "user",
+                "attribute": "signup_date",
+                "op": "before",
+                "values": [
+                  "2026-01-01T00:00:00Z"
+                ],
+                "negate": false
+              },
+              {
+                "contextKind": "user",
+                "attribute": "signup_date",
+                "op": "after",
+                "values": [
+                  "2025-10-22T12:00:00.000Z"
+                ],
+                "negate": false
+              }
+            ],
+            "variation": 0
+          },
+          {
+            "description": "Condition set 2",
+            "clauses": [
+              {
+                "contextKind": "user",
+                "attribute": "last_order_at",
+                "op": "after",
+                "values": [
+                  "2026-10-08T12:00:00.000Z"
+                ],
+                "negate": false
+              }
+            ],
+            "variation": 0
+          }
+        ],
         "targets": [],
         "prerequisites": []
       }
@@ -1740,6 +2909,337 @@
       }
     },
     {
+      "flag": "hog-text-operators",
+      "flagKind": "boolean",
+      "fidelity": "partial",
+      "notes": [
+        "partial: Contexts without “email” no longer match (negated clause on a missing attribute). [rule “Condition set 1” › clause 2]",
+        "partial: Contexts without “email” no longer match (negated clause on a missing attribute). [rule “Condition set 2” › clause 2]",
+        "partial: Contexts without “email” no longer match (negated clause on a missing attribute). [rule “Condition set 2” › clause 3]"
+      ],
+      "decisions": [
+        "choice case_insensitive_match (rule “Condition set 1” › clause 1) → regex",
+        "choice case_insensitive_match (rule “Condition set 1” › clause 2) → regex",
+        "acknowledge negated_missing_attribute (rule “Condition set 1” › clause 2) → acknowledge",
+        "choice case_insensitive_match (rule “Condition set 2” › clause 1) → regex",
+        "choice case_insensitive_match (rule “Condition set 2” › clause 2) → regex",
+        "acknowledge negated_missing_attribute (rule “Condition set 2” › clause 2) → acknowledge",
+        "choice case_insensitive_match (rule “Condition set 2” › clause 3) → regex",
+        "acknowledge negated_missing_attribute (rule “Condition set 2” › clause 3) → acknowledge"
+      ],
+      "dependencies": [],
+      "shell": {
+        "name": "hog-text-operators",
+        "description": "Admins whose address is not a test one; paying plans that are not bots or no-reply addresses.",
+        "tags": [
+          "migrated-from-posthog",
+          "migration-src-hog",
+          "growth"
+        ],
+        "variations": [
+          {
+            "value": true,
+            "name": "true"
+          },
+          {
+            "value": false,
+            "name": "false"
+          }
+        ],
+        "customProperties": [
+          "migration.id",
+          "migration.kind",
+          "migration.source",
+          "migration.type",
+          "migration.version"
+        ],
+        "clientSideAvailability": {
+          "usingEnvironmentId": true,
+          "usingMobileKey": true
+        }
+      },
+      "env": {
+        "ldEnv": "production",
+        "statsigEnv": "Acme Hog",
+        "on": true,
+        "offVariation": 1,
+        "fallthrough": {
+          "variation": 1
+        },
+        "rules": [
+          {
+            "description": "Condition set 1",
+            "clauses": [
+              {
+                "contextKind": "user",
+                "attribute": "email",
+                "op": "matches",
+                "values": [
+                  "^[aA][dD][mM][iI][nN]"
+                ],
+                "negate": false
+              },
+              {
+                "contextKind": "user",
+                "attribute": "email",
+                "op": "matches",
+                "values": [
+                  "\\.[tT][eE][sS][tT]$"
+                ],
+                "negate": true
+              }
+            ],
+            "variation": 0
+          },
+          {
+            "description": "Condition set 2",
+            "clauses": [
+              {
+                "contextKind": "user",
+                "attribute": "plan",
+                "op": "matches",
+                "values": [
+                  "[pP][rR][oO]",
+                  "[eE][nN][tT][eE][rR][pP][rR][iI][sS][eE]"
+                ],
+                "negate": false
+              },
+              {
+                "contextKind": "user",
+                "attribute": "email",
+                "op": "matches",
+                "values": [
+                  "[sS][pP][aA][mM]",
+                  "[bB][oO][tT]"
+                ],
+                "negate": true
+              },
+              {
+                "contextKind": "user",
+                "attribute": "email",
+                "op": "matches",
+                "values": [
+                  "^[nN][oO][rR][eE][pP][lL][yY]"
+                ],
+                "negate": true
+              }
+            ],
+            "variation": 0
+          }
+        ],
+        "targets": [],
+        "prerequisites": []
+      }
+    },
+    {
+      "flag": "hog-unsupported-filters",
+      "flagKind": "boolean",
+      "fidelity": "partial",
+      "notes": [
+        "partial: Dropped the rule because of its clause with operator “a person_metadata property”. [rule “Condition set 1” › clause 1]",
+        "partial: Dropped the rule because of its clause with operator “is_cleaned_path_exact”. [rule “Condition set 2” › clause 1]"
+      ],
+      "decisions": [
+        "blocking unsupported_condition (rule “Condition set 1” › clause 1) → no default",
+        "blocking unsupported_condition (rule “Condition set 2” › clause 1) → no default"
+      ],
+      "dependencies": [],
+      "shell": {
+        "name": "hog-unsupported-filters",
+        "description": "Identified people, or those who landed on the pricing page.",
+        "tags": [
+          "migrated-from-posthog",
+          "migration-src-hog",
+          "growth"
+        ],
+        "variations": [
+          {
+            "value": true,
+            "name": "true"
+          },
+          {
+            "value": false,
+            "name": "false"
+          }
+        ],
+        "customProperties": [
+          "migration.id",
+          "migration.kind",
+          "migration.source",
+          "migration.type",
+          "migration.version"
+        ],
+        "clientSideAvailability": {
+          "usingEnvironmentId": true,
+          "usingMobileKey": true
+        }
+      },
+      "env": {
+        "ldEnv": "production",
+        "statsigEnv": "Acme Hog",
+        "on": true,
+        "offVariation": 1,
+        "fallthrough": {
+          "variation": 1
+        },
+        "rules": [],
+        "targets": [],
+        "prerequisites": []
+      }
+    },
+    {
+      "flag": "hog-vip-list",
+      "flagKind": "boolean",
+      "fidelity": "partial",
+      "notes": [
+        "partial: Contexts without “email” no longer match (negated clause on a missing attribute). [rule “Condition set 2” › clause 1]"
+      ],
+      "decisions": [
+        "choice case_insensitive_match (rule “Condition set 2” › clause 1) → regex",
+        "acknowledge negated_missing_attribute (rule “Condition set 2” › clause 1) → acknowledge"
+      ],
+      "dependencies": [],
+      "shell": {
+        "name": "hog-vip-list",
+        "description": "Two named accounts, plus anyone whose address does not contain \"test\".",
+        "tags": [
+          "migrated-from-posthog",
+          "migration-src-hog",
+          "vip"
+        ],
+        "variations": [
+          {
+            "value": true,
+            "name": "true"
+          },
+          {
+            "value": false,
+            "name": "false"
+          }
+        ],
+        "customProperties": [
+          "migration.id",
+          "migration.kind",
+          "migration.source",
+          "migration.type",
+          "migration.version"
+        ],
+        "clientSideAvailability": {
+          "usingEnvironmentId": true,
+          "usingMobileKey": true
+        }
+      },
+      "env": {
+        "ldEnv": "production",
+        "statsigEnv": "Acme Hog",
+        "on": true,
+        "offVariation": 1,
+        "fallthrough": {
+          "variation": 1
+        },
+        "rules": [
+          {
+            "description": "Condition set 2",
+            "clauses": [
+              {
+                "contextKind": "user",
+                "attribute": "email",
+                "op": "matches",
+                "values": [
+                  "[tT][eE][sS][tT]"
+                ],
+                "negate": true
+              }
+            ],
+            "variation": 0
+          }
+        ],
+        "targets": [
+          {
+            "contextKind": "user",
+            "variation": 0,
+            "values": [
+              "u-1",
+              "u-3"
+            ]
+          }
+        ],
+        "prerequisites": []
+      }
+    },
+    {
+      "flag": "hog-workspace-pilot",
+      "flagKind": "boolean",
+      "fidelity": "full",
+      "notes": [],
+      "decisions": [
+        "choice case_insensitive_match (rule “Condition set 1” › clause 1) → regex",
+        "choice unit_type_kind (workspace) → create:workspace"
+      ],
+      "dependencies": [
+        "context_kind:workspace"
+      ],
+      "shell": {
+        "name": "hog-workspace-pilot",
+        "description": "Two named workspaces.",
+        "tags": [
+          "migrated-from-posthog",
+          "migration-src-hog",
+          "b2b"
+        ],
+        "variations": [
+          {
+            "value": true,
+            "name": "true"
+          },
+          {
+            "value": false,
+            "name": "false"
+          }
+        ],
+        "customProperties": [
+          "migration.id",
+          "migration.kind",
+          "migration.source",
+          "migration.type",
+          "migration.version"
+        ],
+        "clientSideAvailability": {
+          "usingEnvironmentId": true,
+          "usingMobileKey": true
+        }
+      },
+      "env": {
+        "ldEnv": "production",
+        "statsigEnv": "Acme Hog",
+        "on": true,
+        "offVariation": 1,
+        "fallthrough": {
+          "variation": 1
+        },
+        "rules": [
+          {
+            "description": "Condition set 1",
+            "clauses": [
+              {
+                "contextKind": "workspace",
+                "attribute": "key",
+                "op": "matches",
+                "values": [
+                  "^[wW][sS]-[aA][cC][mM][eE]-[hH][qQ]$",
+                  "^[wW][sS]-[gG][lL][oO][bB][eE][xX]$"
+                ],
+                "negate": false
+              }
+            ],
+            "variation": 0
+          }
+        ],
+        "targets": [],
+        "prerequisites": []
+      }
+    },
+    {
       "flag": "survey-targeting-checkout-nps",
       "flagKind": "boolean",
       "skipped": "it is a survey flag, which the console does not copy as a plain flag",
@@ -1749,9 +3249,47 @@
       ],
       "decisions": [],
       "dependencies": []
+    },
+    {
+      "flag": "web-experiment-hero-copy",
+      "flagKind": "multivariate",
+      "skipped": "it is a web experiment flag, which the console does not copy as a plain flag",
+      "fidelity": "skipped",
+      "notes": [
+        "skipped: Not migrated: it is a web experiment flag, which the console does not copy as a plain flag."
+      ],
+      "decisions": [],
+      "dependencies": []
     }
   ],
   "segments": [
+    {
+      "segment": "churn-risk",
+      "fidelity": "partial",
+      "notes": [
+        "partial: analytical cohort frozen to its 2 members at read time."
+      ],
+      "decisions": [
+        "choice cohort_snapshot (membership)"
+      ],
+      "desired": {
+        "key": "churn-risk",
+        "ldEnv": "production",
+        "statsigEnv": "Acme Hog",
+        "name": "Churn risk",
+        "description": "Accounts the churn model scored above 0.7 last week.",
+        "tags": [
+          "migrated-from-posthog",
+          "migration-src-hog"
+        ],
+        "rules": [],
+        "included": [
+          "u-1",
+          "u-5"
+        ],
+        "includedContexts": []
+      }
+    },
     {
       "segment": "design-partners",
       "fidelity": "full",
@@ -1901,6 +3439,69 @@
             ]
           }
         ],
+        "included": [],
+        "includedContexts": []
+      }
+    },
+    {
+      "segment": "newsletter-subscribers",
+      "fidelity": "full",
+      "notes": [
+        "full: 15,500 user keys, more than a list segment holds (15,000): imported into a big segment (Enterprise; checked on the first write)."
+      ],
+      "decisions": [
+        "choice big_segment (membership)"
+      ],
+      "desired": {
+        "key": "newsletter-subscribers",
+        "ldEnv": "production",
+        "statsigEnv": "Acme Hog",
+        "name": "Newsletter subscribers",
+        "description": "Imported from the mailing list.",
+        "tags": [
+          "migrated-from-posthog",
+          "migration-src-hog"
+        ],
+        "rules": [],
+        "included": [],
+        "includedContexts": [],
+        "unbounded": {
+          "contextKind": "user",
+          "ids": [
+            "nl-00001",
+            "nl-00002",
+            "nl-00003",
+            "… 15494 more …",
+            "nl-15498",
+            "nl-15499",
+            "nl-15500"
+          ]
+        }
+      }
+    },
+    {
+      "segment": "paying-customers",
+      "fidelity": "partial",
+      "notes": [
+        "partial: Contexts without “plan” no longer match (negated clause on a missing attribute).",
+        "partial: Dropped the rule because of its clause with operator “filterTestAccounts”."
+      ],
+      "decisions": [
+        "choice case_insensitive_match (rule “Paying customers” › clause 1)",
+        "acknowledge negated_missing_attribute (rule “Paying customers” › clause 1)",
+        "blocking unsupported_condition (rule “Paying customers” › clause 2)"
+      ],
+      "desired": {
+        "key": "paying-customers",
+        "ldEnv": "production",
+        "statsigEnv": "Acme Hog",
+        "name": "Paying customers",
+        "description": "Not on the free plan; test accounts excluded.",
+        "tags": [
+          "migrated-from-posthog",
+          "migration-src-hog"
+        ],
+        "rules": [],
         "included": [],
         "includedContexts": []
       }

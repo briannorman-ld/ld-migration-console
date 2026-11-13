@@ -25,6 +25,7 @@ pnpm test:live      # read-only checks against real LD; needs LD_API_TOKEN in .e
 pnpm test:live:write # writes zz-live-* flags/segments to the demo LD project (statsig-migration), then undoes them
 pnpm fixtures:generate   # regenerate the committed demo dataset + sample spec files
 pnpm coverage:generate   # regenerate the coverage tables in docs/LIMITATIONS.md from packages/coverage
+pnpm seed:posthog        # write the Acme Hog fixture into a PostHog project of your own (POSTHOG_SEED_* in .env.local); --dry-run first
 ```
 
 ## Layout

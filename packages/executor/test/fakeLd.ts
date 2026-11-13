@@ -38,7 +38,8 @@ export function fakeLd(over: Partial<Record<keyof LdWriter, (...a: never[]) => u
     patchFlagJson: async (_p, key, ops) => (calls.push(`json ${key} ${ops.map((o) => o.path).join(',')}`), flags.get(key)!),
     deleteFlag: async (_p, key) => void (calls.push(`delete ${key}`), flags.delete(key)),
     getSegment: async () => null,
-    createSegment: async (_p, _e, b) => ({ key: b.key, name: b.name, tags: b.tags }),
+    // Echoes the big-segment fields, as LaunchDarkly does: the executor checks the created kind against the desired one.
+    createSegment: async (_p, _e, b) => ({ key: b.key, name: b.name, tags: b.tags, ...(b.unbounded ? { unbounded: true, unboundedContextKind: b.unboundedContextKind } : {}) }),
     patchSegmentJson: async (_p, _e, key) => ({ key, name: key }),
     patchSegmentSemantic: async (_p, _e, key, patch) => (calls.push(`semantic segment ${key} ${patch.instructions.map((i) => `${i.kind}:${Array.isArray(i.values) ? i.values.length : ''}`).join(',')}`), { key, name: key }),
     deleteSegment: async () => undefined,

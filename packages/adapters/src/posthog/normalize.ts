@@ -253,8 +253,11 @@ function buildFlag(f: PhFeatureFlag, b: FlagBuild): NeutralFlag {
       if (out.kind === 'drop') continue;
       if (out.kind === 'target') {
         const cur = targets.find((t) => t.contextKind === 'user' && t.variation === out.target.variation);
-        if (cur) for (const v of out.target.values) if (!cur.values.includes(v)) cur.values.push(v);
-        else targets.push(out.target);
+        if (cur) {
+          for (const v of out.target.values) if (!cur.values.includes(v)) cur.values.push(v);
+        } else {
+          targets.push(out.target);
+        }
         continue;
       }
       rules.push(...out.rules);
@@ -272,6 +275,10 @@ function buildFlag(f: PhFeatureFlag, b: FlagBuild): NeutralFlag {
   if (hasRollout) caveats.push({ kind: 'unsalted_rollout' });
 
   const hasSurvey = f.surveys && (Array.isArray(f.surveys) ? f.surveys.length > 0 : typeof f.surveys === 'object' && Object.keys(f.surveys as object).length > 0);
+  // Another PostHog product's backing flag (PLAN §22.1): surveys (a linked survey, or created by
+  // the surveys product), web experiments and product tours are skipped with a reason. Experiments
+  // go through `experiment_rule` and early-access flags through `early_access_enrollment` instead.
+  const purpose = hasSurvey ? 'survey' : OTHER_PRODUCT_PURPOSE.get(f.creation_context ?? 'feature_flags');
   const env: NeutralFlagEnv = {
     env: b.envName,
     on: f.active ?? true,
@@ -298,7 +305,7 @@ function buildFlag(f: PhFeatureFlag, b: FlagBuild): NeutralFlag {
     tags: (f.tags ?? []).map((t) => (typeof t === 'string' ? t : typeof t === 'object' && t && 'name' in t ? String((t as { name: unknown }).name) : String(t))).filter(Boolean),
     temporary: true,
     archived: f.archived ?? false,
-    ...(hasSurvey ? { purpose: 'survey' } : {}),
+    ...(purpose ? { purpose } : {}),
     clientSideAvailability: f.evaluation_runtime === 'server' ? { usingEnvironmentId: false, usingMobileKey: false } : { usingEnvironmentId: true, usingMobileKey: true },
     defaults: { onVariation: 0, offVariation },
     customProperties,
@@ -310,6 +317,9 @@ function buildFlag(f: PhFeatureFlag, b: FlagBuild): NeutralFlag {
     ...(caveats.length ? { caveats } : {}),
   };
 }
+
+/** `creation_context` values whose flags another PostHog product owns, and how the skip reason names them. */
+const OTHER_PRODUCT_PURPOSE = new Map<string, string>([['surveys', 'survey'], ['web_experiments', 'web experiment'], ['product_tours', 'product tour']]);
 
 /** What one condition set needs to become a rule: the flag's variations and its flag-level filter settings. */
 interface SetContext {

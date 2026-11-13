@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { setupServer } from 'msw/node';
-import { ACME_HOG_ORG_ID, ACME_HOG_PROJECT_ID, ACME_HOG_STAGING_ID_OFFSET, ACME_HOG_STAGING_PROJECT_ID, ACME_HOG_STAGING_SHARED_KEYS, acmeHogLocalEvaluationPayload, acmeHogProject, acmeHogStagingProject, createPostHogApiHandlers, type JsonObject } from '../src/index.ts';
+import { ACME_HOG_NEWSLETTER_COHORT_ID, ACME_HOG_NEWSLETTER_COUNT, ACME_HOG_ORG_ID, ACME_HOG_PROJECT_ID, ACME_HOG_STAGING_ID_OFFSET, ACME_HOG_STAGING_PROJECT_ID, ACME_HOG_STAGING_SHARED_KEYS, acmeHogLocalEvaluationPayload, acmeHogProject, acmeHogStagingProject, createPostHogApiHandlers, type JsonObject } from '../src/index.ts';
 
 const ORIGIN = 'https://demo-posthog.test';
 const KEY = 'phx_test-key';
@@ -30,27 +30,59 @@ describe('Acme Hog PostHog fixture', () => {
   it('is deterministic and names every construct once', () => {
     const a = acmeHogProject();
     expect(a).toEqual(acmeHogProject());
-    expect(a.flags).toHaveLength(24);
-    expect(new Set(a.flags.map((f) => f.key)).size).toBe(24);
-    expect(new Set(a.flags.map((f) => f.id)).size).toBe(24);
-    expect(a.cohorts.map((c) => c.id)).toEqual([301, 302, 303, 304, 305, 306]);
+    expect(a.flags).toHaveLength(44);
+    expect(new Set(a.flags.map((f) => f.key)).size).toBe(44);
+    expect(new Set(a.flags.map((f) => f.id)).size).toBe(44);
+    expect(a.cohorts.map((c) => c.id)).toEqual([301, 302, 303, 304, 305, 306, 307, 308, 309]);
+    expect(a.persons).toHaveLength(5 + ACME_HOG_NEWSLETTER_COUNT);
+    expect(a.cohortMembers[String(ACME_HOG_NEWSLETTER_COHORT_ID)]).toHaveLength(ACME_HOG_NEWSLETTER_COUNT);
+    expect(new Set(a.persons.map((x) => x.id)).size).toBe(a.persons.length);
     // PostHog's `name` is the description; `key` is the display key.
     expect(a.flags.find((f) => f.id === 1001)).toMatchObject({ key: 'hog-kill-switch', name: 'Turns the storefront off entirely.' });
     expect(a.flags.find((f) => f.id === 1013)?.key).toBe('survey-targeting-checkout-nps');
   });
 
+  it('uses every operator of PostHog’s OperatorType at least once, in a flag or a cohort', () => {
+    // reference/posthog/server-property_models.rs `OperatorType`, snake_cased as the API serialises it.
+    const OPERATORS = [
+      'exact', 'is_not', 'icontains', 'not_icontains', 'icontains_multi', 'not_icontains_multi', 'starts_with', 'not_starts_with', 'ends_with', 'not_ends_with',
+      'regex', 'not_regex', 'gt', 'lt', 'gte', 'lte', 'between', 'not_between',
+      'semver_gt', 'semver_gte', 'semver_lt', 'semver_lte', 'semver_eq', 'semver_neq', 'semver_tilde', 'semver_caret', 'semver_wildcard',
+      'is_set', 'is_not_set', 'is_date_exact', 'is_date_after', 'is_date_before', 'in', 'not_in', 'flag_evaluates_to',
+    ];
+    const a = acmeHogProject();
+    const used = new Set<string>();
+    const visit = (v: unknown): void => {
+      if (Array.isArray(v)) return v.forEach(visit);
+      if (!v || typeof v !== 'object') return;
+      const o = v as Record<string, unknown>;
+      if (typeof o.operator === 'string' && typeof o.key === 'string') used.add(o.operator);
+      Object.values(o).forEach(visit);
+    };
+    visit(a.flags.map((f) => f.filters));
+    visit(a.cohorts.map((c) => c.filters));
+    expect(OPERATORS.filter((op) => !used.has(op))).toEqual([]);
+    // And the filter types and flag-level switches LaunchDarkly has to be told about.
+    const filters = JSON.stringify(a.flags.map((f) => f.filters));
+    for (const marker of ['"type":"person_metadata"', '"is_cleaned_path_exact"', '"value":[]', '"rollout_percentage":null', '"$group_key"', '"distinct_id"']) expect(filters, marker).toContain(marker);
+    expect(a.flags.map((f) => f.creation_context)).toContain('web_experiments');
+    expect(a.cohorts.map((c) => c.cohort_type)).toEqual(expect.arrayContaining(['static', 'person_property', 'behavioral', 'analytical']));
+    expect(a.cohorts.some((c) => (c.filters as JsonObject | null)?.filterTestAccounts === true)).toBe(true);
+  });
+
   it('builds the local-evaluation payload from the same objects', () => {
     const payload = acmeHogLocalEvaluationPayload();
     const flags = payload.flags as JsonObject[];
-    // Active, not deleted, not archived: 24 minus archived 1014, disabled 1015 and 1019, deleted 1023.
+    // Active, not deleted, not archived: 44 minus archived 1014, disabled 1015 and 1019, deleted 1023.
     expect(flags.map((f) => f.id)).not.toContain(1014);
     expect(flags.map((f) => f.id)).not.toContain(1015);
     expect(flags.map((f) => f.id)).not.toContain(1019);
     expect(flags.map((f) => f.id)).not.toContain(1023);
-    expect(flags).toHaveLength(20);
+    expect(flags).toHaveLength(40);
     expect(payload.group_type_mapping).toEqual({ '0': 'company', '1': 'workspace' });
     // Property-defined (non-static, non-deleted) cohorts inlined as their PropertyGroup.
-    expect(Object.keys(payload.cohorts as JsonObject).sort()).toEqual(['302', '303', '304', '305']);
+    // 307 is analytical (query-defined, no properties) and 309 static: neither is inlined.
+    expect(Object.keys(payload.cohorts as JsonObject).sort()).toEqual(['302', '303', '304', '305', '308']);
     expect((payload.cohorts as Record<string, JsonObject>)['302']).toMatchObject({ type: 'AND' });
   });
 });
@@ -147,7 +179,7 @@ describe('PostHog API mock (PLAN §22.2)', () => {
   it('pages with limit and offset, and `next` is a full URL', async () => {
     serve();
     const first = await json<Page>(await get(`${P}/feature_flags/?limit=5`));
-    expect(first.count).toBe(23);
+    expect(first.count).toBe(43);
     expect(first.results).toHaveLength(5);
     expect(first.previous).toBeNull();
     expect(first.next).toBe(`${ORIGIN}${P}/feature_flags/?limit=5&offset=5`);
@@ -160,12 +192,12 @@ describe('PostHog API mock (PLAN §22.2)', () => {
       next = page.next;
       pages++;
     }
-    expect(pages).toBe(5);
-    expect(ids).toHaveLength(23);
-    expect(new Set(ids).size).toBe(23);
+    expect(pages).toBe(9);
+    expect(ids).toHaveLength(43);
+    expect(new Set(ids).size).toBe(43);
     // Default limit is 100: everything in one page.
     const all = await json<Page>(await get(`${P}/feature_flags/`));
-    expect(all.results).toHaveLength(23);
+    expect(all.results).toHaveLength(43);
     expect(all.next).toBeNull();
   });
 
@@ -179,7 +211,7 @@ describe('PostHog API mock (PLAN §22.2)', () => {
     const archived = (await json<Page>(await get(`${P}/feature_flags/?archived=true`))).results.map((f) => f.id);
     expect(archived).toEqual([1014]);
     const live = (await json<Page>(await get(`${P}/feature_flags/?archived=false&active=true`))).results.map((f) => f.id);
-    expect(live).toHaveLength(20);
+    expect(live).toHaveLength(40);
     const off = (await json<Page>(await get(`${P}/feature_flags/?active=false`))).results.map((f) => f.id);
     expect(off).toEqual([1014, 1015, 1019]);
     // By id, with the full filters document.
@@ -191,7 +223,7 @@ describe('PostHog API mock (PLAN §22.2)', () => {
   it('serves cohorts, their members as actors, and persons filtered by cohort with distinct ids', async () => {
     serve();
     const cohorts = (await json<Page>(await get(`${P}/cohorts/`))).results.map((c) => c.id);
-    expect(cohorts).toEqual([301, 302, 303, 304, 305]); // 306 is deleted
+    expect(cohorts).toEqual([301, 302, 303, 304, 305, 307, 308, 309]); // 306 is deleted
     const actors = await json<Page>(await get(`${P}/cohorts/301/persons/`));
     expect(actors.count).toBeUndefined();
     expect(actors.results).toHaveLength(3);
@@ -201,7 +233,13 @@ describe('PostHog API mock (PLAN §22.2)', () => {
     expect(members.count).toBe(3);
     expect(members.results.map((m) => m.distinct_ids)).toEqual([['u-1'], ['u-2', 'u-2-legacy'], ['u-3']]);
     expect(members.results.map((m) => m.uuid)).toEqual(actors.results.map((a) => a.uuid));
-    expect((await json<Page>(await get(`${P}/persons/`))).count).toBe(5);
+    expect((await json<Page>(await get(`${P}/persons/`))).count).toBe(5 + ACME_HOG_NEWSLETTER_COUNT);
+    // The newsletter list pages at the route's maximum of 1,000, as the adapter reads it.
+    const wave = await json<Page>(await get(`${P}/persons/?cohort=${ACME_HOG_NEWSLETTER_COHORT_ID}&limit=1000`));
+    expect(wave.count).toBe(ACME_HOG_NEWSLETTER_COUNT);
+    expect(wave.results).toHaveLength(1000);
+    expect(wave.results[0]!.distinct_ids).toEqual(['nl-00001']);
+    expect(wave.next).toContain('offset=1000');
     expect((await json<Page>(await get(`${P}/persons/?cohort=302`))).results).toEqual([]);
     expect((await json<JsonObject>(await get(`${P}/persons/502/`))).distinct_ids).toEqual(['u-2', 'u-2-legacy']);
   });
@@ -220,7 +258,8 @@ describe('PostHog API mock (PLAN §22.2)', () => {
     const groupTypes = await json<JsonObject[]>(await get(`${P}/groups_types/`));
     expect(Array.isArray(groupTypes)).toBe(true);
     expect(groupTypes.map((g) => g.group_type)).toEqual(['company', 'workspace']);
-    expect((await json<Page>(await get(`${P}/property_definitions/?type=person`))).results).toHaveLength(10);
+    expect((await json<Page>(await get(`${P}/property_definitions/?type=person`))).results).toHaveLength(14);
+    expect((await json<Page>(await get(`${P}/property_definitions/?type=group&group_type_index=1`))).results.map((d) => d.name)).toEqual(['seats_purchased']);
     expect((await json<Page>(await get(`${P}/property_definitions/?type=group&group_type_index=0`))).results.map((d) => d.name)).toEqual(['tier', 'mrr']);
     expect((await json<Page>(await get(`${P}/scheduled_changes/?model_name=FeatureFlag`))).results.map((c) => c.record_id)).toEqual(['1019', '1007', '1007', '1003']);
     expect((await json<Page>(await get(`${P}/scheduled_changes/?model_name=Cohort`))).results).toEqual([]);

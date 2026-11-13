@@ -9,7 +9,8 @@
     "./data/acme-retail.json": "./data/acme-retail.json"
   },
   "scripts": {
-    "generate": "node --experimental-strip-types scripts/generate.ts"
+    "generate": "node --experimental-strip-types scripts/generate.ts",
+    "seed:posthog": "node --experimental-strip-types scripts/seed-posthog.ts"
   },
   "dependencies": {"@sslm/canonical": "workspace:*", "msw": "^3.0.2"}
 }

@@ -15,7 +15,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "fixtures:generate": "pnpm --filter @sslm/demo-fixtures generate",
     "coverage:generate": "pnpm --filter @sslm/coverage generate",
-    "test:live:write": "LIVE=1 LIVE_WRITE=1 vitest run --project live"
+    "test:live:write": "LIVE=1 LIVE_WRITE=1 vitest run --project live",
+    "seed:posthog": "pnpm --filter @sslm/demo-fixtures seed:posthog"
   },
   "devDependencies": {
     "@testing-library/react": "^16.3.3",

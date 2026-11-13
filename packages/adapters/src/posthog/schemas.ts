@@ -148,6 +148,8 @@ export const PhFeatureFlagSchema = z.looseObject({
   bucketing_identifier: optStr,
   is_remote_configuration: optBool,
   has_encrypted_payloads: optBool,
+  /** FeatureFlagCreationContextEnum: the PostHog product that created the flag (`feature_flags`, `experiments`, `surveys`, `early_access_features`, `web_experiments`, `product_tours`). */
+  creation_context: optStr,
   status: optStr,
   last_called_at: optStr,
 });

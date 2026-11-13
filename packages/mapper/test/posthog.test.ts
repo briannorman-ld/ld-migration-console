@@ -227,6 +227,166 @@ describe('PostHog → LaunchDarkly (PLAN §22.3)', () => {
     expect(nested.unresolved.find((d) => d.type === 'unsupported_condition')!.title).toBe('Segment rule references another segment');
   });
 
+  describe('every operator and construct (added 2026-11-13)', () => {
+    it('a "distinct_id is one of" set lifts into individual targets; not_icontains is a negated case-insensitive match', () => {
+      const r = mapNeutralFlag(flagArgs('hog-vip-list'));
+      expect(r.env.targets).toEqual([{ contextKind: 'user', variation: 0, values: ['u-1', 'u-3'] }]);
+      expect(types(r)).toEqual(['case_insensitive_match', 'negated_missing_attribute']);
+      expect(r.env.rules).toHaveLength(1);
+      expect(r.env.rules[0]!.clauses[0]).toEqual({ contextKind: 'user', attribute: 'email', op: 'matches', values: ['[tT][eE][sS][tT]'], negate: true });
+    });
+
+    it('text operators: starts_with / not_ends_with anchor the regex; the _multi forms are one clause with every value; a null rollout_percentage is 100', () => {
+      const r = mapNeutralFlag(flagArgs('hog-text-operators'));
+      expect(r.env.rules[0]!.clauses.map((c) => [c.values[0], c.negate])).toEqual([
+        ['^[aA][dD][mM][iI][nN]', false],
+        ['\\.[tT][eE][sS][tT]$', true],
+      ]);
+      expect(r.env.rules[1]!.clauses.map((c) => [c.values, c.negate])).toEqual([
+        [['[pP][rR][oO]', '[eE][nN][tT][eE][rR][pP][rR][iI][sS][eE]'], false],
+        [['[sS][pP][aA][mM]', '[bB][oO][tT]'], true],
+        [['^[nN][oO][rR][eE][pP][lL][yY]'], true],
+      ]);
+      // Set 2 has rollout_percentage null: a plain rule, no rollout.
+      expect(r.env.rules[1]!.rollout).toBeUndefined();
+      expect(r.env.rules[1]!.variation).toBe(0);
+      expect(types(r).filter((t) => t === 'case_insensitive_match')).toHaveLength(5);
+    });
+
+    it('semver: tilde, caret and wildcard become [lower, upper) pairs; eq, neq, gt, lte and lt map with the version_gte trick', () => {
+      const ranges = mapNeutralFlag(flagArgs('hog-semver-ranges'));
+      expect(types(ranges)).toEqual([]);
+      expect(ranges.fidelity.overall).toBe('full');
+      const bounds = (i: number) => ranges.env.rules[i]!.clauses.map((c) => `${c.negate ? '!' : ''}${c.op} ${c.values[0]}`);
+      expect(bounds(0)).toEqual(['!semVerLessThan 4.2.0', 'semVerLessThan 4.3.0']); // ~4.2
+      expect(bounds(1)).toEqual(['!semVerLessThan 0.3.1', 'semVerLessThan 0.4.0']); // ^0.3.1
+      expect(bounds(2)).toEqual(['!semVerLessThan 5.0.0', 'semVerLessThan 6.0.0']); // 5.x
+      const pins = mapNeutralFlag(flagArgs('hog-semver-pins'));
+      expect(types(pins)).toEqual([]);
+      expect(pins.env.rules.map((x) => x.clauses.map((c) => `${c.negate ? '!' : ''}${c.op} ${c.values[0]}`))).toEqual([
+        ['semVerEqual 4.0.0'],
+        ['!semVerEqual 3.9.9', 'semVerGreaterThan 3.0.0', '!semVerGreaterThan 4.9.9'],
+        ['semVerLessThan 2.0.0'],
+      ]);
+    });
+
+    it('numeric: lt, gte and lte parse their values (a string "3" too); a group numeric targets the group kind; a non-numeric value is unsupported', () => {
+      const r = mapNeutralFlag(flagArgs('hog-seat-bands'));
+      expect(types(r)).toEqual(['unit_type_kind']);
+      expect(r.env.rules.map((x) => x.clauses.map((c) => [c.contextKind, c.attribute, c.op, c.values[0]]))).toEqual([
+        [['user', 'seats', 'lessThan', 100], ['user', 'seats', 'greaterThanOrEqual', 2]],
+        [['user', 'seats', 'lessThanOrEqual', 3]],
+        [['workspace', 'seats_purchased', 'greaterThan', 10]],
+      ]);
+      const text = mapNeutralFlag(flagArgs('hog-seats-text'));
+      expect(types(text)).toEqual(['unsupported_condition']);
+      expect(text.unresolved[0]!.severity).toBe('blocking');
+      expect(text.env.rules).toEqual([]);
+    });
+
+    it('dates: an absolute is_date_before needs no decision; relative values in years and weeks freeze; is_date_exact is unsupported', () => {
+      const r = mapNeutralFlag(flagArgs('hog-signup-window'));
+      expect(types(r)).toEqual(['relative_date', 'relative_date']);
+      expect(r.env.rules[0]!.clauses).toEqual([
+        { contextKind: 'user', attribute: 'signup_date', op: 'before', values: ['2026-01-01T00:00:00Z'], negate: false },
+        { contextKind: 'user', attribute: 'signup_date', op: 'after', values: ['2025-10-22T12:00:00.000Z'], negate: false }, // -1y from NOW
+      ]);
+      expect(r.env.rules[1]!.clauses[0]!.values).toEqual(['2026-10-08T12:00:00.000Z']); // -2w from NOW
+      const exact = mapNeutralFlag(flagArgs('hog-anniversary'));
+      expect(types(exact)).toEqual(['unsupported_condition']);
+      expect(exact.unresolved[0]!.severity).toBe('blocking');
+    });
+
+    it('is_not_set blocks on null_check; not_regex is a negated match; an empty exact value (truthiness) is unsupported', () => {
+      const r = mapNeutralFlag(flagArgs('hog-no-email'));
+      expect(types(r)).toEqual(['negated_missing_attribute', 'null_check']);
+      expect(r.unresolved.find((d) => d.type === 'null_check')!.severity).toBe('blocking');
+      // Preview: the is_not_set rule is dropped; the not_regex rule stays.
+      expect(r.env.rules).toHaveLength(1);
+      expect(r.env.rules[0]!.clauses[0]).toEqual({ contextKind: 'user', attribute: 'email', op: 'matches', values: ['.*@acme\\.example$'], negate: true });
+      const truthy = mapNeutralFlag(flagArgs('hog-has-plan'));
+      expect(types(truthy)).toEqual(['unsupported_condition']);
+      expect(truthy.unresolved[0]!.title).toContain('exact with an empty value');
+    });
+
+    it('person_metadata and cleaned-path filters are blocking unsupported conditions, one per set', () => {
+      const r = mapNeutralFlag(flagArgs('hog-unsupported-filters'));
+      expect(types(r)).toEqual(['unsupported_condition', 'unsupported_condition']);
+      expect(r.unresolved.map((d) => d.severity)).toEqual(['blocking', 'blocking']);
+      expect(r.fidelity.notes.map((n) => n.message)).toEqual([expect.stringContaining('person_metadata'), expect.stringContaining('is_cleaned_path_exact')]);
+    });
+
+    it('a boolean flag with a payload on true asks variant_payloads like a multivariate one; "payloads" makes it a JSON flag', () => {
+      const r = mapNeutralFlag(flagArgs('hog-promo-banner'));
+      expect(types(r)).toEqual(['case_insensitive_match', 'variant_payloads']);
+      expect(r.unresolved.find((d) => d.type === 'variant_payloads')!.severity).toBe('blocking');
+      expect(r.shell.variations).toEqual([{ value: true, name: 'true' }, { value: false, name: 'false' }]);
+      const json = mapNeutralFlag(flagArgs('hog-promo-banner', { resolutions: resolve(r, { variant_payloads: 'payloads', case_insensitive_match: 'exact' }) }));
+      expect(json.unresolved).toEqual([]);
+      expect(json.flagKind).toBe('multivariate');
+      expect(json.shell.variations).toEqual([{ value: { banner: 'spring', cta: 'Shop the sale' }, name: 'true' }, { value: null, name: 'false' }]);
+    });
+
+    it('a flag created by the web experiments product is skipped, and raises no variation decision while skipped', () => {
+      const r = mapNeutralFlag(flagArgs('web-experiment-hero-copy'));
+      expect(r.skipped).toBe('it is a web experiment flag, which the console does not copy as a plain flag');
+      expect(r.unresolved).toEqual([]);
+    });
+
+    it('cohorts: an analytical cohort is frozen like a behavioral one; test-account filtering is unsupported in a segment rule; a negated property is a negated clause', () => {
+      const churn = mapNeutralSegment(segArgs('churn-risk'));
+      expect(types(churn)).toEqual(['cohort_snapshot']);
+      expect(churn.desired!.included).toEqual(['u-1', 'u-5']);
+      expect(churn.fidelity.notes.map((n) => n.message)).toContainEqual('analytical cohort frozen to its 2 members at read time.');
+      const paying = mapNeutralSegment(segArgs('paying-customers'));
+      expect(types(paying)).toEqual(['case_insensitive_match', 'negated_missing_attribute', 'unsupported_condition']);
+      expect(paying.unresolved.find((d) => d.type === 'unsupported_condition')!.severity).toBe('blocking');
+      expect(paying.fidelity.notes.map((n) => n.message)).toContainEqual(expect.stringContaining('filterTestAccounts'));
+      // The flags that match them depend on the segments.
+      expect(mapNeutralFlag(flagArgs('hog-churn-risk-offer')).dependencies).toEqual([{ kind: 'segment', key: 'churn-risk', entityId: 'churn-risk' }]);
+      expect(mapNeutralFlag(flagArgs('hog-paying-customers')).dependencies).toEqual([{ kind: 'segment', key: 'paying-customers', entityId: 'paying-customers' }]);
+    });
+
+    it('the 15,500-member newsletter cohort becomes a big segment (import recommended); its flag matches the segment', () => {
+      const r = mapNeutralSegment(segArgs('newsletter-subscribers'));
+      expect(types(r)).toEqual(['big_segment']);
+      expect(r.unresolved[0]!.recommended).toBe('import');
+      expect(r.desired!.unbounded!.ids).toHaveLength(15_500);
+      expect(r.desired!.unbounded!.ids[0]).toBe('nl-00001');
+      expect(r.desired!.included).toEqual([]);
+      const flag = mapNeutralFlag(flagArgs('hog-newsletter-wave'));
+      expect(flag.env.rules[0]!.clauses[0]).toEqual({ contextKind: 'user', attribute: 'key', op: 'segmentMatch', values: ['newsletter-subscribers'], negate: false });
+    });
+
+    it('a dependency on a variant hoists to a prerequisite on that variation; one on a flag the source lacks is missing_reference', () => {
+      const r = mapNeutralFlag(flagArgs('hog-enterprise-upsell'));
+      expect(types(r)).toEqual([]);
+      expect(r.env.prerequisites).toEqual([{ key: 'hog-pricing-page', variation: 2 }]); // enterprise
+      expect(r.dependencies).toEqual([{ kind: 'flag', key: 'hog-pricing-page', entityId: 'hog-pricing-page' }]);
+      const orphan = mapNeutralFlag(flagArgs('hog-orphan-dependency'));
+      expect(types(orphan)).toEqual(['missing_reference']);
+      expect(orphan.unresolved[0]!.severity).toBe('blocking');
+      expect(orphan.env.prerequisites).toEqual([]);
+    });
+
+    it('a 60% set with a variant override followed by an "everyone" split composes into one rollout, losslessly', () => {
+      const r = mapNeutralFlag(flagArgs('hog-checkout-copy'));
+      expect(types(r)).toEqual(['case_insensitive_match', 'multivariate_no_match', 'partial_rollout_rebucket', 'partial_rollout_rebucket']);
+      // 60% test + 40% × (50% control / 50% test) = 80% test / 20% control.
+      expect(r.env.rules[0]!.rollout!.variations).toEqual([{ variation: 1, weight: 80_000 }, { variation: 0, weight: 20_000 }]);
+      expect(r.env.fallthrough.rollout!.variations).toEqual([{ variation: 0, weight: 50_000 }, { variation: 1, weight: 50_000 }]);
+      expect(r.fidelity.notes.map((n) => n.message)).toContainEqual(expect.stringContaining('folded into this rule'));
+    });
+
+    it('a $group_key filter on a group-targeted flag is a rule on that kind’s key, not an individual target', () => {
+      const r = mapNeutralFlag(flagArgs('hog-workspace-pilot'));
+      expect(types(r)).toEqual(['case_insensitive_match', 'unit_type_kind']);
+      expect(r.env.targets).toEqual([]);
+      expect(r.env.rules[0]!.clauses[0]).toMatchObject({ contextKind: 'workspace', attribute: 'key', op: 'matches', negate: false });
+      expect(r.dependencies).toEqual([{ kind: 'context_kind', key: 'workspace', entityId: 'workspace' }]);
+    });
+  });
+
   describe('scheduled changes (19.24)', () => {
     it('a pending status flip becomes one LaunchDarkly scheduled change carrying the whole targeting; acknowledging keeps the old behaviour', () => {
       const r = mapNeutralFlag(flagArgs('hog-scheduled-launch'));

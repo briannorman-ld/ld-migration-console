@@ -78,7 +78,9 @@ export function createPostHogApiHandlers(opts: MockPostHogApiOptions): HttpHandl
   const byId = (items: JsonObject[], id: string) => items.find((x) => String(x.id) === id) ?? NOT_FOUND;
   const membersOf = (p: PostHogProjectFixture, cohortId: string): JsonObject[] => {
     const ids = p.cohortMembers[cohortId] ?? [];
-    return ids.flatMap((id) => p.persons.filter((x) => String(x.id) === id));
+    // By id: the newsletter cohort has 15,500 members, so a scan per member would be quadratic.
+    const byPersonId = new Map(p.persons.map((x) => [String(x.id), x]));
+    return ids.map((id) => byPersonId.get(id)).filter((x): x is JsonObject => x !== undefined);
   };
   /** What `/cohorts/{id}/persons/` returns per member: a person *actor*, without distinct ids. */
   const actor = (x: JsonObject): JsonObject => ({ id: String(x.uuid), uuid: x.uuid ?? null, type: 'person', name: x.name ?? null, properties: x.properties ?? {}, created_at: x.created_at ?? null });

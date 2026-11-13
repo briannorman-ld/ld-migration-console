@@ -67,18 +67,35 @@ describe('PostHog project → LaunchDarkly, end to end (PLAN §22)', () => {
       .sort((a, b) => a[1]!.localeCompare(b[1]!));
     // Payloads next to variation values have no LaunchDarkly shape (the user picks keys, payloads or
     // both); a cohort nested in a cohort has no segment-in-segment rule in LaunchDarkly, and the flag
-    // matching that cohort waits for it.
+    // matching that cohort waits for it; a cohort that also applies the project's test-account
+    // filters has no LaunchDarkly counterpart, and so does its flag. The rest are filters
+    // LaunchDarkly cannot express (truthiness, is_date_exact, person metadata, cleaned paths, a
+    // numeric operator on text), a presence check that needs a rewrite, and a dependency on a flag
+    // the source no longer has. A flag waiting on a blocked prerequisite is blocked with no decision of its own.
     expect(blocked).toEqual([
       ['segment', 'enterprise-admins-in-eu', 'unsupported_condition'],
+      ['flag', 'hog-anniversary', 'unsupported_condition'],
+      ['flag', 'hog-enterprise-upsell', ''],
+      ['flag', 'hog-has-plan', 'unsupported_condition'],
       ['flag', 'hog-nested-cohort', ''],
+      ['flag', 'hog-no-email', 'null_check'],
+      ['flag', 'hog-orphan-dependency', 'missing_reference'],
+      ['flag', 'hog-paying-customers', ''],
       ['flag', 'hog-pricing-page', 'variant_payloads'],
+      ['flag', 'hog-promo-banner', 'variant_payloads'],
+      ['flag', 'hog-seats-text', 'unsupported_condition'],
+      ['flag', 'hog-unsupported-filters', 'unsupported_condition,unsupported_condition'],
+      ['segment', 'paying-customers', 'unsupported_condition'],
     ]);
     expect(byKey(plan, 'hog-nested-cohort').reason).toMatch(/depends on.*enterprise-admins-in-eu/);
+    expect(byKey(plan, 'hog-enterprise-upsell').reason).toMatch(/depends on.*hog-pricing-page/);
+    expect(byKey(plan, 'hog-paying-customers').reason).toMatch(/depends on.*paying-customers/);
     // Everything else the planner decided or skipped with a reason; nothing errored.
     expect(plan.errors).toEqual([]);
     expect(plan.items.filter((i) => i.status === 'error')).toEqual([]);
     const skipped = Object.fromEntries(plan.items.filter((i) => i.status === 'skipped').map((i) => [i.entityId, i.reason]));
     expect(skipped['survey-targeting-checkout-nps']).toMatch(/survey/i);
+    expect(skipped['web-experiment-hero-copy']).toMatch(/web experiment/i);
     expect(Object.keys(skipped)).not.toContain('hog-kill-switch');
     const ready = plan.items.filter((i) => i.status === 'ready' && i.kind === 'flag').map((i) => i.entityId).sort();
     expect(ready).toEqual(expect.arrayContaining(['hog-kill-switch', 'hog-checkout-redesign', 'hog-company-tier', 'hog-depends-on-checkout', 'hog-scheduled-launch', 'hog-staff-tools', 'hog-early-access', 'hog-ios-min-version']));
@@ -95,9 +112,9 @@ describe('PostHog project → LaunchDarkly, end to end (PLAN §22)', () => {
     };
     // Group types (and the device kind of the device-bucketed flag) become context kinds, each written
     // before the first environment that needs it; the steps start with context kinds.
-    // Only kinds a selected flag uses are created: the "workspace" group type has no flag in the demo.
+    // Only kinds a selected flag uses are created: both group types have flags, and the device kind comes from the device-bucketed flag.
     const kinds = ids.filter((id) => id.startsWith('context_kind:')).sort();
-    expect(kinds).toEqual(['context_kind:company', 'context_kind:device']);
+    expect(kinds).toEqual(['context_kind:company', 'context_kind:device', 'context_kind:workspace']);
     expect(ids[0]).toMatch(/^context_kind:/);
     const companyFlag = plan.steps.find((s) => s.id === 'env:test:hog-company-tier');
     expect(companyFlag?.deps).toContain('context_kind:company');
@@ -184,14 +201,16 @@ describe('PostHog project → LaunchDarkly, end to end (PLAN §22)', () => {
 
   it('the flag the user leaves blocked does not block the rest, and resolving it adds exactly its steps', () => {
     const base = acceptAll(request());
-    const open = base.plan.decisions.filter((d) => d.type === 'variant_payloads');
+    const open = base.plan.decisions.filter((d) => d.subject.id === 'hog-pricing-page' && d.type === 'variant_payloads');
     expect(open).toHaveLength(1);
     const res = new Map(base.req.resolutions);
     for (const d of open) res.set(d.id, { id: d.id, type: d.type, optionKey: 'keys', scope: 'resource', fingerprint: d.fingerprint, decidedAt: NOW });
     const { plan } = acceptAll({ ...base.req, resolutions: res });
     expect(byKey(plan, 'hog-pricing-page').status).toBe('ready');
+    // Its dependant (a prerequisite on the enterprise variant) was waiting on it and comes along.
+    expect(byKey(plan, 'hog-enterprise-upsell').status).toBe('ready');
     const added = stepIds(plan).filter((id) => !stepIds(base.plan).includes(id)).sort();
-    expect(added).toEqual(['env:test:hog-pricing-page', 'shell:hog-pricing-page']);
+    expect(added).toEqual(['env:test:hog-enterprise-upsell', 'env:test:hog-pricing-page', 'shell:hog-enterprise-upsell', 'shell:hog-pricing-page']);
     const shell = plan.steps.find((s) => s.id === 'shell:hog-pricing-page');
     // Variant keys become the string variations; the "Not served" variation closes the multivariate flag.
     expect(shell?.op === 'upsert_flag_shell' && shell.desired.variations.map((v) => v.value)).toEqual(expect.arrayContaining(['control', '']));

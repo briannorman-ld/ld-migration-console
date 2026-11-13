@@ -16,6 +16,10 @@ import type { Json, JsonObject } from '../console/builders.ts';
 
 export const ACME_HOG_PROJECT_ID = '4242';
 export const ACME_HOG_ORG_ID = '018f3a2b-9c7d-7e11-8a3b-acme0hog0001';
+/** Members of the static "Newsletter subscribers" cohort (309): above LaunchDarkly's 15,000-key list-segment limit. */
+export const ACME_HOG_NEWSLETTER_COUNT = 15_500;
+export const ACME_HOG_NEWSLETTER_COHORT_ID = 309;
+const ACME_HOG_NEWSLETTER_FIRST_PERSON_ID = 600_001;
 
 export interface PostHogProjectFixture {
   /** OrganizationBasic shape. */
@@ -59,7 +63,7 @@ const BOB: JsonObject = { id: 8, uuid: '018f3a2b-9c7d-7e11-8a3b-000000000008', d
 /** A PostHog PropertyFilter. `operator` absent means `exact`. */
 interface Filter {
   key: string;
-  type: 'person' | 'group' | 'cohort' | 'flag';
+  type: 'person' | 'group' | 'cohort' | 'flag' | 'person_metadata';
   value: Json;
   operator?: string;
   group_type_index?: number;
@@ -126,6 +130,8 @@ interface FlagSeed {
   bucketing_identifier?: 'distinct_id' | 'device_id';
   is_remote_configuration?: boolean;
   has_encrypted_payloads?: boolean;
+  /** FeatureFlagCreationContextEnum: which PostHog product created the flag. `feature_flags` by default. */
+  creation_context?: 'feature_flags' | 'experiments' | 'surveys' | 'early_access_features' | 'web_experiments' | 'product_tours';
   created_by?: JsonObject;
 }
 
@@ -166,6 +172,7 @@ const flag = (f: FlagSeed): JsonObject => {
     user_access_level: 'editor',
     is_remote_configuration: f.is_remote_configuration ?? false,
     has_encrypted_payloads: f.has_encrypted_payloads ?? false,
+    creation_context: f.creation_context ?? 'feature_flags',
     status: 'ACTIVE',
     evaluation_runtime: f.evaluation_runtime ?? 'all',
     bucketing_identifier: f.bucketing_identifier ?? 'distinct_id',
@@ -180,9 +187,14 @@ interface CohortSeed {
   name: string;
   description?: string;
   is_static?: boolean;
-  cohort_type: 'static' | 'person_property' | 'behavioral';
-  /** `filters.properties` (a PropertyGroup); `null` for a static cohort. */
+  /** PostHog's cohort kinds: static lists, property rules, and the computed kinds (behavioral, realtime, analytical) that only hold members. */
+  cohort_type: 'static' | 'person_property' | 'behavioral' | 'realtime' | 'analytical';
+  /** `filters.properties` (a PropertyGroup); `null` for a static or query-defined cohort. */
   properties: JsonObject | null;
+  /** `filters.filterTestAccounts`: the project's test-account filters also apply (KNOWN-EDGE-CASES 19.17). */
+  filterTestAccounts?: boolean;
+  /** An analytical cohort is defined by a HogQL query instead of property filters. */
+  query?: JsonObject;
   count: number;
   deleted?: boolean;
 }
@@ -192,8 +204,8 @@ const cohort = (c: CohortSeed): JsonObject => ({
   description: c.description ?? '',
   groups: [],
   deleted: c.deleted ?? false,
-  filters: c.properties ? { properties: c.properties } : null,
-  query: null,
+  filters: c.properties ? { properties: c.properties, ...(c.filterTestAccounts ? { filterTestAccounts: true } : {}) } : null,
+  query: c.query ?? null,
   version: 2,
   pending_version: null,
   is_calculating: false,
@@ -294,7 +306,15 @@ export function acmeHogProject(): PostHogProjectFixture {
     person({ id: 503, distinct_ids: ['u-3'], email: 'p3@design-partner.example', properties: { plan: 'enterprise', country: 'GB' } }),
     person({ id: 504, distinct_ids: ['u-4'], email: 'p4@acme.example', properties: { plan: 'pro', seats: 12 } }),
     person({ id: 505, distinct_ids: ['u-5'], email: 'p5@acme.example', properties: { plan: 'free', seats: 1 } }),
+    // The newsletter list (static cohort 309): more members than a LaunchDarkly list segment holds
+    // (15,000), so the big-segment path is exercised (KNOWN-EDGE-CASES 19.16, 19.28). Read in pages
+    // of 1,000 from `/persons/?cohort=309`.
+    ...Array.from({ length: ACME_HOG_NEWSLETTER_COUNT }, (_, i) => {
+      const n = String(i + 1).padStart(5, '0');
+      return person({ id: ACME_HOG_NEWSLETTER_FIRST_PERSON_ID + i, distinct_ids: [`nl-${n}`], email: `nl-${n}@subscribers.example`, properties: { plan: 'free', newsletter: true } });
+    }),
   ];
+  const newsletterMemberIds = Array.from({ length: ACME_HOG_NEWSLETTER_COUNT }, (_, i) => String(ACME_HOG_NEWSLETTER_FIRST_PERSON_ID + i));
 
   const pricingVariants: Variant[] = [
     { key: 'control', name: 'Control', rollout_percentage: 50 },
@@ -342,6 +362,11 @@ export function acmeHogProject(): PostHogProjectFixture {
       propertyDefinition('$feature_enrollment/hog-early-access', 'Boolean', 'person', null, 10),
       propertyDefinition('tier', 'String', 'group', 0, 11),
       propertyDefinition('mrr', 'Numeric', 'group', 0, 12),
+      propertyDefinition('lifetime_value', 'Numeric', 'person', null, 13),
+      propertyDefinition('last_order_at', 'DateTime', 'person', null, 14),
+      propertyDefinition('$initial_current_url', 'String', 'person', null, 15),
+      propertyDefinition('newsletter', 'Boolean', 'person', null, 16),
+      propertyDefinition('seats_purchased', 'Numeric', 'group', 1, 17),
     ],
     flags: [
       // The simplest case: everyone, 100%.
@@ -498,6 +523,168 @@ export function acmeHogProject(): PostHogProjectFixture {
           set([{ key: 'plan', type: 'person', value: ['enterprise'], operator: 'exact' }], 100),
         ],
       }),
+
+      // --- Added 2026-11-13 so every operator of OperatorType and every §22.3 row has an example. ---
+
+      // A set that is exactly "distinct_id is one of …" at 100% lifts into LD individual targets; the
+      // second set is a case-insensitive "does not contain".
+      flag({
+        id: 1025,
+        key: 'hog-vip-list',
+        description: 'Two named accounts, plus anyone whose address does not contain "test".',
+        tags: ['vip'],
+        groups: [
+          set([{ key: 'distinct_id', type: 'person', value: ['u-1', 'u-3'], operator: 'exact' }], 100),
+          set([{ key: 'email', type: 'person', value: 'test', operator: 'not_icontains' }], 100),
+        ],
+      }),
+      // The remaining text operators: starts_with, not_ends_with, icontains_multi, not_icontains_multi,
+      // not_starts_with. The second set has a null rollout_percentage, which PostHog treats as 100.
+      flag({
+        id: 1026,
+        key: 'hog-text-operators',
+        description: 'Admins whose address is not a test one; paying plans that are not bots or no-reply addresses.',
+        tags: ['growth'],
+        groups: [
+          set([
+            { key: 'email', type: 'person', value: 'admin', operator: 'starts_with' },
+            { key: 'email', type: 'person', value: '.test', operator: 'not_ends_with' },
+          ], 100),
+          set([
+            { key: 'plan', type: 'person', value: ['pro', 'enterprise'], operator: 'icontains_multi' },
+            { key: 'email', type: 'person', value: ['spam', 'bot'], operator: 'not_icontains_multi' },
+            { key: 'email', type: 'person', value: 'noreply', operator: 'not_starts_with' },
+          ], null),
+        ],
+      }),
+      // Semver ranges: tilde, caret and wildcard, each a [lower, upper) pair as the SDK computes them.
+      flag({
+        id: 1027,
+        key: 'hog-semver-ranges',
+        description: 'App versions 4.2.x, 0.3.x from 0.3.1 up, or any 5.x.',
+        tags: ['mobile'],
+        evaluation_runtime: 'client',
+        groups: [
+          set([{ key: 'app_version', type: 'person', value: '4.2', operator: 'semver_tilde' }], 100),
+          set([{ key: 'app_version', type: 'person', value: '0.3.1', operator: 'semver_caret' }], 100),
+          set([{ key: 'app_version', type: 'person', value: '5.x', operator: 'semver_wildcard' }], 100),
+        ],
+      }),
+      // The other semver comparisons: eq, neq + gt + lte, lt.
+      flag({
+        id: 1028,
+        key: 'hog-semver-pins',
+        description: 'Exactly 4.0.0; or 3.0.0 < v <= 4.9.9 except 3.9.9; or anything below 2.0.0.',
+        tags: ['mobile'],
+        evaluation_runtime: 'client',
+        groups: [
+          set([{ key: 'app_version', type: 'person', value: '4.0.0', operator: 'semver_eq' }], 100),
+          set([
+            { key: 'app_version', type: 'person', value: '3.9.9', operator: 'semver_neq' },
+            { key: 'app_version', type: 'person', value: '3.0.0', operator: 'semver_gt' },
+            { key: 'app_version', type: 'person', value: '4.9.9', operator: 'semver_lte' },
+          ], 100),
+          set([{ key: 'app_version', type: 'person', value: '2.0.0', operator: 'semver_lt' }], 100),
+        ],
+      }),
+      // Numeric lt, lte and gte, with a group-level numeric on the workspace kind (group_type_index 1).
+      flag({
+        id: 1029,
+        key: 'hog-seat-bands',
+        description: 'Under 100 seats with at least 2; or at most 3 seats; or a workspace that bought more than 10.',
+        tags: ['growth'],
+        groups: [
+          set([{ key: 'seats', type: 'person', value: 100, operator: 'lt' }, { key: 'seats', type: 'person', value: 2, operator: 'gte' }], 100),
+          set([{ key: 'seats', type: 'person', value: '3', operator: 'lte' }], 100),
+          set([{ key: 'seats_purchased', type: 'group', group_type_index: 1, value: 10, operator: 'gt' }], 100, { aggregation_group_type_index: 1 }),
+        ],
+      }),
+      // A numeric operator against a value that is not a number: unsupported_condition (blocking).
+      flag({ id: 1030, key: 'hog-seats-text', description: 'Accounts with "many" seats.', tags: ['growth'], groups: [set([{ key: 'seats', type: 'person', value: 'many', operator: 'gte' }], 100)] }),
+      // Dates: an absolute is_date_before (no decision), relative is_date_after values in years and weeks.
+      flag({
+        id: 1031,
+        key: 'hog-signup-window',
+        description: 'Signed up before 2026 but within the last year; or ordered in the last two weeks.',
+        tags: ['growth'],
+        groups: [
+          set([
+            { key: 'signup_date', type: 'person', value: '2026-01-01T00:00:00Z', operator: 'is_date_before' },
+            { key: 'signup_date', type: 'person', value: '-1y', operator: 'is_date_after' },
+          ], 100),
+          set([{ key: 'last_order_at', type: 'person', value: '-2w', operator: 'is_date_after' }], 100),
+        ],
+      }),
+      // is_date_exact has no LaunchDarkly counterpart: unsupported_condition (blocking).
+      flag({ id: 1032, key: 'hog-anniversary', description: 'Accounts whose signup day is exactly 1 March 2025.', tags: ['promo'], groups: [set([{ key: 'signup_date', type: 'person', value: '2025-03-01', operator: 'is_date_exact' }], 100)] }),
+      // is_not_set (null_check, blocking) and not_regex.
+      flag({
+        id: 1033,
+        key: 'hog-no-email',
+        description: 'People without an email, or with one that is not at acme.example.',
+        tags: ['growth'],
+        groups: [
+          set([{ key: 'email', type: 'person', value: null, operator: 'is_not_set' }], 100),
+          set([{ key: 'email', type: 'person', value: '.*@acme\\.example$', operator: 'not_regex' }], 100),
+        ],
+      }),
+      // `exact` with an empty value list is PostHog's truthiness check: unsupported_condition (blocking).
+      flag({ id: 1034, key: 'hog-has-plan', description: 'Anyone with any plan set.', tags: ['growth'], groups: [set([{ key: 'plan', type: 'person', value: [], operator: 'exact' }], 100)] }),
+      // Filters LaunchDarkly cannot express: a person_metadata property and a cleaned-path comparison.
+      flag({
+        id: 1035,
+        key: 'hog-unsupported-filters',
+        description: 'Identified people, or those who landed on the pricing page.',
+        tags: ['growth'],
+        groups: [
+          set([{ key: 'is_identified', type: 'person_metadata', value: ['true'], operator: 'exact' }], 100),
+          set([{ key: '$initial_current_url', type: 'person', value: '/pricing', operator: 'is_cleaned_path_exact' }], 100),
+        ],
+      }),
+      // A boolean flag with a payload on `true` that is not a remote config: variant_payloads asks for the shape.
+      flag({ id: 1036, key: 'hog-promo-banner', description: 'Spring banner for US visitors.', tags: ['promo'], groups: [set([{ key: 'country', type: 'person', value: ['US'], operator: 'exact' }], 100)], payloads: { true: '{"banner":"spring","cta":"Shop the sale"}' } }),
+      // Created by the web experiments product (creation_context): owned by another product, skipped.
+      flag({ id: 1037, key: 'web-experiment-hero-copy', description: 'Hero copy test on the landing page.', tags: [], creation_context: 'web_experiments', variants: abVariants, groups: EVERYONE }),
+      // An analytical (HogQL-defined) cohort referenced by a flag: cohort_snapshot, like a behavioral one.
+      flag({ id: 1038, key: 'hog-churn-risk-offer', description: 'A retention offer for accounts the churn model flags.', tags: ['retention'], groups: [set([{ key: 'id', type: 'cohort', value: 307 }], 100)] }),
+      // A property cohort that also applies the project's test-account filters.
+      flag({ id: 1039, key: 'hog-paying-customers', description: 'Paying customers, test accounts excluded.', tags: ['billing'], groups: [set([{ key: 'id', type: 'cohort', value: 308 }], 100)] }),
+      // A static cohort larger than a LaunchDarkly list segment: big_segment.
+      flag({ id: 1040, key: 'hog-newsletter-wave', description: 'The new digest layout for every newsletter subscriber.', tags: ['marketing'], groups: [set([{ key: 'id', type: 'cohort', value: ACME_HOG_NEWSLETTER_COHORT_ID }], 100)] }),
+      // A dependency on a *variant* of a multivariate flag.
+      flag({
+        id: 1041,
+        key: 'hog-enterprise-upsell',
+        description: 'Only where the pricing page serves the enterprise variant.',
+        tags: ['pricing'],
+        groups: [set([{ key: '1003', type: 'flag', value: 'enterprise', operator: 'flag_evaluates_to', dependency_chain: ['hog-pricing-page'] }], 100)],
+      }),
+      // A dependency on a flag the source does not have (deleted, or never existed): missing_reference.
+      flag({
+        id: 1042,
+        key: 'hog-orphan-dependency',
+        description: 'Depends on a flag that was deleted.',
+        tags: ['legacy'],
+        groups: [set([{ key: '1023', type: 'flag', value: true, operator: 'flag_evaluates_to', dependency_chain: ['hog-deleted'] }], 100)],
+      }),
+      // Multivariate: a 60% set with a variant override that is not last (coverage + override), then the split.
+      flag({
+        id: 1043,
+        key: 'hog-checkout-copy',
+        description: 'Canadian visitors mostly get the test copy; everyone else is split.',
+        tags: ['checkout'],
+        variants: abVariants,
+        groups: [set([{ key: 'country', type: 'person', value: ['CA'], operator: 'exact' }], 60, { variant: 'test' }), set([], 100)],
+      }),
+      // Group targeting by group key (`$group_key` on the workspace kind): a rule on the kind's key, not individual targets.
+      flag({
+        id: 1044,
+        key: 'hog-workspace-pilot',
+        description: 'Two named workspaces.',
+        tags: ['b2b'],
+        aggregation_group_type_index: 1,
+        groups: [set([{ key: '$group_key', type: 'group', group_type_index: 1, value: ['ws-acme-hq', 'ws-globex'], operator: 'exact' }], 100)],
+      }),
     ],
     cohorts: [
       cohort({ id: 301, name: 'Design partners', description: 'Hand-picked design partner accounts.', is_static: true, cohort_type: 'static', properties: null, count: 3 }),
@@ -513,9 +700,31 @@ export function acmeHogProject(): PostHogProjectFixture {
       }),
       cohort({ id: 305, name: 'Enterprise admins in EU', cohort_type: 'person_property', count: 3, properties: { type: 'AND', values: [{ key: 'id', type: 'cohort', value: 302 }, personProp('country', ['DE'])] } }),
       cohort({ id: 306, name: 'Retired list', is_static: true, cohort_type: 'static', properties: null, count: 0, deleted: true }),
+      // Analytical: defined by a HogQL query, members only (cohort_snapshot when a flag references it).
+      cohort({
+        id: 307,
+        name: 'Churn risk',
+        description: 'Accounts the churn model scored above 0.7 last week.',
+        cohort_type: 'analytical',
+        count: 2,
+        properties: null,
+        query: { kind: 'ActorsQuery', source: { kind: 'HogQLQuery', query: "select id from persons where properties.plan = 'free' and properties.seats = 1" } },
+      }),
+      // Property rules with the project's test-account filters applied, and a negated filter.
+      cohort({
+        id: 308,
+        name: 'Paying customers',
+        description: 'Not on the free plan; test accounts excluded.',
+        cohort_type: 'person_property',
+        count: 30,
+        filterTestAccounts: true,
+        properties: { type: 'AND', values: [{ key: 'plan', type: 'person', value: ['free'], operator: 'exact', negation: true }] },
+      }),
+      // Static, above the list-segment limit.
+      cohort({ id: ACME_HOG_NEWSLETTER_COHORT_ID, name: 'Newsletter subscribers', description: 'Imported from the mailing list.', is_static: true, cohort_type: 'static', properties: null, count: ACME_HOG_NEWSLETTER_COUNT }),
     ],
     persons,
-    cohortMembers: { '301': ['501', '502', '503'], '304': ['504', '505'] },
+    cohortMembers: { '301': ['501', '502', '503'], '304': ['504', '505'], '307': ['501', '505'], [String(ACME_HOG_NEWSLETTER_COHORT_ID)]: newsletterMemberIds },
     scheduledChanges: [
       {
         id: 9001,

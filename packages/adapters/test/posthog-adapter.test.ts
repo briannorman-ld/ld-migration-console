@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { http, HttpResponse } from 'msw';
 import { setupServer } from 'msw/node';
-import { acmeHogLocalEvaluationPayload, acmeHogProject, ACME_HOG_PROJECT_ID, createPostHogApiHandlers, type PostHogProjectFixture } from '@sslm/demo-fixtures';
+import { acmeHogLocalEvaluationPayload, acmeHogProject, ACME_HOG_NEWSLETTER_COHORT_ID, ACME_HOG_NEWSLETTER_COUNT, ACME_HOG_PROJECT_ID, createPostHogApiHandlers, type PostHogProjectFixture } from '@sslm/demo-fixtures';
 import type { NeutralFlag } from '@sslm/canonical';
 import { DEFAULT_MAX_MEMBERS_PER_COHORT, normalizePostHogSnapshot, parsePostHogPayload, PostHogClient, PostHogPayloadError, PostHogReadAuthError, readPostHogProject, semverRange, translateFilter, typeValues, type TranslateContext } from '../src/index.ts';
 
@@ -34,20 +34,23 @@ describe('PostHog source adapter (PLAN §22.2)', () => {
     const raw = await readPostHogProject(c, ACME_HOG_PROJECT_ID, { onProgress: (p) => progress.push(p.endpoint) });
     expect(raw.flags.map((f) => f.key)).toContain('hog-archived-promo');
     expect(raw.flags.map((f) => f.key)).not.toContain('hog-deleted');
-    expect(raw.cohorts.map((x) => x.id)).toEqual([301, 302, 303, 304, 305]);
+    expect(raw.cohorts.map((x) => x.id)).toEqual([301, 302, 303, 304, 305, 307, 308, 309]);
     expect(raw.groupTypes.map((g) => g.group_type)).toEqual(['company', 'workspace']);
-    expect(raw.propertyDefinitions.filter((d) => d.type === 'group')).toHaveLength(2);
-    // Static cohort 301 and behavioral cohort 304 are referenced by flags: their members were read, with distinct ids.
+    expect(raw.propertyDefinitions.filter((d) => d.type === 'group')).toHaveLength(3);
+    // Static cohort 301, behavioral cohort 304, analytical cohort 307 and the 15,500-member static cohort 309 are referenced by flags: their members were read, with distinct ids.
     expect(raw.cohortMembers['301']!.flatMap((p) => p.distinct_ids)).toEqual(['u-1', 'u-2', 'u-2-legacy', 'u-3']);
     expect(raw.cohortMembers['304']).toHaveLength(2);
+    expect(raw.cohortMembers['307']!.flatMap((p) => p.distinct_ids)).toEqual(['u-1', 'u-5']);
+    expect(raw.cohortMembers['309']).toHaveLength(ACME_HOG_NEWSLETTER_COUNT);
     expect(raw.membersUnreadable).toEqual({});
     expect(raw.scheduledChanges.map((s) => s.record_id)).toEqual(['1019', '1007', '1007', '1003']);
     expect(raw.skipped).toEqual([]);
     expect(requests.every((r) => r.startsWith('200 '))).toBe(true);
-    // Members come from one filtered `/persons/?cohort=` page per cohort (3 and 2 members fit one
-    // page). The actor list `/cohorts/{id}/persons/` is no longer read first: it is only the
-    // fallback when the filter is ignored, and no single `/persons/{id}/` read happens either.
-    expect(requests.filter((r) => r === `200 /api/projects/${ACME_HOG_PROJECT_ID}/persons/`)).toHaveLength(2);
+    // Members come from the filtered `/persons/?cohort=` pages: one each for the three small cohorts
+    // and 16 pages of 1,000 for the newsletter list. The actor list `/cohorts/{id}/persons/` is no
+    // longer read first: it is only the fallback when the filter is ignored, and no single
+    // `/persons/{id}/` read happens either.
+    expect(requests.filter((r) => r === `200 /api/projects/${ACME_HOG_PROJECT_ID}/persons/`)).toHaveLength(3 + Math.ceil(ACME_HOG_NEWSLETTER_COUNT / 1000));
     expect(requests.filter((r) => /\/cohorts\/\d+\/persons\/$/.test(r) || /\/persons\/[^/?]+\/$/.test(r))).toEqual([]);
     expect(progress.at(-1)).toBe('done');
   });
@@ -245,6 +248,14 @@ describe('PostHog filter translation', () => {
   });
 });
 
+/** Acme Hog without its 15,500-member newsletter cohort (309) and the flag that targets it, so a test's own big list is the only large read. */
+function withoutNewsletter(p: PostHogProjectFixture): PostHogProjectFixture {
+  const id = String(ACME_HOG_NEWSLETTER_COHORT_ID);
+  const members = new Set(p.cohortMembers[id] ?? []);
+  const { [id]: _dropped, ...cohortMembers } = p.cohortMembers;
+  return { ...p, cohorts: p.cohorts.filter((c) => String(c.id) !== id), flags: p.flags.filter((f) => f.key !== 'hog-newsletter-wave'), persons: p.persons.filter((x) => !members.has(String(x.id))), cohortMembers };
+}
+
 describe('cohort membership at scale', () => {
   const BIG = 399;
   const PERSONS = `/api/projects/${ACME_HOG_PROJECT_ID}/persons/`;
@@ -258,7 +269,7 @@ describe('cohort membership at scale', () => {
    * beside cohorts 301 and 304.
    */
   function bigFixture(n: number, cohort: Row = {}): PostHogProjectFixture {
-    const p = structuredClone(acmeHogProject());
+    const p = withoutNewsletter(structuredClone(acmeHogProject()));
     const persons = Array.from({ length: n }, (_, i) => {
       const id = 10_000 + i;
       return { id, uuid: uuidOf(id), name: `big-${i}@acme.example`, distinct_ids: i % 3 === 0 ? [`big-${i}`, `big-${i}-legacy`] : [`big-${i}`], properties: { email: `big-${i}@acme.example` }, created_at: '2026-01-01T00:00:00Z' };
@@ -323,8 +334,8 @@ describe('cohort membership at scale', () => {
     // Three page requests for the cohort and nothing else: no actor list, no single person read.
     expect(memberUrls(urls)).toEqual([`${PERSONS}?cohort=${BIG}&limit=1000&offset=0`, `${PERSONS}?cohort=${BIG}&limit=1000&offset=1000`, `${PERSONS}?cohort=${BIG}&limit=1000&offset=2000`]);
     // The whole read: project, flags, cohorts, group types, 3 property-definition lists, scheduled
-    // changes, early access, experiments, members = 11; cohorts 301 and 304 one page each; 399 three.
-    expect(urls).toHaveLength(16);
+    // changes, early access, experiments, members = 11; cohorts 301, 304 and 307 one page each; 399 three.
+    expect(urls).toHaveLength(17);
     // The small cohorts still come out right beside it.
     expect(distinctIds(raw.cohortMembers['301']!)).toEqual(['u-1', 'u-2', 'u-2-legacy', 'u-3']);
   });

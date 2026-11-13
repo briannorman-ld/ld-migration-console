@@ -91,6 +91,16 @@ function golden(snap: CanonicalSnapshot, statsig: string, ld: string) {
   return { gates, configs, segments, autotunes, prompts };
 }
 
+/** Arrays of more than 20 strings become their first and last three plus a count, so a big list reads as a shape, not a dump. */
+function compactLists<T>(v: T): T {
+  if (Array.isArray(v)) {
+    if (v.length > 20 && v.every((x) => typeof x === 'string')) return [...v.slice(0, 3), `… ${v.length - 6} more …`, ...v.slice(-3)] as unknown as T;
+    return v.map(compactLists) as unknown as T;
+  }
+  if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k, x]) => [k, compactLists(x)])) as T;
+  return v;
+}
+
 describe('mapper golden files', () => {
   it.each([
     ['web', 'staging', 'test'],
@@ -170,7 +180,8 @@ describe('mapper golden files', () => {
         fidelity: r.fidelity.overall,
         notes: r.fidelity.notes.map((n) => `${n.fidelity}: ${n.message}`),
         decisions: r.unresolved.map((d) => `${d.severity} ${d.type} (${d.subject.location ?? d.subject.id})`),
-        desired: r.desired,
+        // The newsletter cohort's 15,500 ids would be most of the file: long key lists are summarised.
+        desired: compactLists(r.desired),
       };
     });
     await expect(JSON.stringify({ flags, segments }, null, 2) + '\n').toMatchFileSnapshot('golden/acme-hog.production.json');

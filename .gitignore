@@ -18,9 +18,11 @@ coverage/
 .claude/settings.local.json
 .claude/launch.json
 
-# Secrets: tokens live in .env.local for `pnpm test:live` only
+# Secrets: tokens live in .env.local for `pnpm test:live` and `pnpm seed:posthog` only
 .env*
 !.env.example
+# Fixture id → real id map written by `pnpm seed:posthog` (names a real PostHog project)
+.posthog-seed.*.json
 
 # Reference repos are re-clonable via reference/fetch-repos.sh
 reference/repos/

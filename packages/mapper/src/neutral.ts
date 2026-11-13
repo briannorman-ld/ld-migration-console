@@ -519,8 +519,11 @@ export function mapNeutralFlag(args: MapArgs<NeutralFlag>): NeutralFlagMapResult
   const tagMigrated = migratedFromTag(ctx.kind);
   const key = original.key;
   const sourceEnv = neutralEnvOf(original, env.statsig);
+  // A flag that is never written raises no decision about its variations: nothing archived is
+  // migrated, and another product's backing flag (a survey's, a web experiment's) is not copied.
+  const skipReason = original.archived ? `archived in ${sourceLabel(ctx)}` : original.purpose && original.purpose !== 'default' ? `it is a ${original.purpose} flag, which the console does not copy as a plain flag` : undefined;
   // PostHog-style payloads and the synthetic "no match" variation reshape the variation list first (PLAN §22.3).
-  const { flag, source } = prepareVariations(ctx, original, sourceEnv);
+  const { flag, source } = skipReason ? { flag: original, source: sourceEnv } : prepareVariations(ctx, original, sourceEnv);
   const lastVariation = Math.max(0, flag.variations.length - 1);
   const offEnv: DesiredFlagEnv = { ldEnv: env.ld, statsigEnv: env.statsig, on: false, offVariation: flag.defaults?.offVariation ?? lastVariation, fallthrough: { variation: flag.defaults?.onVariation ?? 0 }, rules: [], targets: [], prerequisites: [] };
   const shell = flagShell(ctx, flag, alias, tagMigrated);
@@ -549,8 +552,7 @@ export function mapNeutralFlag(args: MapArgs<NeutralFlag>): NeutralFlagMapResult
     ...(skipped ? { skipped } : {}),
   });
 
-  if (flag.archived) return finish(offEnv, `archived in ${sourceLabel(ctx)}`);
-  if (flag.purpose && flag.purpose !== 'default') return finish(offEnv, `it is a ${flag.purpose} flag, which the console does not copy as a plain flag`);
+  if (skipReason) return finish(offEnv, skipReason);
   if (!source) return finish(offEnv, `no configuration in source environment “${env.statsig}”`);
 
   try {
@@ -773,15 +775,23 @@ function experimentServe(ctx: Ctx, r: NeutralRule, location: string): NeutralSer
 
 /**
  * What the uncovered share of a covered rule should get. Lossless when nothing after the rule
- * could serve anything else (the rule is last, or every later rule and the default rule serve one
- * same variation); otherwise `rollout_coverage` (PLAN §21.3). Undefined = drop the rule.
+ * could serve anything else: the rule is last, every later rule and the default rule serve one
+ * same variation, or the very next rule matches everyone (its serve, a variation or a split, is
+ * what the uncovered contexts get, so the two compose into one rollout). Otherwise
+ * `rollout_coverage` (PLAN §21.3). Undefined = drop the rule.
  */
-function coverageRest(ctx: Ctx, r: NeutralRule, later: NeutralRule[], source: NeutralFlagEnv, flag: NeutralFlag, ruleId: string, location: string): number | undefined {
+function coverageRest(ctx: Ctx, r: NeutralRule, later: NeutralRule[], source: NeutralFlagEnv, flag: NeutralFlag, ruleId: string, location: string): NeutralServe | undefined {
   const fixed = (s: NeutralServe): number | undefined => (s.rollout ? (s.rollout.variations.length === 1 ? s.rollout.variations[0]!.variation : undefined) : (s.variation ?? 0));
   const fallthrough = fixed(source.fallthrough);
   const same = fallthrough !== undefined && later.every((l) => fixed(l) === fallthrough && (l.coverage === undefined || l.coverage >= 1) && !l.prerequisites?.length);
-  if (same) return fallthrough;
+  if (same) return { variation: fallthrough };
   const pct = `${Math.round(r.coverage! * 10000) / 100}%`;
+  const next = later[0];
+  if (next && next.clauses.length === 0 && !next.prerequisites?.length && !next.disabled && !next.experiment && (next.coverage === undefined || next.coverage >= 1)) {
+    // The uncovered share continues to a rule that matches everyone: compose the two.
+    ctx.fidelity.push({ fidelity: 'full', message: `Contexts outside the ${pct} rollout get what “${next.description || 'the next rule'}” serves (it matches everyone), folded into this rule's rollout.`, location });
+    return next.rollout ? { rollout: next.rollout } : { variation: next.variation ?? 0 };
+  }
   const options: DecisionOption[] = [
     ...(fallthrough !== undefined ? [{ key: 'fallthrough', label: `Uncovered contexts get the default rule's value (“${variationName(flag.variations[fallthrough] ?? { value: fallthrough }, fallthrough)}”)`, explanation: `In ${sourceLabel(ctx)} the ${100 - Math.round(r.coverage! * 100)}% outside this rule's rollout continue to the later rules, which may serve something else. In LaunchDarkly a rollout assigns every matched context, so they get the default rule's value instead.`, resultingFidelity: 'partial' as const }] : []),
     DROP_RULE,
@@ -808,16 +818,23 @@ function coverageRest(ctx: Ctx, r: NeutralRule, later: NeutralRule[], source: Ne
     return undefined;
   }
   ctx.fidelity.push({ fidelity: 'partial', message: `Contexts outside the ${pct} rollout get the default rule's value instead of the later rules.`, location });
-  return fallthrough!;
+  return { variation: fallthrough! };
 }
 
-/** `coverage` of the matched contexts get `serve` (scaled); the rest get variation `rest`. */
-function withCoverage(ctx: Ctx, serve: VariationOrRollout, coverage: number, rest: number, n: number, ruleId: string, location: string): VariationOrRollout {
-  if (rest >= n) throw new SkipItem(`${location} falls back to variation ${rest}, which the flag doesn't have`);
+/** `coverage` of the matched contexts get `serve` (scaled); the rest get `rest` (a variation, or a split scaled to the remainder). */
+function withCoverage(ctx: Ctx, serve: VariationOrRollout, coverage: number, rest: NeutralServe, n: number, ruleId: string, location: string): VariationOrRollout {
+  const restVariations = rest.rollout ? rest.rollout.variations : [{ variation: rest.variation ?? 0, weight: 100_000 }];
+  for (const w of restVariations) if (w.variation >= n) throw new SkipItem(`${location} falls back to variation ${w.variation}, which the flag doesn't have`);
   const share = Math.round(coverage * 100_000);
   const parts = serve.rollout ? serve.rollout.variations.map((w) => ({ variation: w.variation, weight: Math.round((w.weight * share) / 100_000) })) : [{ variation: serve.variation ?? 0, weight: share }];
   const used = parts.reduce((s, w) => s + w.weight, 0);
-  parts.push({ variation: rest, weight: 100_000 - used });
+  const remainder = 100_000 - used;
+  const restTotal = restVariations.reduce((s, w) => s + w.weight, 0) || 1;
+  const restParts = restVariations.map((w) => ({ variation: w.variation, weight: Math.round((w.weight * remainder) / restTotal) }));
+  // Rounding: the last part absorbs the difference so the weights sum to 100,000.
+  const restUsed = restParts.reduce((s, w) => s + w.weight, 0);
+  if (restParts.length) restParts[restParts.length - 1]!.weight += remainder - restUsed;
+  parts.push(...restParts);
   const variations = mergeWeights(parts).filter((w) => w.weight > 0);
   const pct = pctOf(variations);
   if (!serve.rollout || isFixedRollout(serve)) {
