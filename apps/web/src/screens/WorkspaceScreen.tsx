@@ -27,7 +27,7 @@ import {
   Select,
   Spinner,
 } from "../components/ui.tsx";
-import { describeScope, KIND_LABEL, refreshable, secretKindOf, SOURCE_BADGE } from "../lib/kinds.ts";
+import { describeScope, KIND_LABEL, refreshable, secretKindOf, SOURCE_BADGE, uploadable } from "../lib/kinds.ts";
 import { timeAgo } from "../lib/time.ts";
 import { ldConnecting, useLdSession } from "../lib/ld.ts";
 import { secrets } from "../lib/secrets.ts";
@@ -40,7 +40,7 @@ import {
 } from "../lib/migration.ts";
 import { monitoredItems, useMonitoring, useMonitorNotifications, useMonitorSchedule } from "../lib/monitor.ts";
 import { store } from "../lib/store.ts";
-import { syncSource } from "../lib/sync.ts";
+import { syncSource, uploadPostHogPayload, uploadSpec } from "../lib/sync.ts";
 import { useMigration } from "../lib/useMigration.ts";
 import { AddSource } from "./AddSource.tsx";
 import { ConnectionsView } from "./ConnectionsView.tsx";
@@ -220,6 +220,23 @@ export function WorkspaceScreen({
         },
         onTransport: (e) => push(describeTransportEvent(e)),
       });
+      patch(() => ({ running: false, log: [] }));
+    } catch (e) {
+      patch((cur) => ({ ...cur, running: false, error: (e as Error).message }));
+    }
+  };
+
+  // A newer export for an uploaded source (config spec or PostHog payload) becomes its next
+  // snapshot, through the same parsers the Add-source screen uses.
+  const reupload = async (s: SourceRecord, file: File) => {
+    const patch = (f: (cur: SyncState) => SyncState) => patchSync(s.id, f);
+    patch(() => ({ running: true, log: [], endpoint: file.name }));
+    try {
+      if (s.kind === "posthog_payload") await uploadPostHogPayload(workspaceId, s, file);
+      else if (s.kind === "config_spec") {
+        const r = await uploadSpec(workspaceId, s, file);
+        if (!r.saved) throw new Error(`“${file.name}” is the same spec as the current snapshot; nothing changed.`);
+      } else throw new Error("This source is not fed by an uploaded file.");
       patch(() => ({ running: false, log: [] }));
     } catch (e) {
       patch((cur) => ({ ...cur, running: false, error: (e as Error).message }));
@@ -535,6 +552,26 @@ export function WorkspaceScreen({
                         >
                           ↻
                         </button>
+                      )}
+                      {uploadable(s) && (
+                        <label
+                          className={cx("cursor-pointer rounded px-1 text-fg-muted hover:bg-surface-hover hover:text-fg", st?.running && "pointer-events-none opacity-40")}
+                          title={`Upload a newer ${SOURCE_BADGE[s.kind].label.toLowerCase()} file`}
+                        >
+                          ⇪
+                          <input
+                            type="file"
+                            accept="application/json,.json"
+                            className="sr-only"
+                            aria-label={`Upload a new file for ${s.label}`}
+                            disabled={st?.running}
+                            onChange={(e) => {
+                              const file = e.target.files?.[0];
+                              e.target.value = "";
+                              if (file) void reupload(s, file);
+                            }}
+                          />
+                        </label>
                       )}
                       <button
                         type="button"
@@ -1002,6 +1039,7 @@ export function WorkspaceScreen({
               ld={ld}
               onAddSource={() => setView({ kind: "add-source" })}
               onRemoveSource={removeSource}
+              onReuploadSource={reupload}
               onOpenLd={() => setView({ kind: "ld" })}
               onOpenGates={() =>
                 setView({ kind: "resource", resource: "gate" })
@@ -1018,6 +1056,9 @@ export function WorkspaceScreen({
               focus={view.focus}
               onOpenResource={(resource) =>
                 setView({ kind: "resource", resource })
+              }
+              onOpenNeutral={(resource) =>
+                setView({ kind: "ld-source", resource })
               }
             />
           )}

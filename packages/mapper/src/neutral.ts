@@ -24,6 +24,7 @@ import {
   type NeutralFlagEnv,
   type NeutralPrerequisite,
   type NeutralRule,
+  type NeutralScheduledChange,
   type NeutralSegment,
   type NeutralServe,
   type NeutralVariation,
@@ -34,7 +35,7 @@ import { provenanceProperties, report, type MapArgs, type MapOutcome } from './g
 import { neutralFlagByKey, neutralSegmentByKey } from './lookup.ts';
 import { chooseMaintainer } from './maintainer.ts';
 import { configuredUnit, kindFromChoice, sanitizeTag } from './profile.ts';
-import type { CustomProperty, DecisionOption, DecisionSubject, Dependency, DesiredFlagEnv, DesiredFlagShell, DesiredRule, DesiredSegment, DesiredSegmentRule, DesiredTarget, FidelityNote, LdClause, LdOperator, LdRollout, VariationOrRollout } from './types.ts';
+import type { CustomProperty, DecisionOption, DecisionSubject, Dependency, DesiredFlagEnv, DesiredFlagShell, DesiredRule, DesiredScheduledChange, DesiredSegment, DesiredSegmentRule, DesiredTarget, FidelityNote, LdClause, LdOperator, LdRollout, VariationOrRollout } from './types.ts';
 
 /** LD clause operators the console knows how to write (reference/launchdarkly/semantic-patch-flags.md). */
 export const LD_OPERATORS: ReadonlySet<string> = new Set<LdOperator>([
@@ -61,6 +62,8 @@ const SEMVER_OPS = new Set(['semVerEqual', 'semVerLessThan', 'semVerGreaterThan'
 /** PostHog relative dates (`_parse_date_filter`): `-30d`, `-2w`, `-6m`, `-1y`, `-3h`. */
 const RELATIVE_DATE = /^-?(\d+)([hdwmy])$/i;
 const SEMVER = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$/;
+/** Custom property that keeps a PostHog early-access feature's name and stage on the LD flag (PLAN §22.3). */
+export const EARLY_ACCESS_PROPERTY = 'posthog.earlyAccess';
 
 export interface NeutralFlagMapResult extends MapOutcome {
   flagKey: string;
@@ -88,6 +91,7 @@ interface Ctx {
 }
 
 const SOURCE_WORD: Record<MigrationSourceKind, string> = { launchdarkly: 'the source project', posthog: 'PostHog', statsig: 'StatSig' };
+const SOURCE_KIND_WORD: Record<MigrationSourceKind, string> = { launchdarkly: 'LaunchDarkly', posthog: 'PostHog', statsig: 'StatSig' };
 const sourceLabel = (ctx: Ctx) => SOURCE_WORD[ctx.kind] ?? 'the source';
 /** Clauses from an LD source already carry LD semantics; other sources' negations, regexes and versions are checked. */
 const foreign = (ctx: Ctx) => ctx.kind !== 'launchdarkly';
@@ -550,7 +554,7 @@ export function mapNeutralFlag(args: MapArgs<NeutralFlag>): NeutralFlagMapResult
   if (!source) return finish(offEnv, `no configuration in source environment “${env.statsig}”`);
 
   try {
-    const desired = applyCaveats(ctx, flag, translateEnv(ctx, flag, source, env.ld));
+    const desired = applyCaveats(ctx, flag, source, translateEnv(ctx, flag, source, env.ld));
     if (flag.deprecated) ctx.fidelity.push({ fidelity: 'full', message: `Deprecated in ${sourceLabel(ctx)}. Consider retiring it instead of migrating.` });
     if (flag.experiments.length && !source.rules.some((r) => r.experiment)) ctx.fidelity.push({ fidelity: 'partial', message: `${flag.experiments.length} experiment${flag.experiments.length === 1 ? '' : 's'} run${flag.experiments.length === 1 ? 's' : ''} on this flag in ${sourceLabel(ctx)} (${flag.experiments.join(', ')}); experiments are not migrated (PLAN §11).` });
     return finish(desired);
@@ -649,15 +653,18 @@ function prepareVariations(ctx: Ctx, flag: NeutralFlag, source: NeutralFlagEnv |
   if (!remap || !source) return { flag: out, source };
   const r = remap;
   const serve = (s: NeutralServe): NeutralServe => (s.rollout ? { rollout: { ...s.rollout, variations: mergeWeights(s.rollout.variations.map((w) => ({ variation: r(w.variation), weight: w.weight }))) } } : { variation: r(s.variation ?? 0) });
+  const remapRules = (rules: NeutralRule[]): NeutralRule[] => rules.map((rule) => ({ ...rule, ...serve(rule), ...(rule.rollout ? {} : { rollout: undefined }) })).map(({ rollout, ...rule }) => (rollout ? { ...rule, rollout } : rule));
   const env: NeutralFlagEnv = {
     ...source,
     offVariation: r(source.offVariation),
     fallthrough: serve(source.fallthrough),
-    rules: source.rules.map((rule) => ({ ...rule, ...serve(rule), ...(rule.rollout ? {} : { rollout: undefined }) })).map(({ rollout, ...rule }) => (rollout ? { ...rule, rollout } : rule)),
+    rules: remapRules(source.rules),
     targets: source.targets.map((t) => ({ ...t, variation: r(t.variation) })),
     prerequisites: source.prerequisites,
   };
-  return { flag: out, source: env };
+  // Rules a scheduled change appends point at the source's variation indexes too.
+  const caveats = flag.caveats?.map((c) => (c.kind === 'scheduled_changes' ? { ...c, detail: { changes: c.detail.changes.map((ch) => (ch.rules ? { ...ch, rules: remapRules(ch.rules) } : ch)) } } : c));
+  return { flag: caveats ? { ...out, caveats } : out, source: env };
 }
 
 /** Rollout entries that now point at the same variation are merged. */
@@ -930,19 +937,38 @@ function translatePrerequisites(ctx: Ctx, source: NeutralFlagEnv, env: string): 
 // Caveats (PLAN §22.3): source facts LD has no field for
 // ---------------------------------------------------------------------------------------------
 
-function applyCaveats(ctx: Ctx, flag: NeutralFlag, desired: DesiredFlagEnv): DesiredFlagEnv {
+function applyCaveats(ctx: Ctx, flag: NeutralFlag, source: NeutralFlagEnv, desired: DesiredFlagEnv): DesiredFlagEnv {
   let out = desired;
-  for (const c of flag.caveats ?? []) {
+  // Device bucketing rewrites every rollout; the scheduled states built below get the same rewrite.
+  let rewrite: (s: VariationOrRollout) => VariationOrRollout = (s) => s;
+  const caveats = flag.caveats ?? [];
+  for (const c of caveats) {
     switch (c.kind) {
       case 'experience_continuity':
         acknowledge(ctx, 'experience_continuity', 'continuity', `Assignments persist across login in ${sourceLabel(ctx)}`, `${sourceLabel(ctx)} keeps the value a person saw before logging in once they are identified. LaunchDarkly evaluates the context it is given, so a person who logs in may be bucketed differently unless the application keeps the anonymous context in a multi-context.`, c, 'Migrate; the application decides whether to carry the anonymous context after login.', 'Persisted assignments across login are not reproduced.');
         break;
-      case 'early_access_enrollment':
-        acknowledge(ctx, 'early_access_enrollment', 'early_access', `Early-access opt-in through “${c.detail.attribute}”`, `Opted-in people get the feature in ${sourceLabel(ctx)} through the “${c.detail.attribute}” person property, which its early-access UI sets${c.detail.stage ? ` (stage: ${c.detail.stage})` : ''}. The rules migrate; LaunchDarkly has no opt-in UI, so the application must set that attribute on the context itself.`, c, 'Migrate the opt-in and opt-out rules on the attribute.', `Early-access enrollment relies on the application sending “${c.detail.attribute}”.`);
+      case 'early_access_enrollment': {
+        const d = c.detail;
+        const feature = d.name ? `early-access feature “${d.name}”${d.stage ? ` (${d.stage})` : ''}` : `early-access feature${d.stage ? ` (stage: ${d.stage})` : ''}`;
+        const about = [d.description ? `“${d.description}”` : '', d.documentationUrl ? `docs: ${d.documentationUrl}` : ''].filter(Boolean).join('; ');
+        acknowledge(
+          ctx,
+          'early_access_enrollment',
+          'early_access',
+          d.name ? `Early-access feature “${d.name}”: opt-in through “${d.attribute}”` : `Early-access opt-in through “${d.attribute}”`,
+          `Opted-in people get the ${feature} in ${sourceLabel(ctx)} through the “${d.attribute}” person property, which its early-access UI sets${about ? ` (${about})` : ''}. The rules migrate; LaunchDarkly has no opt-in UI, so the application must set that attribute on the context itself.${d.name || d.stage ? ` The feature's name and stage are kept on the flag as the custom property “${EARLY_ACCESS_PROPERTY}”.` : ''}`,
+          c,
+          'Migrate the opt-in and opt-out rules on the attribute.',
+          `Early-access enrollment${d.name ? ` in “${d.name}”` : ''} relies on the application sending “${d.attribute}”.`,
+        );
         break;
-      case 'device_bucketing':
-        out = deviceBucketing(ctx, c, out);
+      }
+      case 'device_bucketing': {
+        const r = deviceBucketing(ctx, c, out);
+        out = r.desired;
+        rewrite = r.rewrite;
         break;
+      }
       case 'evaluation_contexts':
         ctx.fidelity.push({ fidelity: 'partial', message: `Evaluates only for requests tagged ${c.detail.contexts.join(', ')} in ${sourceLabel(ctx)}; LaunchDarkly has no per-request evaluation contexts (kept as a custom property).`, location: 'flag settings' });
         break;
@@ -953,7 +979,7 @@ function applyCaveats(ctx: Ctx, flag: NeutralFlag, desired: DesiredFlagEnv): Des
         holdout(ctx, c);
         break;
       case 'scheduled_changes':
-        scheduledChanges(ctx, c);
+        // Below, once every other caveat has shaped the targeting the scheduled states build on.
         break;
       case 'unsalted_rollout':
         ctx.fidelity.push({ fidelity: 'full', message: `${sourceLabel(ctx)} hashes rollouts without a per-flag salt (the same contexts fall into equal percentages across flags); LaunchDarkly salts per flag, so that correlation is not carried.`, location: 'rollouts' });
@@ -967,6 +993,7 @@ function applyCaveats(ctx: Ctx, flag: NeutralFlag, desired: DesiredFlagEnv): Des
         break;
     }
   }
+  for (const c of caveats) if (c.kind === 'scheduled_changes') out = scheduledChanges(ctx, c, flag, source, out, rewrite);
   return out;
 }
 
@@ -989,7 +1016,7 @@ function acknowledge(ctx: Ctx, type: 'experience_continuity' | 'early_access_enr
   ctx.fidelity.push({ fidelity: 'partial', message: note, location: 'flag settings' });
 }
 
-function deviceBucketing(ctx: Ctx, c: Extract<NeutralCaveat, { kind: 'device_bucketing' }>, desired: DesiredFlagEnv): DesiredFlagEnv {
+function deviceBucketing(ctx: Ctx, c: Extract<NeutralCaveat, { kind: 'device_bucketing' }>, desired: DesiredFlagEnv): { desired: DesiredFlagEnv; rewrite: (s: VariationOrRollout) => VariationOrRollout } {
   const choice = ctx.decisions.choose(
     {
       type: 'device_bucketing',
@@ -1017,7 +1044,7 @@ function deviceBucketing(ctx: Ctx, c: Extract<NeutralCaveat, { kind: 'device_buc
     return s;
   };
   ctx.fidelity.push({ fidelity: 'partial', message: choice === 'keep' ? `Device bucketing not carried: rollouts bucket by the user key.` : choice === 'device_kind' ? `Rollouts bucket by the “device” context kind (the application must send it).` : `Rollouts bucket by the user attribute “${c.detail.attribute}”.`, location: 'rollouts' });
-  return { ...desired, fallthrough: rewrite(desired.fallthrough), rules: desired.rules.map((r) => ({ ...r, ...rewrite(r) })) };
+  return { desired: { ...desired, fallthrough: rewrite(desired.fallthrough), rules: desired.rules.map((r) => ({ ...r, ...rewrite(r) })) }, rewrite };
 }
 
 function encryptedPayload(ctx: Ctx, c: Extract<NeutralCaveat, { kind: 'encrypted_payload' }>): void {
@@ -1066,25 +1093,107 @@ function holdout(ctx: Ctx, c: Extract<NeutralCaveat, { kind: 'holdout' }>): void
   ctx.fidelity.push({ fidelity: 'partial', message: `Holdout “${c.detail.id}” (${pct}%) not carried.`, location: `holdout “${c.detail.id}”` });
 }
 
-function scheduledChanges(ctx: Ctx, c: Extract<NeutralCaveat, { kind: 'scheduled_changes' }>): void {
-  const list = c.detail.changes.map((x) => `${x.operation} at ${x.at}${x.recurring ? ' (recurring)' : ''}`).join('; ');
+const isoOf = (t: number) => new Date(t).toISOString().replace('.000Z', 'Z');
+const noteKey = (n: FidelityNote) => `${n.fidelity}|${n.location ?? ''}|${n.message}`;
+
+/**
+ * Pending scheduled changes (PLAN §22.3 `scheduled_rule`). A one-off status flip or added
+ * condition set still in the future can become an LD scheduled change (Enterprise), like a StatSig
+ * time condition (schedule.ts): each one carries the flag's *whole* targeting as of that moment,
+ * cumulative over the earlier changes, so the flag converges on the same state whether LD applies
+ * the change or a later sync writes it directly. Recurring schedules, changes already due, variant
+ * changes and payloads the adapter could not read stay in the source and are noted.
+ */
+function scheduledChanges(ctx: Ctx, c: Extract<NeutralCaveat, { kind: 'scheduled_changes' }>, flag: NeutralFlag, source: NeutralFlagEnv, desired: DesiredFlagEnv, rewrite: (s: VariationOrRollout) => VariationOrRollout): DesiredFlagEnv {
+  const nowMs = Date.parse(ctx.args.now);
+  const changes = c.detail.changes;
+  const plural = (k: number, word: string) => `${k} ${word}${k === 1 ? '' : 's'}`;
+  /** "scheduled change" / "3 scheduled changes": the count only when there are several. */
+  const some = (k: number, word: string) => (k === 1 ? word : `${k} ${word}s`);
+  const describe = (x: NeutralScheduledChange) => `${x.operation} at ${x.at || 'an unknown time'}${x.recurring ? ' (recurring)' : ''}`;
+  /** Why a change cannot be an LD scheduled change; undefined when it can. */
+  const blocker = (x: NeutralScheduledChange): string | undefined => {
+    if (x.recurring) return 'recurring schedules are not LaunchDarkly scheduled changes';
+    if (x.on === undefined && !x.rules?.length) return x.variants ? 'variant changes are not carried' : 'the change could not be translated';
+    const t = Date.parse(x.at);
+    if (!Number.isFinite(t)) return 'it has no date';
+    if (t <= nowMs) return 'it is already due';
+    return undefined;
+  };
+  // Earliest first: the states below are cumulative, and the option lists them in that order.
+  const schedulable = changes.filter((x) => !blocker(x)).sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+  const noted = changes.filter((x) => blocker(x));
+  const list = changes.map(describe).join('; ');
+  const notedList = noted.map((x) => `${describe(x)}: ${blocker(x)}`).join('; ');
+  const sc = ctx.args.capabilities.scheduledChanges ?? 'unknown';
+  const canSchedule = schedulable.length > 0 && sc !== 'unavailable' && sc !== 'not_permitted';
+  const why = sc === 'unavailable' ? ' (the target plan has no scheduled changes)' : sc === 'not_permitted' ? ' (the target token may not create scheduled changes)' : '';
+  const options: DecisionOption[] = [
+    ...(canSchedule
+      ? [
+          {
+            key: 'schedule',
+            label: 'Create them as LaunchDarkly scheduled changes',
+            explanation: `${plural(schedulable.length, 'change')} (${schedulable.map(describe).join('; ')}) become${schedulable.length === 1 ? 's' : ''} LaunchDarkly scheduled changes, each carrying the flag's whole targeting as of that moment, so the flag converges on the same state however it gets there. Enterprise plans${sc === 'unknown' ? '; your plan is checked on the first write' : ''}.${noted.length ? ` The other ${plural(noted.length, 'change')} (${notedList}) stay${noted.length === 1 ? 's' : ''} in ${sourceLabel(ctx)} and ${noted.length === 1 ? 'is' : 'are'} noted.` : ''}`,
+            resultingFidelity: noted.length ? ('partial' as const) : ('full' as const),
+          },
+        ]
+      : []),
+    { key: 'acknowledge', label: 'Migrate the current state only', explanation: `The pending changes stay in ${sourceLabel(ctx)}.`, resultingFidelity: 'partial' },
+    SKIP,
+  ];
   const choice = ctx.decisions.choose(
     {
       type: 'scheduled_rule',
-      severity: 'acknowledge',
+      severity: canSchedule ? 'choice' : 'acknowledge',
       subject: { ...ctx.subject, location: 'scheduled changes' },
       path: 'scheduled_changes',
-      title: `${c.detail.changes.length} pending scheduled change${c.detail.changes.length === 1 ? '' : 's'} in ${sourceLabel(ctx)}`,
-      explanation: `${list}. The console migrates the flag's current state; the scheduled changes are not carried into LaunchDarkly yet (set them up as LaunchDarkly scheduled changes, or keep them in ${sourceLabel(ctx)} until the cutover).`,
+      title: `${plural(changes.length, 'pending scheduled change')} in ${sourceLabel(ctx)}`,
+      explanation: canSchedule
+        ? `${list}. LaunchDarkly scheduled changes (Enterprise) can apply ${schedulable.length === changes.length ? (changes.length === 1 ? 'it' : 'them') : `${schedulable.length} of them`} at the same moment; otherwise the console migrates the flag's current state and the changes stay in ${sourceLabel(ctx)} until the cutover.`
+        : `${list}. The console migrates the flag's current state; the scheduled changes are not carried into LaunchDarkly${why} (set them up as LaunchDarkly scheduled changes, or keep them in ${sourceLabel(ctx)} until the cutover).`,
       sourceFragment: c,
-      fingerprintOf: c.detail.changes,
-      options: [{ key: 'acknowledge', label: 'Migrate the current state only', explanation: 'The pending changes stay in the source.', resultingFidelity: 'partial' }, SKIP],
-      recommended: 'acknowledge',
+      fingerprintOf: { changes, canSchedule },
+      options,
+      recommended: canSchedule ? 'schedule' : 'acknowledge',
     },
-    'acknowledge',
+    canSchedule ? 'schedule' : 'acknowledge',
   );
   if (choice === 'skip') throw new SkipItem('it has pending scheduled changes');
-  ctx.fidelity.push({ fidelity: 'partial', message: `Pending scheduled change${c.detail.changes.length === 1 ? '' : 's'} not carried: ${list}.`, location: 'scheduled changes' });
+  if (choice !== 'schedule' || !canSchedule) {
+    ctx.fidelity.push({ fidelity: 'partial', message: `Pending ${some(changes.length, 'scheduled change')} not carried: ${list}.`, location: 'scheduled changes' });
+    return desired;
+  }
+
+  // Cumulative states, earliest first: a flip changes `on`, an added set appends its rules.
+  let on = source.on;
+  let rules = source.rules;
+  const seen = new Set(ctx.fidelity.map(noteKey));
+  const out: DesiredScheduledChange[] = [];
+  for (const ch of schedulable) {
+    const when = isoOf(Date.parse(ch.at));
+    if (ch.on !== undefined) on = ch.on;
+    if (ch.rules?.length) rules = [...rules, ...ch.rules];
+    // The decision collector is shared (the same ids dedupe, so a clause of an added set raises
+    // its decision once and is answered once); the notes are a throwaway list, from which only
+    // what the current state did not already say is kept, against the change's date.
+    const inner: Ctx = { ...ctx, fidelity: [] };
+    const env = translateEnv(inner, flag, { ...source, on, rules }, desired.ldEnv);
+    for (const n of inner.fidelity) {
+      if (seen.has(noteKey(n))) continue;
+      seen.add(noteKey(n));
+      ctx.fidelity.push({ ...n, location: `${n.location ?? 'targeting'} (scheduled ${when})` });
+    }
+    const what = [ch.on !== undefined ? `turn ${ch.on ? 'on' : 'off'}` : '', ch.rules?.length ? `add ${plural(ch.rules.length, 'rule')}` : ''].filter(Boolean).join(' and ');
+    out.push({
+      executionDate: when,
+      description: `PostHog scheduled change: ${what} at ${when}`,
+      state: { on: env.on, offVariation: env.offVariation, fallthrough: rewrite(env.fallthrough), rules: env.rules.map((r) => ({ ...r, ...rewrite(r) })), targets: env.targets, prerequisites: env.prerequisites },
+    });
+  }
+  ctx.fidelity.push({ fidelity: 'full', message: `${plural(out.length, 'LaunchDarkly scheduled change')} (${out.map((x) => x.executionDate).join(', ')}) appl${out.length === 1 ? 'ies' : 'y'} the pending ${sourceLabel(ctx)} ${out.length === 1 ? 'change' : 'changes'} at ${out.length === 1 ? 'its' : 'their'} time${sc === 'unknown' ? '; scheduled changes need an Enterprise plan, checked on the first write' : ''}.`, location: 'scheduled changes' });
+  if (noted.length) ctx.fidelity.push({ fidelity: 'partial', message: `Pending ${some(noted.length, 'scheduled change')} not carried: ${notedList}.`, location: 'scheduled changes' });
+  return { ...desired, scheduledChanges: out };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1098,7 +1207,10 @@ function flagShell(ctx: Ctx, flag: NeutralFlag, alias: string, tagMigrated: stri
   const tags = unique([tagMigrated, sourceTag(alias), ...ownTags.map(sanitizeTag)].filter(Boolean));
 
   const props: Record<string, CustomProperty> = provenanceProperties({ id: flag.key, ...(flag.version !== undefined ? { version: flag.version } : {}) }, alias, 'flag', ctx.kind);
-  const own = Object.entries(flag.customProperties).filter(([k]) => !PROVENANCE_PROPERTY_RE.test(k));
+  // The early-access feature definition (name, stage) travels with the flag; LD has no field for it.
+  const early = flag.caveats?.find((c): c is Extract<NeutralCaveat, { kind: 'early_access_enrollment' }> => c.kind === 'early_access_enrollment');
+  if (early && (early.detail.name || early.detail.stage)) props[EARLY_ACCESS_PROPERTY] = { name: `${SOURCE_KIND_WORD[ctx.kind]} early access feature`, value: [early.detail.name, early.detail.stage].filter((v): v is string => !!v) };
+  const own = Object.entries(flag.customProperties).filter(([k]) => !PROVENANCE_PROPERTY_RE.test(k) && k !== EARLY_ACCESS_PROPERTY);
   if (own.length) {
     const choice = ctx.decisions.choose(
       {
@@ -1239,9 +1351,14 @@ export function mapNeutralSegment(args: MapArgs<NeutralSegment>): NeutralSegment
       out.push({ description: r.description, clauses: clauses.length ? clauses : [{ contextKind: 'user', attribute: 'key', op: 'matches', values: ['.*'], negate: false }], ...(weight ?? {}) });
     }
     base.rules = dedupeRuleDescriptions(out, ctx.fidelity);
+    let big: { contextKind: string; ids: string[] } | undefined;
     for (const inc of source.included) {
       const kind = resolveSourceKind(ctx, inc.contextKind);
-      if (inc.values.length > LIST_SEGMENT_MAX) throw new SkipItem(`${inc.values.length.toLocaleString('en-US')} included ${kind} keys exceed LaunchDarkly's ${LIST_SEGMENT_MAX.toLocaleString('en-US')}-key limit`);
+      if (inc.values.length > LIST_SEGMENT_MAX) {
+        if (big) throw new SkipItem(`both ${big.contextKind} and ${kind} keys exceed LaunchDarkly's ${LIST_SEGMENT_MAX.toLocaleString('en-US')}-key limit; a big segment holds one context kind`);
+        big = bigSegmentImport(ctx, seg, kind, inc.values);
+        continue;
+      }
       if (kind === 'user') base.included = [...inc.values];
       else base.includedContexts.push({ contextKind: kind, values: [...inc.values] });
     }
@@ -1250,11 +1367,60 @@ export function mapNeutralSegment(args: MapArgs<NeutralSegment>): NeutralSegment
       if (kind === 'user') base.excluded = [...exc.values];
       else (base.excludedContexts ??= []).push({ contextKind: kind, values: [...exc.values] });
     }
+    if (big) {
+      // Big segments hold one imported list and nothing else: no rules, no other lists, no exclusions.
+      const dropped = [base.rules.length ? `${base.rules.length} rule${base.rules.length === 1 ? '' : 's'}` : '', base.included.length || base.includedContexts.length ? 'the other included lists' : '', base.excluded?.length || base.excludedContexts?.length ? 'the excluded keys' : ''].filter(Boolean);
+      if (dropped.length) ctx.fidelity.push({ fidelity: 'partial', message: `Big segment: ${dropped.join(', ')} dropped (a LaunchDarkly big segment holds only its imported ${big.contextKind} keys).`, location: 'membership' });
+      const { excluded: _excluded, excludedContexts: _excludedContexts, ...rest } = base;
+      return finish({ ...rest, rules: [], included: [], includedContexts: [], unbounded: big });
+    }
     return finish(base);
   } catch (e) {
     if (e instanceof SkipItem) return finish(null, e.reason);
     throw e;
   }
+}
+
+/**
+ * An included list above LD's standard-segment limit (`big_segment`, as size.ts raises it for a
+ * StatSig list that does not fit a flag): import it as a big segment, or skip the segment.
+ */
+function bigSegmentImport(ctx: Ctx, seg: NeutralSegment, kind: string, values: string[]): { contextKind: string; ids: string[] } {
+  const n = (x: number) => x.toLocaleString('en-US');
+  const count = values.length;
+  const bs = ctx.args.capabilities.bigSegments ?? 'unknown';
+  const canImport = bs !== 'unavailable' && bs !== 'not_permitted';
+  const options: DecisionOption[] = [
+    ...(canImport
+      ? [
+          {
+            key: 'import',
+            label: 'Import as a LaunchDarkly big segment',
+            explanation: `Create an unbounded (big) segment “${seg.key}” and load the ${n(count)} ${kind} keys with a CSV import in replace mode, so every sync mirrors the ${sourceLabel(ctx)} list. Enterprise plans${bs === 'unknown' ? '; your plan is checked on the first write' : ''}. Big segments have no rules and can't be previewed in the LaunchDarkly UI.`,
+            resultingFidelity: 'full' as const,
+          },
+        ]
+      : []),
+    SKIP,
+  ];
+  const choice = ctx.decisions.choose(
+    {
+      type: 'big_segment',
+      severity: canImport ? 'choice' : 'blocking',
+      subject: { ...ctx.subject, location: 'membership' },
+      path: `big_segment:${kind}`,
+      title: `${n(count)} ${kind} keys in “${seg.key}” need a big segment`,
+      explanation: `A standard LaunchDarkly segment lists at most ${n(LIST_SEGMENT_MAX)} keys. Bigger lists need a big segment (Enterprise), filled by a CSV import.${canImport ? '' : bs === 'not_permitted' ? ' The target token may not create big segments.' : ' Your LaunchDarkly plan does not include big segments.'}`,
+      sourceFragment: { key: seg.key, contextKind: kind, count },
+      fingerprintOf: { contextKind: kind, over: true, canImport },
+      options,
+      ...(canImport ? { recommended: 'import' } : {}),
+    },
+    canImport ? 'import' : 'skip',
+  );
+  if (choice !== 'import' || !canImport) throw new SkipItem(`${n(count)} included ${kind} keys exceed LaunchDarkly's ${n(LIST_SEGMENT_MAX)}-key limit for list segments`);
+  ctx.fidelity.push({ fidelity: 'full', message: `${n(count)} ${kind} keys, more than a list segment holds (${n(LIST_SEGMENT_MAX)}): imported into a big segment${bs === 'unknown' ? ' (Enterprise; checked on the first write)' : ''}.`, location: 'membership' });
+  return { contextKind: kind, ids: values.map(String) };
 }
 
 /** Segment caveats (PLAN §22.3): frozen computed memberships and members with several ids. */

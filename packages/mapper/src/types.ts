@@ -286,7 +286,11 @@ export type DecisionType =
   | 'cohort_person_ids'
   /** The payload is stored encrypted in the source. */
   | 'encrypted_payload'
-  /** Pending scheduled changes in the source are not carried, the current state migrates. */
+  /**
+   * Pending scheduled changes in the source: create the one-off future status flips and added
+   * condition sets as LaunchDarkly scheduled changes (`DesiredFlagEnv.scheduledChanges`, cumulative
+   * full states), or migrate the current state only. Recurring, past and variant changes are noted.
+   */
   | 'scheduled_rule';
 
 /**

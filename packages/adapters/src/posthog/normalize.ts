@@ -21,6 +21,7 @@ import {
   type NeutralFlag,
   type NeutralFlagEnv,
   type NeutralRule,
+  type NeutralScheduledChange,
   type NeutralSegment,
   type NeutralSegmentRule,
   type NeutralServe,
@@ -31,7 +32,7 @@ import {
 } from '@sslm/canonical';
 import { translateConditionSet, translatePropertyGroup, unique, type AttributeType, type TranslateContext } from './conditions.ts';
 import { needsMembers, type RawPostHogSnapshot } from './read.ts';
-import type { PhCohort, PhConditionSet, PhFeatureFlag, PhPropertyDefinition } from './schemas.ts';
+import { PhConditionSetSchema, type PhCohort, type PhConditionSet, type PhFeatureFlag, type PhFlagFilters, type PhPropertyDefinition, type PhScheduledChange } from './schemas.ts';
 
 export interface NormalizePostHogOptions {
   source: SourceRef & { alias: string };
@@ -113,14 +114,23 @@ export function normalizePostHogSnapshot(raw: RawPostHogSnapshot, opts: Normaliz
     if (e.feature_flag_key) experimentName.set(`key:${e.feature_flag_key}`, name);
     if (e.feature_flag?.key) experimentName.set(`key:${e.feature_flag.key}`, name);
   }
-  const earlyAccessStage = new Map<string, string>();
-  for (const ea of raw.earlyAccessFeatures) if (ea.feature_flag?.key && ea.stage) earlyAccessStage.set(ea.feature_flag.key, ea.stage);
+  // Early-access feature definitions (EarlyAccessFeature: name, description, stage, documentation_url), by flag key.
+  const earlyAccess = new Map<string, EarlyAccessInfo>();
+  for (const ea of raw.earlyAccessFeatures) {
+    if (!ea.feature_flag?.key) continue;
+    const loose = ea as Record<string, unknown>;
+    earlyAccess.set(ea.feature_flag.key, earlyAccessInfo({ name: ea.name, stage: ea.stage, description: loose.description, documentation_url: loose.documentation_url }));
+  }
 
   for (const f of live) {
     const path = `feature_flags/${f.key}`;
     const variations = variationsOf.get(f.key)!;
     const pending = raw.scheduledChanges.filter((s) => s.record_id === String(f.id) && !s.executed_at);
-    neutral.flags.push(buildFlag(f, { variations, envName, ctx: ctxFor(path), groupKinds, experimentName, earlyAccessStage: earlyAccessStage.get(f.key), pending, source, warn, path }));
+    // Without the early-access route (a payload upload, or a key it is closed to) the flag's own
+    // read-only `features` list still names the feature and its stage.
+    const features = Array.isArray(f.features) ? (f.features as unknown[]).filter((x): x is Record<string, unknown> => !!x && typeof x === 'object') : [];
+    const earlyAccessFallback = features[0] ? earlyAccessInfo({ name: features[0].name, stage: features[0].stage, description: features[0].description, documentation_url: features[0].documentation_url }) : undefined;
+    neutral.flags.push(buildFlag(f, { variations, envName, ctx: ctxFor(path), groupKinds, experimentName, earlyAccess: earlyAccess.get(f.key) ?? earlyAccessFallback, pending, source, warn, path }));
   }
   neutral.flags.sort((a, b) => a.key.localeCompare(b.key));
 
@@ -148,11 +158,29 @@ interface FlagBuild {
   ctx: TranslateContext;
   groupKinds: ReadonlyMap<number, string>;
   experimentName: ReadonlyMap<string, string>;
-  earlyAccessStage?: string;
+  earlyAccess?: EarlyAccessInfo;
   pending: RawPostHogSnapshot['scheduledChanges'];
   source: SourceRef & { alias: string };
   warn: (w: SnapshotWarning) => void;
   path: string;
+}
+
+/** What the mapper gets of an early-access feature definition (PLAN §22.3 `early_access_enrollment`). */
+export interface EarlyAccessInfo {
+  stage?: string;
+  name?: string;
+  description?: string;
+  documentationUrl?: string;
+}
+
+const nonEmpty = (v: unknown): string | undefined => (typeof v === 'string' && v.trim() !== '' ? v : undefined);
+
+function earlyAccessInfo(raw: { name: unknown; stage: unknown; description: unknown; documentation_url: unknown }): EarlyAccessInfo {
+  const stage = nonEmpty(raw.stage);
+  const name = nonEmpty(raw.name);
+  const description = nonEmpty(raw.description);
+  const documentationUrl = nonEmpty(raw.documentation_url);
+  return { ...(stage ? { stage } : {}), ...(name ? { name } : {}), ...(description ? { description } : {}), ...(documentationUrl ? { documentationUrl } : {}) };
 }
 
 /** PostHog stores payloads as JSON-encoded strings; a value that is not valid JSON is kept as the string it is. */
@@ -212,69 +240,25 @@ function buildFlag(f: PhFeatureFlag, b: FlagBuild): NeutralFlag {
     const attribute = `$feature_enrollment/${f.key}`;
     rules.push({ id: 'enrollment-in', description: 'Early access: opted in', clauses: [{ contextKind: 'user', attribute, op: 'in', values: [true], negate: false }], variation: 0 });
     rules.push({ id: 'enrollment-out', description: 'Early access: opted out', clauses: [{ contextKind: 'user', attribute, op: 'in', values: [false], negate: false }], variation: offVariation });
-    caveats.push({ kind: 'early_access_enrollment', detail: { attribute, ...(b.earlyAccessStage ? { stage: b.earlyAccessStage } : {}) } });
+    caveats.push({ kind: 'early_access_enrollment', detail: { attribute, ...(b.earlyAccess ?? {}) } });
   }
 
+  const sc: SetContext = { filters, variations, isMultivariate, offVariation, bucketKind, experimentIds, experiments, variantIndex, b };
   const sets = filters.groups ?? [];
   if (f.is_remote_configuration) {
     caveats.push({ kind: 'remote_config' });
   } else {
     for (const [i, set] of sets.entries()) {
-      const translated = translateConditionSet(set.properties ?? [], b.ctx);
-      const pct = set.rollout_percentage == null ? 100 : Math.max(0, Math.min(100, set.rollout_percentage));
-      const setKind = set.aggregation_group_type_index != null ? (b.groupKinds.get(set.aggregation_group_type_index) ?? `group-${set.aggregation_group_type_index}`) : bucketKind;
-      const override = variantIndex(set.variant);
-      if (set.variant && override === undefined) warn({ code: 'unresolved_reference', path: `${path}/filters/groups[${i}]`, message: `variant override “${set.variant}” is not one of the flag's variants; the set serves the variant split instead.` });
-
-      // Individual targets: a set that is exactly "distinct_id is one of …" at 100% with no dependency.
-      const only = (set.properties ?? [])[0];
-      const liftable = (set.properties ?? []).length === 1 && (only?.type ?? 'person') === 'person' && only?.key === 'distinct_id' && (only.operator ?? 'exact') === 'exact' && !only.negation && pct === 100 && translated.prerequisites.length === 0;
-      if (liftable) {
-        const values = translated.branches[0]?.[0]?.values.map(String) ?? [];
-        const variation = override ?? 0;
-        const cur = targets.find((t) => t.contextKind === 'user' && t.variation === variation);
-        if (cur) for (const v of values) if (!cur.values.includes(v)) cur.values.push(v);
-        else targets.push({ contextKind: 'user', variation, values });
+      const out = translateSet(sc, set, { lift: true, id: `set-${i}`, description: `Condition set ${i + 1}`, path: `${path}/filters/groups[${i}]` });
+      if (out.kind === 'drop') continue;
+      if (out.kind === 'target') {
+        const cur = targets.find((t) => t.contextKind === 'user' && t.variation === out.target.variation);
+        if (cur) for (const v of out.target.values) if (!cur.values.includes(v)) cur.values.push(v);
+        else targets.push(out.target);
         continue;
       }
-
-      // A 0% set matches nobody: without early exit it is a no-op (dropped, exact); with early
-      // exit every context it matches gets the off value, which is a rule serving it.
-      if (pct === 0 && !filters.early_exit) continue;
-      let serve: NeutralServe;
-      if (pct === 0) serve = { variation: offVariation };
-      else if (override !== undefined) serve = { variation: override };
-      else if (isMultivariate) {
-        serve = { rollout: { contextKind: setKind, variations: variantWeights(filters.multivariate?.variants ?? [], variations) } };
-        hasRollout = true;
-      } else serve = { variation: 0 };
-
-      let coverage: number | undefined;
-      if (pct > 0 && pct < 100) {
-        hasRollout = true;
-        if (filters.early_exit) {
-          // "Stop at the first matching set": the uncovered share gets the off value, which is a
-          // plain LD rollout (PLAN §22.2).
-          serve = { rollout: { contextKind: setKind, variations: scaleRollout(serve, pct, offVariation) } };
-        } else {
-          coverage = pct / 100;
-          // The mapper turns a covered rule into a rollout; a plain variation would lose the set's bucketing kind.
-          if (serve.variation !== undefined && setKind !== 'user') serve = { rollout: { contextKind: setKind, variations: [{ variation: serve.variation, weight: 100_000 }] } };
-        }
-      }
-      const experiment = experimentIds.length && serve.rollout ? { key: experiments[0] ?? `experiment ${experimentIds[0]}` } : undefined;
-      const multi = translated.branches.length > 1;
-      for (const [k, clauses] of translated.branches.entries()) {
-        rules.push({
-          id: multi ? `set-${i}-${k}` : `set-${i}`,
-          description: `Condition set ${i + 1}${multi ? ` (${String.fromCharCode(97 + k)})` : ''}`,
-          clauses,
-          ...serve,
-          ...(coverage !== undefined ? { coverage } : {}),
-          ...(experiment ? { experiment } : {}),
-          ...(translated.prerequisites.length ? { prerequisites: translated.prerequisites } : {}),
-        });
-      }
+      rules.push(...out.rules);
+      if (out.rollout) hasRollout = true;
     }
   }
 
@@ -284,7 +268,7 @@ function buildFlag(f: PhFeatureFlag, b: FlagBuild): NeutralFlag {
   if (f.has_encrypted_payloads) caveats.push({ kind: 'encrypted_payload', detail: { readable: Object.values(filters.payloads ?? {}).some((p) => typeof p === 'string' && p !== '' && !/redacted/i.test(p)) } });
   if (filters.holdout?.id != null) caveats.push({ kind: 'holdout', detail: { id: String(filters.holdout.id), percentage: filters.holdout.exclusion_percentage ?? 0 } });
   else if ((filters.holdout_groups ?? []).length) caveats.push({ kind: 'holdout', detail: { id: 'legacy', percentage: 0 } });
-  if (b.pending.length) caveats.push({ kind: 'scheduled_changes', detail: { changes: b.pending.map((s) => ({ at: s.scheduled_at ?? '', operation: s.payload?.operation ?? 'unknown', recurring: !!(s.is_recurring || s.recurrence_rule) })) } });
+  if (b.pending.length) caveats.push({ kind: 'scheduled_changes', detail: { changes: b.pending.map((s) => scheduledChange(s, sc)) } });
   if (hasRollout) caveats.push({ kind: 'unsalted_rollout' });
 
   const hasSurvey = f.surveys && (Array.isArray(f.surveys) ? f.surveys.length > 0 : typeof f.surveys === 'object' && Object.keys(f.surveys as object).length > 0);
@@ -325,6 +309,159 @@ function buildFlag(f: PhFeatureFlag, b: FlagBuild): NeutralFlag {
     environments: [env],
     ...(caveats.length ? { caveats } : {}),
   };
+}
+
+/** What one condition set needs to become a rule: the flag's variations and its flag-level filter settings. */
+interface SetContext {
+  filters: PhFlagFilters;
+  variations: NeutralVariation[];
+  isMultivariate: boolean;
+  offVariation: number;
+  /** Context kind the flag buckets by (`aggregation_group_type_index`), `user` by default. */
+  bucketKind: string;
+  experimentIds: string[];
+  experiments: string[];
+  variantIndex: (key: string | null | undefined) => number | undefined;
+  b: FlagBuild;
+}
+
+interface SetOptions {
+  /** Lift a "distinct_id is one of …" set into individual targets (the flag's own sets, not a scheduled one). */
+  lift: boolean;
+  /** Rule id base; an OR-expanded set gets `-<branch>` appended. */
+  id: string;
+  description: string;
+  /** Warning path of the set. */
+  path: string;
+}
+
+type SetOutcome =
+  /** A 0% set without early exit: matches nobody, dropped (exact). */
+  | { kind: 'drop' }
+  | { kind: 'target'; target: NeutralTarget }
+  | { kind: 'rules'; rules: NeutralRule[]; rollout: boolean };
+
+/**
+ * One condition set (FlagPropertyGroup) → neutral rules (PLAN §22.2). Shared by the flag's own
+ * `filters.groups` and the sets a scheduled `add_release_condition` change appends, so both get
+ * the same `rollout_percentage`, variant-override, bucketing-kind and early-exit treatment.
+ */
+function translateSet(sc: SetContext, set: PhConditionSet, o: SetOptions): SetOutcome {
+  const { filters, variations, isMultivariate, offVariation, b } = sc;
+  const translated = translateConditionSet(set.properties ?? [], b.ctx);
+  const pct = set.rollout_percentage == null ? 100 : Math.max(0, Math.min(100, set.rollout_percentage));
+  const setKind = set.aggregation_group_type_index != null ? (b.groupKinds.get(set.aggregation_group_type_index) ?? `group-${set.aggregation_group_type_index}`) : sc.bucketKind;
+  const override = sc.variantIndex(set.variant);
+  if (set.variant && override === undefined) b.warn({ code: 'unresolved_reference', path: o.path, message: `variant override “${set.variant}” is not one of the flag's variants; the set serves the variant split instead.` });
+
+  // Individual targets: a set that is exactly "distinct_id is one of …" at 100% with no dependency.
+  const only = (set.properties ?? [])[0];
+  const liftable = o.lift && (set.properties ?? []).length === 1 && (only?.type ?? 'person') === 'person' && only?.key === 'distinct_id' && (only.operator ?? 'exact') === 'exact' && !only.negation && pct === 100 && translated.prerequisites.length === 0;
+  if (liftable) {
+    const values = translated.branches[0]?.[0]?.values.map(String) ?? [];
+    return { kind: 'target', target: { contextKind: 'user', variation: override ?? 0, values } };
+  }
+
+  // A 0% set matches nobody: without early exit it is a no-op (dropped, exact); with early
+  // exit every context it matches gets the off value, which is a rule serving it.
+  if (pct === 0 && !filters.early_exit) return { kind: 'drop' };
+  let rollout = false;
+  let serve: NeutralServe;
+  if (pct === 0) serve = { variation: offVariation };
+  else if (override !== undefined) serve = { variation: override };
+  else if (isMultivariate) {
+    serve = { rollout: { contextKind: setKind, variations: variantWeights(filters.multivariate?.variants ?? [], variations) } };
+    rollout = true;
+  } else serve = { variation: 0 };
+
+  let coverage: number | undefined;
+  if (pct > 0 && pct < 100) {
+    rollout = true;
+    if (filters.early_exit) {
+      // "Stop at the first matching set": the uncovered share gets the off value, which is a
+      // plain LD rollout (PLAN §22.2).
+      serve = { rollout: { contextKind: setKind, variations: scaleRollout(serve, pct, offVariation) } };
+    } else {
+      coverage = pct / 100;
+      // The mapper turns a covered rule into a rollout; a plain variation would lose the set's bucketing kind.
+      if (serve.variation !== undefined && setKind !== 'user') serve = { rollout: { contextKind: setKind, variations: [{ variation: serve.variation, weight: 100_000 }] } };
+    }
+  }
+  const experiment = sc.experimentIds.length && serve.rollout ? { key: sc.experiments[0] ?? `experiment ${sc.experimentIds[0]}` } : undefined;
+  const multi = translated.branches.length > 1;
+  const rules: NeutralRule[] = translated.branches.map((clauses, k) => ({
+    id: multi ? `${o.id}-${k}` : o.id,
+    description: `${o.description}${multi ? ` (${String.fromCharCode(97 + k)})` : ''}`,
+    clauses,
+    ...serve,
+    ...(coverage !== undefined ? { coverage } : {}),
+    ...(experiment ? { experiment } : {}),
+    ...(translated.prerequisites.length ? { prerequisites: translated.prerequisites } : {}),
+  }));
+  return { kind: 'rules', rules, rollout };
+}
+
+/**
+ * One pending ScheduledChange → the neutral change (PLAN §22.3). The API schema documents the
+ * payload as `{ operation, value }` with: `update_status` → `value` true/false; `add_release_condition`
+ * → `value` "an object with groups, payloads and multivariate keys" (the flag filter editor's
+ * output; when the change fires PostHog appends `value.groups` to the flag's `filters.groups`);
+ * `update_variants` → `value` "an object with variants and payloads keys". Only `update_status`
+ * may recur. What the schema leaves open, and how it is handled here:
+ * - whether `payloads` / `multivariate` inside an `add_release_condition` value are merged into the
+ *   flag as well: not applied (the appended sets serve the flag's current variants);
+ * - whether `value` may be a bare condition set rather than `{ groups }`: accepted as one set;
+ * - how `update_variants` changes payloads: the new split is kept as a note only (`variants`);
+ * - a recurring schedule is `is_recurring`, or any of `recurrence_rule` / `cron_expression` /
+ *   `recurrence_interval` (the field was renamed across versions).
+ * A payload that cannot be read keeps only `at` / `operation` / `recurring` and gets a warning.
+ */
+function scheduledChange(s: PhScheduledChange, sc: SetContext): NeutralScheduledChange {
+  const { warn, path: flagPath } = sc.b;
+  const loose = s as Record<string, unknown>;
+  const operation = s.payload?.operation ?? 'unknown';
+  const at = s.scheduled_at ?? '';
+  const recurring = !!(s.is_recurring || nonEmpty(s.recurrence_rule) || nonEmpty(loose.cron_expression) || nonEmpty(loose.recurrence_interval));
+  const base: NeutralScheduledChange = { at, operation, recurring };
+  const value = s.payload?.value;
+  const path = `${flagPath}/scheduled_changes/${s.id}`;
+  const unreadable = (what: string) => {
+    warn({ code: 'schema_mismatch', path, message: `${operation} payload ${what}; the change is noted, not carried.` });
+    return base;
+  };
+  switch (operation) {
+    case 'update_status': {
+      const on = value === true || value === 'true' ? true : value === false || value === 'false' ? false : undefined;
+      return on === undefined ? unreadable(`value ${JSON.stringify(value)} is not a boolean`) : { ...base, on };
+    }
+    case 'add_release_condition': {
+      if (!value || typeof value !== 'object') return unreadable('has no value object');
+      const v = value as { groups?: unknown };
+      const rawSets = Array.isArray(v.groups) ? v.groups : 'properties' in value || 'rollout_percentage' in value ? [value] : undefined;
+      if (!rawSets) return unreadable('has neither a groups list nor a condition set');
+      const rules: NeutralRule[] = [];
+      for (const [i, raw] of rawSets.entries()) {
+        const parsed = PhConditionSetSchema.safeParse(raw);
+        if (!parsed.success) {
+          warn({ code: 'schema_mismatch', path: `${path}/value/groups[${i}]`, message: parsed.error.issues.map((x) => `${x.path.join('.') || '(root)'}: ${x.message}`).join('; ') });
+          continue;
+        }
+        const out = translateSet(sc, parsed.data, { lift: false, id: `scheduled-${s.id}-set-${i}`, description: `Scheduled condition set ${i + 1} (${at})`, path: `${path}/value/groups[${i}]` });
+        if (out.kind === 'rules') rules.push(...out.rules);
+      }
+      return rules.length ? { ...base, rules } : base;
+    }
+    case 'update_variants': {
+      const list = value && typeof value === 'object' ? (value as { variants?: unknown }).variants : undefined;
+      if (!Array.isArray(list)) return unreadable('has no variants list');
+      const variants = list
+        .filter((x): x is Record<string, unknown> => !!x && typeof x === 'object' && typeof (x as { key?: unknown }).key === 'string')
+        .map((x) => ({ key: x.key as string, weight: Math.round((typeof x.rollout_percentage === 'number' ? x.rollout_percentage : 0) * 1000) }));
+      return variants.length ? { ...base, variants } : unreadable('lists no variants');
+    }
+    default:
+      return base;
+  }
 }
 
 /** Variant percentages → LD weights (thousandths of a percent) summing to exactly 100,000. */

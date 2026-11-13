@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { setupServer } from 'msw/node';
-import { ACME_HOG_ORG_ID, ACME_HOG_PROJECT_ID, acmeHogLocalEvaluationPayload, acmeHogProject, createPostHogApiHandlers, type JsonObject } from '../src/index.ts';
+import { ACME_HOG_ORG_ID, ACME_HOG_PROJECT_ID, ACME_HOG_STAGING_ID_OFFSET, ACME_HOG_STAGING_PROJECT_ID, ACME_HOG_STAGING_SHARED_KEYS, acmeHogLocalEvaluationPayload, acmeHogProject, acmeHogStagingProject, createPostHogApiHandlers, type JsonObject } from '../src/index.ts';
 
 const ORIGIN = 'https://demo-posthog.test';
 const KEY = 'phx_test-key';
@@ -52,6 +52,84 @@ describe('Acme Hog PostHog fixture', () => {
     // Property-defined (non-static, non-deleted) cohorts inlined as their PropertyGroup.
     expect(Object.keys(payload.cohorts as JsonObject).sort()).toEqual(['302', '303', '304', '305']);
     expect((payload.cohorts as Record<string, JsonObject>)['302']).toMatchObject({ type: 'AND' });
+  });
+});
+
+describe('Acme Hog Staging fixture (PLAN §22.1: one project per stage; KNOWN-EDGE-CASES 19.26)', () => {
+  const prod = acmeHogProject();
+  const staging = acmeHogStagingProject();
+  const prodByKey = new Map(prod.flags.map((f) => [f.key as string, f]));
+  const stagingByKey = new Map(staging.flags.map((f) => [f.key as string, f]));
+  const filtersOf = (f: JsonObject | undefined) => f!.filters as JsonObject;
+  const groupsOf = (f: JsonObject | undefined) => filtersOf(f).groups as JsonObject[];
+
+  it('is deterministic, the same organization, another project id, name and token', () => {
+    expect(staging).toEqual(acmeHogStagingProject());
+    expect(staging.organization).toEqual(prod.organization);
+    expect(staging.project).toMatchObject({ id: 4243, project_id: 4243, name: 'Acme Hog Staging', organization: ACME_HOG_ORG_ID });
+    expect(String(staging.project.id)).toBe(ACME_HOG_STAGING_PROJECT_ID);
+    expect(staging.project.api_token).not.toBe(prod.project.api_token);
+    expect((staging.user.team as JsonObject).id).toBe(4243);
+    expect(staging.members).toEqual(prod.members);
+    expect(staging.groupTypes).toEqual(prod.groupTypes);
+    expect(staging.propertyDefinitions).toEqual(prod.propertyDefinitions);
+    expect(staging.scheduledChanges).toEqual([]);
+    expect(staging.experiments).toEqual([]);
+    expect(staging.earlyAccessFeatures).toEqual([]);
+  });
+
+  it('keeps the shared keys with ids offset by 1000, plus one staging-only flag', () => {
+    expect(staging.flags.map((f) => f.key)).toEqual([...ACME_HOG_STAGING_SHARED_KEYS, 'hog-staging-only']);
+    for (const key of ACME_HOG_STAGING_SHARED_KEYS) expect(stagingByKey.get(key)!.id, key).toBe((prodByKey.get(key)!.id as number) + ACME_HOG_STAGING_ID_OFFSET);
+    expect(new Set(staging.flags.map((f) => f.id)).size).toBe(staging.flags.length);
+    expect(stagingByKey.get('hog-staging-only')).toMatchObject({ id: 2099, active: true, tags: ['staging'] });
+    expect(prodByKey.has('hog-staging-only')).toBe(false);
+    // Nothing archived or deleted, nothing owned by another product.
+    for (const f of staging.flags) expect([f.archived, f.deleted, (f.experiment_set as unknown[]).length, (f.features as unknown[]).length], String(f.key)).toEqual([false, false, 0, 0]);
+  });
+
+  it('targets differently from production on every shared key', () => {
+    // Off in staging, on in production.
+    expect(stagingByKey.get('hog-kill-switch')!.active).toBe(false);
+    expect(prodByKey.get('hog-kill-switch')!.active).toBe(true);
+    // The last set finished its rollout; the static cohort is still referenced.
+    expect(groupsOf(stagingByKey.get('hog-checkout-redesign')).map((g) => g.rollout_percentage)).toEqual([100, 100, 100]);
+    expect(groupsOf(prodByKey.get('hog-checkout-redesign')).map((g) => g.rollout_percentage)).toEqual([100, 100, 25]);
+    expect((groupsOf(stagingByKey.get('hog-checkout-redesign'))[1]!.properties as JsonObject[])[0]).toMatchObject({ type: 'cohort', value: 301 });
+    // Same variant keys, different weights, no override set.
+    const variants = (f: JsonObject | undefined) => (filtersOf(f).multivariate as JsonObject).variants as JsonObject[];
+    expect(variants(stagingByKey.get('hog-pricing-page')).map((v) => v.key)).toEqual(variants(prodByKey.get('hog-pricing-page')).map((v) => v.key));
+    expect(variants(stagingByKey.get('hog-pricing-page')).map((v) => v.rollout_percentage)).toEqual([34, 33, 33]);
+    expect(variants(prodByKey.get('hog-pricing-page')).map((v) => v.rollout_percentage)).toEqual([50, 25, 25]);
+    expect(groupsOf(stagingByKey.get('hog-pricing-page'))).toHaveLength(1);
+    expect(filtersOf(stagingByKey.get('hog-pricing-page')).payloads).toEqual(filtersOf(prodByKey.get('hog-pricing-page')).payloads);
+    // Half of all companies.
+    expect(groupsOf(stagingByKey.get('hog-company-tier'))[1]!.rollout_percentage).toBe(50);
+    // Multivariate in staging, boolean in production: the deliberate shell incompatibility.
+    expect(filtersOf(stagingByKey.get('hog-staff-tools')).multivariate).toBeDefined();
+    expect(filtersOf(prodByKey.get('hog-staff-tools')).multivariate).toBeUndefined();
+    expect(groupsOf(stagingByKey.get('hog-staff-tools')).map((g) => g.variant)).toEqual(['full', 'basic']);
+    // No presence check; the cohorts are still referenced.
+    const powerProps = groupsOf(stagingByKey.get('hog-power-users'))[0]!.properties as JsonObject[];
+    expect(powerProps.map((p) => p.operator ?? 'exact')).toEqual(['exact', 'not_in']);
+    expect(powerProps.map((p) => p.value)).toEqual([304, 302]);
+  });
+
+  it('keeps the referenced cohorts with their ids and persons', () => {
+    expect(staging.cohorts.map((c) => c.id)).toEqual([301, 302, 304]);
+    expect(staging.cohorts).toEqual(prod.cohorts.filter((c) => [301, 302, 304].includes(c.id as number)));
+    expect(staging.cohortMembers).toEqual({ '301': ['501', '502', '503'], '304': ['504', '505'] });
+    expect(staging.persons).toEqual(prod.persons);
+    // Production is untouched by deriving staging from it.
+    expect(prod).toEqual(acmeHogProject());
+  });
+
+  it('is served by its own mock, under its own project id', async () => {
+    server.use(...createPostHogApiHandlers({ baseUrl: 'https://demo-posthog-staging.test', getProject: acmeHogStagingProject, key: KEY }));
+    const res = await fetch(`https://demo-posthog-staging.test/api/projects/${ACME_HOG_STAGING_PROJECT_ID}/feature_flags/`, { headers: { authorization: `Bearer ${KEY}` } });
+    expect(res.status).toBe(200);
+    expect((await json<Page>(res)).results.map((f) => f.id)).toEqual([2001, 2002, 2003, 2006, 2007, 2017, 2099]);
+    expect((await fetch(`https://demo-posthog-staging.test/api/projects/${ACME_HOG_PROJECT_ID}/feature_flags/`, { headers: { authorization: `Bearer ${KEY}` } })).status).toBe(404);
   });
 });
 
@@ -144,7 +222,7 @@ describe('PostHog API mock (PLAN §22.2)', () => {
     expect(groupTypes.map((g) => g.group_type)).toEqual(['company', 'workspace']);
     expect((await json<Page>(await get(`${P}/property_definitions/?type=person`))).results).toHaveLength(10);
     expect((await json<Page>(await get(`${P}/property_definitions/?type=group&group_type_index=0`))).results.map((d) => d.name)).toEqual(['tier', 'mrr']);
-    expect((await json<Page>(await get(`${P}/scheduled_changes/?model_name=FeatureFlag`))).results.map((c) => c.record_id)).toEqual(['1019', '1007']);
+    expect((await json<Page>(await get(`${P}/scheduled_changes/?model_name=FeatureFlag`))).results.map((c) => c.record_id)).toEqual(['1019', '1007', '1007', '1003']);
     expect((await json<Page>(await get(`${P}/scheduled_changes/?model_name=Cohort`))).results).toEqual([]);
     expect((await json<Page>(await get(`${P}/early_access_feature/`))).results).toHaveLength(1);
     expect((await json<Page>(await get(`${P}/experiments/`))).results[0]?.feature_flag_key).toBe('hog-holdout-experiment');

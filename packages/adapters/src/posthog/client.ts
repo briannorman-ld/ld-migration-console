@@ -33,6 +33,7 @@ import {
   type PhMe,
   type PhMember,
   type PhPerson,
+  type PhPersonActor,
   type PhProject,
   type PhPropertyDefinition,
   type PhScheduledChange,
@@ -52,8 +53,21 @@ export const POSTHOG_REGIONS: Record<PostHogRegionId, PostHogRegion> = {
   eu: { id: 'eu', label: 'PostHog Cloud EU', origin: 'https://eu.posthog.com' },
 };
 
-/** Pages are at most 100 items on PostHog's list routes. */
+/**
+ * Default page on PostHog's list routes: the schema documents no maximum for most of them
+ * (`/cohorts/{id}/persons/` says "defaults to 100"), so 100 is what we send.
+ */
 export const POSTHOG_PAGE = 100;
+/** `/persons/` is the one list route whose `limit` has a stated maximum (openapi.yaml.gz: 1000). */
+export const POSTHOG_PERSONS_PAGE = 1000;
+
+/** One page of a list route: PostHog's `{ count, next, previous, results }` envelope, validated. */
+export interface PostHogPage<T> {
+  /** Absent on `/cohorts/{id}/persons/` (CohortPersonsResponse has no count). */
+  count?: number;
+  next?: string | null;
+  results: T[];
+}
 
 export interface PostHogSchemaIssue {
   path: string;
@@ -161,18 +175,31 @@ export class PostHogClient {
     return this.allPages(this.p(projectId, 'cohorts/'), PhCohortSchema, {}, signal);
   }
 
-  /** Member *actors* of a cohort (ids, no distinct ids). */
-  listCohortPersons(projectId: string, cohortId: string | number, signal?: AbortSignal): Promise<z.output<typeof PhPersonActorSchema>[]> {
-    return this.allPages(this.p(projectId, `cohorts/${encodeURIComponent(String(cohortId))}/persons/`), PhPersonActorSchema, {}, signal);
+  /** Member *actors* of a cohort (ids, no distinct ids), 100 a page (the route states no maximum). */
+  listCohortPersons(projectId: string, cohortId: string | number, opts: { signal?: AbortSignal; onPage?: (read: number, total?: number) => void } = {}): Promise<PhPersonActor[]> {
+    return this.allPages(this.p(projectId, `cohorts/${encodeURIComponent(String(cohortId))}/persons/`), PhPersonActorSchema, {}, opts.signal, opts.onPage);
   }
 
   /**
    * Full persons (with `distinct_ids`) filtered to a cohort: the filter the PostHog UI uses on the
    * persons list. Not in the published schema, so callers fall back to `getPerson` when it is
-   * ignored (PLAN §22.6 P0).
+   * ignored (PLAN §22.6 P0). Pages of 1,000, the route's maximum.
    */
-  listPersonsInCohort(projectId: string, cohortId: string | number, signal?: AbortSignal): Promise<PhPerson[]> {
-    return this.allPages(this.p(projectId, 'persons/'), PhPersonSchema, { cohort: String(cohortId) }, signal);
+  listPersonsInCohort(projectId: string, cohortId: string | number, opts: { signal?: AbortSignal; onPage?: (read: number, total?: number) => void } = {}): Promise<PhPerson[]> {
+    return this.allPages(this.p(projectId, 'persons/'), PhPersonSchema, { cohort: String(cohortId) }, opts.signal, opts.onPage, POSTHOG_PERSONS_PAGE);
+  }
+
+  /**
+   * One page of `/persons/`, optionally filtered to a cohort, with its envelope: read.ts pages the
+   * members of a large cohort itself so it can stop at a cap, report progress and notice a server
+   * that ignored the `cohort` filter (the envelope `count` is the list's total).
+   */
+  listPersonsPage(projectId: string, opts: { cohortId?: string | number; limit?: number; offset?: number; signal?: AbortSignal } = {}): Promise<PostHogPage<PhPerson>> {
+    const query: Query = {};
+    if (opts.cohortId !== undefined) query.cohort = String(opts.cohortId);
+    query.limit = String(Math.min(opts.limit ?? POSTHOG_PERSONS_PAGE, POSTHOG_PERSONS_PAGE));
+    query.offset = String(opts.offset ?? 0);
+    return this.get(this.p(projectId, 'persons/'), pagedSchema(PhPersonSchema), { query, signal: opts.signal }).then((page) => ({ count: page.count ?? undefined, next: page.next, results: page.results }));
   }
 
   async getPerson(projectId: string, personId: string, signal?: AbortSignal): Promise<PhPerson | null> {
@@ -227,16 +254,16 @@ export class PostHogClient {
   }
 
   /** Walk an offset-paged list by following `next` until it is null or a page comes back short. */
-  private async allPages<S extends z.ZodType>(path: string, item: S, query: Query, signal?: AbortSignal, onPage?: (read: number, total?: number) => void): Promise<z.output<S>[]> {
+  private async allPages<S extends z.ZodType>(path: string, item: S, query: Query, signal?: AbortSignal, onPage?: (read: number, total?: number) => void, pageSize = POSTHOG_PAGE): Promise<z.output<S>[]> {
     const schema = pagedSchema(item);
     const out: z.output<S>[] = [];
     let offset = 0;
     // A hard stop well above any real project (2,000 active flags is PostHog's own limit).
     for (let guard = 0; guard < 1000; guard++) {
-      const page = await this.get(path, schema, { query: { ...query, limit: String(POSTHOG_PAGE), offset: String(offset) }, signal });
+      const page = await this.get(path, schema, { query: { ...query, limit: String(pageSize), offset: String(offset) }, signal });
       out.push(...(page.results as z.output<S>[]));
       onPage?.(out.length, page.count ?? undefined);
-      if (!page.next || page.results.length === 0 || page.results.length < POSTHOG_PAGE) break;
+      if (!page.next || page.results.length === 0 || page.results.length < pageSize) break;
       offset += page.results.length;
     }
     return out;

@@ -8,6 +8,7 @@ export * from './msw/ld-api.ts';
 export * from './msw/posthog-api.ts';
 export * from './ld/acme-legacy.ts';
 export * from './posthog/acme-hog.ts';
+export * from './posthog/acme-hog-staging.ts';
 export { pseudoId } from './ids.ts';
 export * from './spec/generate.ts';
 export * from './spec/raw-ids.ts';

@@ -134,7 +134,7 @@ describe('GuideView: teams and people', () => {
     openStep(/^People/);
     const peopleBar = screen.getByText('2 people are not in LaunchDarkly.');
     // The bulk action sits above the owners table.
-    expect(peopleBar.compareDocumentPosition(screen.getByText('StatSig owner').closest('table')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(peopleBar.compareDocumentPosition(screen.getByRole('columnheader', { name: 'Owner' }).closest('table')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /Invite all 2 people/ }));
     const dialog = screen.getByRole('dialog', { name: 'Invite 2 people to LaunchDarkly' });
     expect(within(dialog).getByText(/join your whole LaunchDarkly account/)).toBeTruthy();

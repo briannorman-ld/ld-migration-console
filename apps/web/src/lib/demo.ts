@@ -22,9 +22,11 @@ export const DEMO_LD_PROJECT = { instance: 'us' as const, projectKey: 'statsig-m
  * The demo LD project has only `test` and `production`, so StatSig `staging` is pre-mapped to
  * `test` (editable under Mapping). `development` and `qa` stay unmapped, to show that state.
  * A PostHog project has no environments (PLAN §22.1): the demo's "Acme Hog" source has the one
- * source environment named after the project, pre-mapped to `production`.
+ * source environment named after the project, pre-mapped to `production`, and the staging
+ * project "Acme Hog Staging" (a second source with the same flag keys, the consolidation case of
+ * PLAN §12) is pre-mapped to `test`.
  */
-export const DEMO_ENV_HINTS: Record<string, string> = { staging: 'test', 'Acme Hog': 'production' };
+export const DEMO_ENV_HINTS: Record<string, string> = { staging: 'test', 'Acme Hog': 'production', 'Acme Hog Staging': 'test' };
 
 /** Where the app is served from, e.g. `https://x.github.io/ld-migration-console` (no trailing slash). */
 export function appRoot(): string {
@@ -111,10 +113,10 @@ export async function demoPostHogKey(): Promise<string> {
 
 /**
  * Create (or reuse) the "Acme Retail (Demo)" workspace with the two StatSig demo sources, the
- * "Acme Legacy" LD source and the "Acme Hog" PostHog source preconnected.
+ * "Acme Legacy" LD source and the "Acme Hog" and "Acme Hog Staging" PostHog sources preconnected.
  */
 export async function ensureDemoWorkspace(): Promise<string> {
-  const { demoStatsigBaseUrl, demoLdBaseUrl, demoPostHogBaseUrl, ACME_LEGACY_PROJECT_KEY, ACME_HOG_PROJECT_ID } = await import('@sslm/demo-fixtures');
+  const { demoStatsigBaseUrl, demoLdBaseUrl, demoPostHogBaseUrl, demoPostHogStagingBaseUrl, ACME_LEGACY_PROJECT_KEY, ACME_HOG_PROJECT_ID, ACME_HOG_STAGING_PROJECT_ID } = await import('@sslm/demo-fixtures');
   const existing = await store.getWorkspace(DEMO_WORKSPACE_ID);
   // The demo writes with a real LaunchDarkly token, so it follows the same origin rule as any workspace.
   if (!existing) await store.createWorkspace({ id: DEMO_WORKSPACE_ID, name: 'Acme Retail (Demo)', isDemo: true, ld: DEMO_LD_PROJECT, ...(isSharedOrigin() ? { tokenStorage: 'memory' as const } : {}) });
@@ -143,15 +145,29 @@ export async function ensureDemoWorkspace(): Promise<string> {
   // environment, named after the project (PostHog has no environments inside a project). Only
   // while the console's `posthog-source` flag is on (the workspace screen hides it when off).
   await whenFlagsReady();
-  if (flagEnabled('posthogSource')) sources.push({
-    id: `${DEMO_WORKSPACE_ID}-hog`,
-    alias: 'hog',
-    label: 'acme-hog (PostHog)',
-    kind: 'posthog',
-    posthog: { region: 'us', projectId: ACME_HOG_PROJECT_ID, projectName: 'Acme Hog', baseUrl: demoPostHogBaseUrl(appRoot()) },
-    isDemo: true,
-    createdAt: new Date(Date.UTC(2026, 0, 1, 0, 0, 3)).toISOString(),
-  });
+  if (flagEnabled('posthogSource')) {
+    sources.push({
+      id: `${DEMO_WORKSPACE_ID}-hog`,
+      alias: 'hog',
+      label: 'acme-hog (PostHog)',
+      kind: 'posthog',
+      posthog: { region: 'us', projectId: ACME_HOG_PROJECT_ID, projectName: 'Acme Hog', baseUrl: demoPostHogBaseUrl(appRoot()) },
+      isDemo: true,
+      createdAt: new Date(Date.UTC(2026, 0, 1, 0, 0, 3)).toISOString(),
+    });
+    // The same organization's staging project: the same flag keys as "Acme Hog" with drifted
+    // targeting, mapped to `test` (DEMO_ENV_HINTS). Two PostHog projects → one LD project is the
+    // consolidation case (PLAN §12, KNOWN-EDGE-CASES 19.26).
+    sources.push({
+      id: `${DEMO_WORKSPACE_ID}-hog-staging`,
+      alias: 'hog-staging',
+      label: 'acme-hog-staging (PostHog)',
+      kind: 'posthog',
+      posthog: { region: 'us', projectId: ACME_HOG_STAGING_PROJECT_ID, projectName: 'Acme Hog Staging', baseUrl: demoPostHogStagingBaseUrl(appRoot()) },
+      isDemo: true,
+      createdAt: new Date(Date.UTC(2026, 0, 1, 0, 0, 4)).toISOString(),
+    });
+  }
   for (const s of sources) if (!have.has(s.id)) await store.addSource(DEMO_WORKSPACE_ID, s);
   return DEMO_WORKSPACE_ID;
 }

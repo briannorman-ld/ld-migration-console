@@ -4,7 +4,7 @@
  * metrics, randomization units), collision checks against what's already in LD, and an ordered
  * list of idempotent steps. Pure: LD state is an input.
  */
-import { hasMigratedTag, hasSourceTag, migrationKindOf, readFlagProvenance, readSync, stableStringify, syncedEnvsOf, syncPropertyKey, type Autotune, type CanonicalSnapshot, type Config, type Gate, type MigrationSourceKind, type NeutralFlag, type Prompt } from '@sslm/canonical';
+import { hasMigratedTag, hasSourceTag, migrationKindOf, PROP, readFlagProvenance, readSync, stableStringify, syncedEnvsOf, syncPropertyKey, type Autotune, type CanonicalSnapshot, type Config, type Gate, type MigrationSourceKind, type NeutralFlag, type Prompt } from '@sslm/canonical';
 import { gateById, neutralFlagByKey, neutralSegmentByKey, segmentById } from '@sslm/mapper';
 import { ldChange, type LdFlagEnvInfo } from './drift.ts';
 import {
@@ -283,6 +283,64 @@ export function planMigration(req: PlanRequest): Plan {
   const gatesByUid = new Map(req.snapshots.flatMap((s) => s.gates.map((g) => [g.uid, g] as const)));
   const shellOwner = new Map<string, string>();
   const dir = req.directory ? { directory: req.directory } : {};
+  const aliasOf = (sourceId: string): string => snapshotOf.get(sourceId)?.source.alias ?? sourceId;
+
+  /**
+   * Consolidation of neutral flags (PLAN §12, §22.1 "What is a source?"; KNOWN-EDGE-CASES §16):
+   * several sources may produce one LaunchDarkly key, typically one PostHog project per stage
+   * mapped to one LaunchDarkly environment each. The first source to plan a key claims its shell
+   * (kind and variations, which are project-level in LaunchDarkly); a later source must match it
+   * and gets its own environment step with its own provenance. Two sources mapped to the *same*
+   * environment is a `source_collision` decision: one environment holds one targeting.
+   */
+  interface ShellClaim {
+    uid: string;
+    alias: string;
+    flagKind: 'boolean' | 'multivariate';
+    /** Variation values, stable JSON, in order. */
+    variations: string[];
+  }
+  const shellClaims = new Map<string, ShellClaim>();
+  /** Alias of the source whose item created the `shell:<key>` step (its name, description and tags are the flag's). */
+  const shellSource = new Map<string, string>();
+  /** `<ldEnv>|<key>` → the item whose targeting the environment step carries. */
+  const envClaims = new Map<string, PlanItem>();
+  /** `<ldEnv>|<segment key>` → the item whose rules the segment step carries. */
+  const segmentClaims = new Map<string, PlanItem>();
+
+  /**
+   * A source that maps no environment to `ldEnv` but does to another environment of this plan is
+   * planned there, not here (one PostHog project per stage, PLAN §22.1). A source that maps to
+   * none of the plan's environments still reports an error on its items, as before.
+   */
+  const plannedElsewhere = (snapshot: CanonicalSnapshot, ldEnv: string): boolean => {
+    const mapping = req.profile.sources[snapshot.source.sourceId]?.envMapping ?? {};
+    const to = new Set(Object.values(mapping).filter((v): v is string => !!v));
+    return !to.has(ldEnv) && req.ldEnvs.some((e) => e !== ldEnv && to.has(e));
+  };
+
+  /** Another source of this plan (not `snapshot`) with alias `alias` that produces neutral flag `key`. */
+  const peerFlagSource = (alias: string, snapshot: CanonicalSnapshot, key: string): CanonicalSnapshot | undefined =>
+    req.snapshots.find((s) => s !== snapshot && s.source.alias === alias && neutralFlagByKey(s).has(key));
+  /** The alias of another source of this plan whose provenance tags an existing LaunchDarkly segment carries. */
+  const peerSegmentOwner = (ldSeg: LdSegmentState, snapshot: CanonicalSnapshot): string | undefined =>
+    hasMigratedTag(ldSeg.tags) ? req.snapshots.find((s) => s !== snapshot && hasSourceTag(ldSeg.tags, s.source.alias))?.source.alias : undefined;
+
+  /**
+   * A flag another source of this workspace created keeps its flag-level provenance
+   * (`migration.source`, `migration.id`, …): the shell owner stays whoever created the flag in
+   * LaunchDarkly, however the plan's environment order falls, and each environment's sync record
+   * (`migration.sync.<env>`) is written by the source mapped to it.
+   */
+  const inheritProvenance = (shell: DesiredFlagShell, ldFlag: LdFlagState): DesiredFlagShell => {
+    const customProperties = { ...shell.customProperties };
+    for (const k of Object.values(PROP)) {
+      const cur = ldFlag.customProperties[k];
+      if (cur?.value?.length) customProperties[k] = { name: cur.name ?? customProperties[k]?.name ?? k, value: [...cur.value] };
+      else delete customProperties[k];
+    }
+    return { ...shell, customProperties };
+  };
 
   const addDecisions = (item: PlanItem, ds: DecisionPoint[], st: StaleDecision[]) => {
     for (const d of ds) {
@@ -344,6 +402,40 @@ export function planMigration(req: PlanRequest): Plan {
     });
     const l = lookupResolution(dp, req.resolutions, req.profile);
     if (l.status === 'resolved') return l.optionKey === 'overwrite' ? 'overwrite' : 'keep';
+    addDecisions(item, [dp], l.stale ? [{ decision: dp, previous: l.stale }] : []);
+    return 'open';
+  };
+
+  /**
+   * Two sources of this workspace produce one LaunchDarkly key (PLAN §12 consolidation;
+   * KNOWN-EDGE-CASES 16.2, 16.3, 19.26). With `difference` the shells cannot be one flag
+   * (different kind or variations): the later source can only skip. Without it, both sources are
+   * mapped to the same environment, which holds one targeting: keep the first source's (skip this
+   * item) or let this source win (the first source's item for the environment is skipped).
+   */
+  const sourceCollision = (item: PlanItem, subject: DecisionPoint['subject'], what: 'flag' | 'segment', ldKey: string, ldEnv: string, first: string, difference?: string): 'skip' | 'replace' | 'open' => {
+    const alias = aliasOf(item.sourceId);
+    const content = what === 'flag' ? 'targeting' : 'rules and targets';
+    const dp = decisionPoint({
+      type: 'source_collision',
+      severity: 'blocking',
+      subject: { ...subject, location: ldEnv },
+      path: `source_collision:${ldKey}:${ldEnv}`,
+      title: difference ? `“${ldKey}” comes from ${first} and ${alias} with different ${what === 'flag' ? 'variations' : 'rules'}` : `“${ldKey}” comes from both ${first} and ${alias} for ${ldEnv}`,
+      explanation: difference
+        ? `Sources ${first} and ${alias} both produce LaunchDarkly ${what} “${ldKey}”, but one flag cannot carry both: ${difference}. Variations are project-level in LaunchDarkly, shared by every environment. To migrate ${alias}'s flag under this key instead, deselect ${first}'s.`
+        : `Sources ${first} and ${alias} both produce LaunchDarkly ${what} “${ldKey}” and both are mapped to environment ${ldEnv}, which holds one ${content === 'targeting' ? 'targeting configuration' : 'set of rules and targets'}. ${first} planned it first.`,
+      sourceFragment: { key: ldKey, ldEnv, sources: [first, alias], ...(difference ? { difference } : {}) },
+      options: difference
+        ? [{ key: 'skip', label: 'Skip this item', explanation: `${first}'s ${what} is migrated under “${ldKey}”; ${alias}'s stays in its source.`, resultingFidelity: 'skipped' }]
+        : [
+            { key: 'skip', label: `Keep ${first}'s ${content}; skip this one`, explanation: `${ldEnv} gets ${first}'s ${content}; nothing from ${alias} is written for this ${what} in ${ldEnv}.`, resultingFidelity: 'skipped' },
+            { key: 'replace', label: `This source's ${content} wins; ${first}'s ${what} for this environment is skipped`, explanation: `${ldEnv} gets ${alias}'s ${content}; ${first}'s ${what} is skipped for ${ldEnv} with a reason. Other environments are not affected.`, resultingFidelity: 'full' },
+          ],
+      recommended: 'skip',
+    });
+    const l = lookupResolution(dp, req.resolutions, req.profile);
+    if (l.status === 'resolved') return l.optionKey === 'replace' && !difference ? 'replace' : 'skip';
     addDecisions(item, [dp], l.stale ? [{ decision: dp, previous: l.stale }] : []);
     return 'open';
   };
@@ -850,8 +942,13 @@ export function planMigration(req: PlanRequest): Plan {
     if (existing) {
       if (requiredBy) existing.requiredBy.push(requiredBy);
       else existing.dependency = false;
-      return existing.status === 'ready' ? { ok: true, stepId: `segment:${ldEnv}:${existing.ldKey}` } : { ok: false, reason: `segment “${key}” is ${existing.status}` };
+      if (existing.status === 'ready') return { ok: true, stepId: `segment:${ldEnv}:${existing.ldKey}` };
+      // Replaced by another source's segment of the same key in this environment (source_collision): that step satisfies the dependency.
+      const holder = segmentClaims.get(`${ldEnv}|${existing.ldKey}`);
+      if (existing.status === 'skipped' && holder && holder !== existing && holder.status === 'ready') return { ok: true, stepId: `segment:${ldEnv}:${existing.ldKey}` };
+      return { ok: false, reason: `segment “${key}” is ${existing.status}` };
     }
+    const alias = snapshot.source.alias;
     const r: NeutralSegmentMapResult = (req.mappers?.mapNeutralSegment ?? mapNeutralSegment)({ canonical: { snapshot }, entity: seg, profile: req.profile, resolutions: req.resolutions, capabilities: req.capabilities, env: { statsig: sourceEnv, ld: ldEnv }, now: req.now, ...dir });
     const ldSeg = req.ld.segments[ldEnv]?.get(r.segmentKey);
     const item: PlanItem = { uid: seg.uid, kind: 'segment', entityId: seg.key, sourceId: snapshot.source.sourceId, ldKey: r.segmentKey, ldEnv, statsigEnv: sourceEnv, status: 'ready', dependency: requiredBy !== null, requiredBy: requiredBy ? [requiredBy] : [], fidelity: r.fidelity, decisions: [], exists: !!ldSeg };
@@ -861,11 +958,42 @@ export function planMigration(req: PlanRequest): Plan {
       if (r.unresolved.length) return finishItem(item, 'blocked', `${r.unresolved.length} open decision${r.unresolved.length === 1 ? '' : 's'}`);
       return finishItem(item, 'skipped', r.skipped ?? 'not migratable');
     }
+    const subject: DecisionPoint['subject'] = { sourceId: snapshot.source.sourceId, kind: 'segment', uid: seg.uid, id: seg.key };
+    // Consolidation (PLAN §12): another source of this plan already produces this segment key in this environment.
+    const claimKey = `${ldEnv}|${r.segmentKey}`;
+    const held = segmentClaims.get(claimKey);
+    if (held && held.uid !== seg.uid) {
+      const first = aliasOf(held.sourceId);
+      const c = sourceCollision(item, subject, 'segment', r.segmentKey, ldEnv, first);
+      if (c === 'skip') {
+        // The other source's segment of this key stands in for this one: a flag that needs it is satisfied by that step.
+        finishItem(item, 'skipped', `segment “${r.segmentKey}” in ${ldEnv} keeps ${first}'s rules (source_collision)`);
+        return held.status === 'ready' ? { ok: true, stepId: `segment:${ldEnv}:${r.segmentKey}` } : { ok: false, reason: `segment “${key}” is skipped and ${first}'s is ${held.status}` };
+      }
+      if (c === 'open') return finishItem(item, 'blocked', `segment “${r.segmentKey}” in ${ldEnv} also comes from ${first}`);
+      steps.delete(`segment:${ldEnv}:${r.segmentKey}`);
+      finishItem(held, 'skipped', `${alias}'s rules for segment “${r.segmentKey}” in ${ldEnv} replace this one (source_collision)`);
+    }
+    segmentClaims.set(claimKey, item);
     let adopt = false;
-    if (ldSeg && !ownsSegment(ldSeg, snapshot.source.alias)) {
-      const c = collision(item, { sourceId: snapshot.source.sourceId, kind: 'segment', uid: seg.uid, id: seg.key }, r.segmentKey, 'segment', ldEnv);
-      if (c === 'skip') return finishItem(item, 'skipped', `LaunchDarkly segment “${r.segmentKey}” exists and was not adopted`);
-      if (c === 'open') return finishItem(item, 'blocked', `LaunchDarkly segment “${r.segmentKey}” already exists`);
+    if (ldSeg && !ownsSegment(ldSeg, alias)) {
+      // Written by another source of this workspace for this environment: the same question, unless it was just answered above.
+      const peer = peerSegmentOwner(ldSeg, snapshot);
+      if (peer && held) {
+        // `replace` chosen over the source whose item holds the environment: its LaunchDarkly segment is taken over.
+      } else if (peer) {
+        const c = sourceCollision(item, subject, 'segment', r.segmentKey, ldEnv, peer);
+        if (c === 'skip') {
+          // The LaunchDarkly segment the other source wrote stands in for this one; nothing to write.
+          finishItem(item, 'skipped', `segment “${r.segmentKey}” in ${ldEnv} keeps ${peer}'s rules (source_collision)`);
+          return { ok: true };
+        }
+        if (c === 'open') return finishItem(item, 'blocked', `segment “${r.segmentKey}” in ${ldEnv} was migrated from ${peer}`);
+      } else {
+        const c = collision(item, subject, r.segmentKey, 'segment', ldEnv);
+        if (c === 'skip') return finishItem(item, 'skipped', `LaunchDarkly segment “${r.segmentKey}” exists and was not adopted`);
+        if (c === 'open') return finishItem(item, 'blocked', `LaunchDarkly segment “${r.segmentKey}” already exists`);
+      }
       adopt = true;
     }
     if (r.unresolved.length) return finishItem(item, 'blocked', `${r.unresolved.length} open decision${r.unresolved.length === 1 ? '' : 's'}`);
@@ -873,8 +1001,9 @@ export function planMigration(req: PlanRequest): Plan {
     for (const d of r.dependencies) {
       if (d.kind !== 'segment') continue;
       const inner = planNeutralSegment(snapshot, d.entityId ?? d.key, sourceEnv, ldEnv, seg.uid, [...stack, seg.uid]);
-      if (inner.ok && inner.stepId) deps.push(inner.stepId);
-      else return finishItem(item, 'blocked', `depends on ${inner.reason ?? `segment “${d.key}”`}`);
+      if (inner.ok) {
+        if (inner.stepId) deps.push(inner.stepId);
+      } else return finishItem(item, 'blocked', `depends on ${inner.reason ?? `segment “${d.key}”`}`);
     }
     const stepId = `segment:${ldEnv}:${r.segmentKey}`;
     const version = seg.environments.find((e) => e.env === sourceEnv)?.version;
@@ -902,7 +1031,11 @@ export function planMigration(req: PlanRequest): Plan {
         return { ok: false, reason: 'prerequisite cycle' };
       }
       if (existing.status === 'skipped' && existing.sync === 'in_sync') return { ok: true };
-      return existing.status === 'ready' ? { ok: true, stepId: `env:${ldEnv}:${existing.ldKey}` } : { ok: false, reason: `flag “${flag.key}” is ${existing.status}` };
+      if (existing.status === 'ready') return { ok: true, stepId: `env:${ldEnv}:${existing.ldKey}` };
+      // Replaced by another source's flag of the same key in this environment (source_collision): that step satisfies the prerequisite.
+      const holder = envClaims.get(`${ldEnv}|${existing.ldKey}`);
+      if (existing.status === 'skipped' && holder && holder !== existing && holder.status === 'ready') return { ok: true, stepId: `env:${ldEnv}:${existing.ldKey}` };
+      return { ok: false, reason: `flag “${flag.key}” is ${existing.status}` };
     }
     const sourceEnv = envFor(snapshot.source.sourceId, ldEnv);
     const item: PlanItem = { uid: flag.uid, kind: 'flag', entityId: flag.key, sourceId: snapshot.source.sourceId, ldKey: flag.key, ldEnv, status: 'ready', dependency: requiredBy !== null, requiredBy: requiredBy ? [requiredBy] : [], decisions: [], exists: false };
@@ -919,21 +1052,70 @@ export function planMigration(req: PlanRequest): Plan {
     const ldFlag = req.ld.flags.get(r.flagKey);
     item.exists = !!ldFlag;
     item.owned = !!ldFlag && !!flagOwner(ldFlag);
+    const alias = snapshot.source.alias;
+    const subject: DecisionPoint['subject'] = { sourceId: snapshot.source.sourceId, kind: 'flag', uid: flag.uid, id: flag.key };
     let adopt = false;
+    /** The flag exists and another source of this workspace created it: its flag-level provenance is kept. */
+    let inheritFrom: LdFlagState | undefined;
+    const variations = r.shell.variations.map((v) => stableStringify(v.value));
     const other = shellOwner.get(r.flagKey);
-    if (other && other !== flag.uid) return finishItem(item, 'error', `${describeOwner(other)} also produces LaunchDarkly key “${r.flagKey}” (migrate one source at a time; consolidation arrives in M8)`);
-    shellOwner.set(r.flagKey, flag.uid);
+    if (other && other !== flag.uid) {
+      const claim = shellClaims.get(r.flagKey);
+      // A StatSig gate, config or autotune under the same key: the two vocabularies are not consolidated.
+      if (!claim) return finishItem(item, 'error', `${describeOwner(other)} also produces LaunchDarkly key “${r.flagKey}” (migrate one source at a time)`);
+      // Consolidation (PLAN §12): another source of this plan produces this key. The shell (kind and
+      // variations) is project-level, so it must be the same flag; the targeting is per environment.
+      const difference =
+        r.flagKind !== claim.flagKind
+          ? `${claim.alias} has a ${claim.flagKind} flag and ${alias} a ${r.flagKind} one`
+          : variations.join('\u0000') !== claim.variations.join('\u0000')
+            ? `${claim.alias}'s variations are ${claim.variations.join(', ')} and ${alias}'s are ${variations.join(', ')}`
+            : undefined;
+      if (difference) {
+        const c = sourceCollision(item, subject, 'flag', r.flagKey, ldEnv, claim.alias, difference);
+        if (c === 'skip') return finishItem(item, 'skipped', `“${r.flagKey}” is migrated from ${claim.alias}, whose flag has ${r.flagKind !== claim.flagKind ? 'another kind' : 'other variations'} (source_collision)`);
+        return finishItem(item, 'blocked', `“${r.flagKey}” also comes from ${claim.alias}, with ${r.flagKind !== claim.flagKind ? 'another kind' : 'other variations'}`);
+      }
+    } else {
+      shellOwner.set(r.flagKey, flag.uid);
+      shellClaims.set(r.flagKey, { uid: flag.uid, alias, flagKind: r.flagKind, variations });
+    }
+    // One targeting per environment: a second source mapped to the same environment must skip or replace.
+    const envKey = `${ldEnv}|${r.flagKey}`;
+    const held = envClaims.get(envKey);
+    if (held && held.uid !== flag.uid) {
+      const first = aliasOf(held.sourceId);
+      const c = sourceCollision(item, subject, 'flag', r.flagKey, ldEnv, first);
+      if (c === 'skip') return finishItem(item, 'skipped', `“${r.flagKey}” in ${ldEnv} keeps ${first}'s targeting (source_collision)`);
+      if (c === 'open') return finishItem(item, 'blocked', `“${r.flagKey}” in ${ldEnv} also comes from ${first}`);
+      steps.delete(`env:${ldEnv}:${r.flagKey}`);
+      finishItem(held, 'skipped', `${alias}'s targeting for “${r.flagKey}” in ${ldEnv} replaces this one (source_collision)`);
+    }
+    envClaims.set(envKey, item);
     if (ldFlag) {
       const owner = flagOwner(ldFlag);
-      if (owner && (owner.id !== flag.key || owner.source !== snapshot.source.alias)) return finishItem(item, 'error', `LaunchDarkly flag “${r.flagKey}” was migrated from ${owner.source}/${owner.id}; consolidation arrives in M8`);
+      if (owner && (owner.id !== flag.key || owner.source !== alias)) {
+        // Created by another source of this workspace that produces the same key (consolidation):
+        // accepted when that source is mapped to other environments; when it is mapped to this one
+        // too and its item is not in this plan, the environment's targeting is its, so the same
+        // question as above is asked. Anything else is a flag of another migration.
+        const peer = owner.id === flag.key ? peerFlagSource(owner.source, snapshot, flag.key) : undefined;
+        if (!peer) return finishItem(item, 'error', `LaunchDarkly flag “${r.flagKey}” was migrated from ${owner.source}/${owner.id}, which is not a source of this workspace producing this key`);
+        inheritFrom = ldFlag;
+        if (!held && envFor(peer.source.sourceId, ldEnv)) {
+          const c = sourceCollision(item, subject, 'flag', r.flagKey, ldEnv, owner.source);
+          if (c === 'skip') return finishItem(item, 'skipped', `“${r.flagKey}” in ${ldEnv} keeps ${owner.source}'s targeting (source_collision)`);
+          if (c === 'open') return finishItem(item, 'blocked', `“${r.flagKey}” in ${ldEnv} was migrated from ${owner.source}`);
+        }
+      }
       if (ldFlag.kind && ldFlag.kind !== r.flagKind) return finishItem(item, 'error', `LaunchDarkly flag “${r.flagKey}” exists and is a ${ldFlag.kind} flag, the source flag is ${r.flagKind}`);
       if (!owner) {
-        const c = collision(item, { sourceId: snapshot.source.sourceId, kind: 'flag', uid: flag.uid, id: flag.key }, r.flagKey, 'flag', 'flag key');
+        const c = collision(item, subject, r.flagKey, 'flag', 'flag key');
         if (c === 'skip') return finishItem(item, 'skipped', `LaunchDarkly flag “${r.flagKey}” exists and was not adopted`);
         if (c === 'open') return finishItem(item, 'blocked', `LaunchDarkly flag “${r.flagKey}” already exists`);
         adopt = true;
       } else if (r.flagKind === 'multivariate') {
-        const g = variationGuard(item, { sourceId: snapshot.source.sourceId, kind: 'flag', uid: flag.uid, id: flag.key }, ldFlag, r.shell, ldEnv);
+        const g = variationGuard(item, subject, ldFlag, r.shell, ldEnv);
         if (g === 'skip') return finishItem(item, 'skipped', `new variations for “${r.flagKey}” were not appended`);
         if (g === 'open') return finishItem(item, 'blocked', `new variations affect environments already migrated`);
       }
@@ -941,7 +1123,7 @@ export function planMigration(req: PlanRequest): Plan {
 
     item.sync = migrationStatus(ldFlag, ldEnv, r).status;
     if (req.skipInSync && item.sync === 'in_sync') return finishItem(item, 'skipped', IN_SYNC_REASON);
-    const ldDrift = drift(item, { sourceId: snapshot.source.sourceId, kind: 'flag', uid: flag.uid, id: flag.key }, ldFlag, ldEnv);
+    const ldDrift = drift(item, subject, ldFlag, ldEnv);
     if (ldDrift === 'keep') return finishItem(item, 'skipped', `LaunchDarkly targeting in ${ldEnv} changed since the last sync and is kept`);
     if (ldDrift === 'open') return finishItem(item, 'blocked', `LaunchDarkly targeting in ${ldEnv} changed since the last sync`);
 
@@ -950,8 +1132,9 @@ export function planMigration(req: PlanRequest): Plan {
     for (const d of r.dependencies) {
       if (d.kind === 'segment') {
         const sg = planNeutralSegment(snapshot, d.entityId ?? d.key, sourceEnv, ldEnv, flag.uid);
-        if (sg.ok && sg.stepId) depSteps.push(sg.stepId);
-        else depProblems.push(sg.reason ?? `segment ${d.key}`);
+        if (sg.ok) {
+          if (sg.stepId) depSteps.push(sg.stepId);
+        } else depProblems.push(sg.reason ?? `segment ${d.key}`);
       } else if (d.kind === 'flag') {
         const ref = d.entityId === undefined ? undefined : neutralFlagByKey(snapshot).get(d.entityId);
         if (!ref) {
@@ -970,7 +1153,13 @@ export function planMigration(req: PlanRequest): Plan {
     if (depProblems.length) return finishItem(item, 'blocked', `depends on: ${depProblems.join('; ')}`);
 
     const shellId = `shell:${r.flagKey}`;
-    if (!steps.has(shellId)) steps.set(shellId, { id: shellId, deps: [], op: 'upsert_flag_shell', key: r.flagKey, exists: !!ldFlag, adopt, desired: r.shell });
+    if (!steps.has(shellId)) {
+      steps.set(shellId, { id: shellId, deps: [], op: 'upsert_flag_shell', key: r.flagKey, exists: !!ldFlag, adopt, desired: inheritFrom ? inheritProvenance(r.shell, inheritFrom) : r.shell });
+      shellSource.set(r.flagKey, alias);
+    } else if (shellSource.get(r.flagKey) !== alias) {
+      // Another source's item created the shell: the flag's settings are its; this source writes its environment.
+      item.fidelity?.notes.push({ fidelity: 'full', message: `Flag settings (name, description, tags) come from source ${shellSource.get(r.flagKey)}, which planned this key first.`, location: 'flag settings' });
+    }
     const stepId = `env:${ldEnv}:${r.flagKey}`;
     const version = flag.environments.find((e) => e.env === sourceEnv)?.version ?? flag.version;
     steps.set(stepId, {
@@ -1070,6 +1259,8 @@ export function planMigration(req: PlanRequest): Plan {
         errors.push(`Flag ${uid} is not in the current snapshots.`);
         continue;
       }
+      // One PostHog project per stage (PLAN §22.1): a source mapped to another environment of this plan is planned there.
+      if (plannedElsewhere(f.snapshot, ldEnv)) continue;
       planNeutralFlag(f.flag, f.snapshot, ldEnv, null, []);
     }
     for (const uid of req.segments ?? []) {
@@ -1080,6 +1271,7 @@ export function planMigration(req: PlanRequest): Plan {
         errors.push(`Segment ${uid} is not in the current snapshots.`);
         continue;
       }
+      if (n && plannedElsewhere(snapshot, ldEnv)) continue;
       const sourceEnv = envFor(snapshot.source.sourceId, ldEnv);
       if (!sourceEnv) {
         errors.push(`No environment of ${snapshot.source.alias} is mapped to LaunchDarkly “${ldEnv}”, so segment ${uid} cannot be planned there.`);

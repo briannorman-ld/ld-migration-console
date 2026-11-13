@@ -2,11 +2,12 @@
  * PostHog source adapter, read side (PLAN §22.2): everything the console needs from one PostHog
  * project, read with the lenient schemas of client.ts and never written to. The flag list carries
  * the full `filters`, so a 450-flag project is about a dozen requests plus the members of the
- * static and computed cohorts its flags reference.
+ * static and computed cohorts its flags reference (a page of 1,000 persons per request; see
+ * `readMembers` for the cap and the fallback when the persons filter is ignored).
  */
 import { HttpError } from '@sslm/http';
-import { PostHogAuthError, type PostHogClient, type PostHogSchemaIssue } from './client.ts';
-import type { PhCohort, PhEarlyAccessFeature, PhExperiment, PhFeatureFlag, PhGroupType, PhMember, PhPerson, PhProject, PhPropertyDefinition, PhScheduledChange } from './schemas.ts';
+import { POSTHOG_PERSONS_PAGE, PostHogAuthError, type PostHogClient, type PostHogSchemaIssue } from './client.ts';
+import type { PhCohort, PhEarlyAccessFeature, PhExperiment, PhFeatureFlag, PhGroupType, PhMember, PhPerson, PhPersonActor, PhProject, PhPropertyDefinition, PhScheduledChange } from './schemas.ts';
 
 export interface RawPostHogSnapshot {
   kind: 'posthog';
@@ -47,12 +48,24 @@ export interface PostHogReadOptions {
   signal?: AbortSignal;
   onProgress?: (p: PostHogReadProgress) => void;
   /**
-   * Most members a cohort may have before the console stops reading them one by one and reports
-   * the membership as unreadable (export a CSV from PostHog instead). The persons list filtered by
-   * cohort normally returns them in pages of 100, so this only matters when that filter is ignored.
+   * Most members a cohort may have before the console reports its membership as unreadable
+   * (export the cohort as CSV in PostHog and import it into the LaunchDarkly segment) instead of
+   * reading it. Default `DEFAULT_MAX_MEMBERS_PER_COHORT` (100,000): at 1,000 members a page that
+   * is 100 requests, a quarter of the per-key minute budget, and the mapper already turns lists
+   * above 15,000 ids into big segments, so the cap is about the console's time, not LD's limits.
+   * A cohort whose own `count` is above it is refused before any member request.
    */
   maxMembersPerCohort?: number;
+  /**
+   * Most members read one by one (`GET /persons/{id}/`) when the server ignored the `cohort`
+   * filter of the persons list and the actor list is the only way to the distinct ids. Default
+   * `DEFAULT_MAX_SINGLE_PERSON_READS` (500); beyond it the membership is reported unreadable.
+   */
+  maxSinglePersonReads?: number;
 }
+
+export const DEFAULT_MAX_MEMBERS_PER_COHORT = 100_000;
+export const DEFAULT_MAX_SINGLE_PERSON_READS = 500;
 
 export class PostHogReadAuthError extends Error {
   constructor(message: string, override readonly cause: unknown) {
@@ -157,19 +170,18 @@ export async function readPostHogProject(client: PostHogClient, projectId: strin
   total += listCohorts.length;
   const cohortMembers: Record<string, PhPerson[]> = {};
   const membersUnreadable: Record<string, string> = {};
-  const cap = opts.maxMembersPerCohort ?? 5000;
+  const limits: MemberLimits = { cap: opts.maxMembersPerCohort ?? DEFAULT_MAX_MEMBERS_PER_COHORT, singleReads: opts.maxSinglePersonReads ?? DEFAULT_MAX_SINGLE_PERSON_READS };
   for (const c of listCohorts) {
-    const endpoint = `${base}/cohorts/${c.id}/persons/`;
+    const endpoint = `${base}/persons/?cohort=${c.id}`;
     progress(endpoint);
     try {
-      cohortMembers[String(c.id)] = await readMembers(client, projectId, c, cap, opts.signal);
+      const r = await readMembers(client, projectId, c, limits, opts.signal, (detail) => progress(`${endpoint} ${detail}`));
+      if (r.kind === 'members') cohortMembers[String(c.id)] = r.members;
+      else membersUnreadable[String(c.id)] = r.reason;
     } catch (e) {
       if (opts.signal?.aborted) throw e;
-      if (e instanceof TooManyMembers) membersUnreadable[String(c.id)] = e.message;
-      else {
-        membersUnreadable[String(c.id)] = reason(e);
-        skipped.push({ endpoint, reason: reason(e) });
-      }
+      membersUnreadable[String(c.id)] = reason(e);
+      skipped.push({ endpoint, reason: reason(e) });
     }
     done++;
   }
@@ -203,39 +215,111 @@ export function needsMembers(c: PhCohort): boolean {
   return t === 'behavioral' || t === 'realtime' || t === 'analytical';
 }
 
-class TooManyMembers extends Error {}
+interface MemberLimits {
+  cap: number;
+  singleReads: number;
+}
+
+type MembersResult = { kind: 'members'; members: PhPerson[] } | { kind: 'unreadable'; reason: string };
+
+const fmt = (x: number) => x.toLocaleString('en-US');
+const CSV_HINT = 'Export the cohort as CSV in PostHog and import it into the LaunchDarkly segment.';
 
 /**
- * The cohort's members with their distinct ids. `/cohorts/{id}/persons/` names the members but
- * has no distinct ids; `/persons/?cohort=` has them but is not in the published schema, so its
- * result is checked against the member list and any member it missed is read on its own.
+ * The cohort's members with their distinct ids, at scale (PLAN §22.2):
+ *
+ * 1. The cohort's own `count` refuses a cohort above the cap before any member request (the count
+ *    is PostHog's last calculation; while `is_calculating` it may be stale, which the progress
+ *    string says).
+ * 2. `/persons/?cohort=<id>` is paged at 1,000 (the route's maximum), with progress per page and
+ *    the AbortSignal honoured between pages (the transport honours it within one). Reading past
+ *    the cap stops with an "unreadable" result, not an error.
+ * 3. That filter is not in the published schema. It is judged ignored when the envelope `count`
+ *    differs from the cohort's known `count`, when the list is empty although the cohort is not,
+ *    or (count unknown or being recalculated) when the filtered total equals the project's whole
+ *    person count, probed with one `/persons/?limit=1`. Then `/cohorts/{id}/persons/` names the
+ *    members (actors without distinct ids): persons already read that match an actor are kept and
+ *    the rest are read one by one with `GET /persons/{id}/`, up to `singleReads`.
  */
-async function readMembers(client: PostHogClient, projectId: string, c: PhCohort, cap: number, signal?: AbortSignal): Promise<PhPerson[]> {
-  const actors = await client.listCohortPersons(projectId, c.id, signal);
-  if (actors.length > cap) throw new TooManyMembers(`${actors.length.toLocaleString('en-US')} members; more than the console reads from the API (${cap.toLocaleString('en-US')}). Export the cohort as CSV in PostHog and import it into the LaunchDarkly segment.`);
-  const wanted = new Map<string, (typeof actors)[number]>();
-  for (const a of actors) {
-    wanted.set(a.id, a);
-    if (a.uuid) wanted.set(a.uuid, a);
+async function readMembers(client: PostHogClient, projectId: string, c: PhCohort, limits: MemberLimits, signal: AbortSignal | undefined, detail: (s: string) => void): Promise<MembersResult> {
+  const calculating = c.is_calculating === true;
+  const declared = typeof c.count === 'number' ? c.count : undefined;
+  const known = calculating ? undefined : declared;
+  const state = calculating ? ' (recalculating)' : '';
+  if (declared !== undefined && declared > limits.cap) {
+    return { kind: 'unreadable', reason: `${fmt(declared)} members${calculating ? ' at the last calculation' : ''}; more than the console reads from the API (${fmt(limits.cap)}). ${CSV_HINT}` };
+  }
+
+  // 2. The filtered persons list, a page at a time.
+  const filtered: PhPerson[] = [];
+  let envelopeCount: number | undefined;
+  let filterIgnored = false;
+  let offset = 0;
+  for (let guard = 0; guard < 1000; guard++) {
+    if (signal?.aborted) throw abortError(signal);
+    const page = await client.listPersonsPage(projectId, { cohortId: c.id, limit: POSTHOG_PERSONS_PAGE, offset, signal });
+    filtered.push(...page.results);
+    envelopeCount ??= page.count;
+    detail(`(${fmt(filtered.length)}/${fmt(envelopeCount ?? known ?? declared ?? filtered.length)})${state}`);
+    // 3. Mismatch against the cohort's own count: the server ignored the filter. Stop paging now;
+    // the project's whole person list is not what we want and may be far larger than the cohort.
+    if (known !== undefined && envelopeCount !== undefined && envelopeCount !== known) {
+      filterIgnored = true;
+      break;
+    }
+    if (filtered.length > limits.cap || (envelopeCount !== undefined && envelopeCount > limits.cap)) {
+      return { kind: 'unreadable', reason: `${fmt(Math.max(filtered.length, envelopeCount ?? 0))} members; more than the console reads from the API (${fmt(limits.cap)}). ${CSV_HINT}` };
+    }
+    // A server may clamp `limit` below what was asked (the schema says 1,000; Cloud is unverified), so
+    // a short page is not the end: only a missing `next` or an empty page is.
+    if (!page.next || page.results.length === 0) break;
+    offset += page.results.length;
+  }
+  if (!filterIgnored && filtered.length === 0 && (known ?? declared ?? 0) > 0) filterIgnored = true;
+  if (!filterIgnored && known === undefined && filtered.length > 0) {
+    // No trustworthy count to compare with: the filter was ignored if it returned everyone.
+    const probe = await client.listPersonsPage(projectId, { limit: 1, signal });
+    if (probe.count !== undefined && probe.count > 0 && probe.count === (envelopeCount ?? filtered.length)) filterIgnored = true;
+  }
+  if (!filterIgnored) return { kind: 'members', members: dedupe(filtered) };
+
+  // Fallback: the actor list names the members; distinct ids come from what was read, else one by one.
+  detail(`(the cohort filter was ignored; reading /cohorts/${c.id}/persons/)${state}`);
+  const actors = await client.listCohortPersons(projectId, c.id, { signal, onPage: (read) => detail(`(${fmt(read)} members named)${state}`) });
+  if (actors.length > limits.cap) return { kind: 'unreadable', reason: `${fmt(actors.length)} members; more than the console reads from the API (${fmt(limits.cap)}). ${CSV_HINT}` };
+  const byKey = new Map<string, PhPerson>();
+  for (const p of filtered) {
+    byKey.set(p.id, p);
+    if (p.uuid) byKey.set(p.uuid, p);
   }
   const out = new Map<string, PhPerson>();
-  let filtered: PhPerson[] = [];
-  try {
-    filtered = await client.listPersonsInCohort(projectId, c.id, signal);
-  } catch (e) {
-    if (signal?.aborted) throw e;
-    // The persons list may be closed to this key; the per-person reads below still work.
-  }
-  for (const p of filtered) {
-    const hit = wanted.get(p.id) ?? (p.uuid ? wanted.get(p.uuid) : undefined);
-    if (hit) out.set(hit.id, p);
-  }
+  const missing: PhPersonActor[] = [];
   for (const a of actors) {
-    if (out.has(a.id)) continue;
-    const p = await client.getPerson(projectId, a.id, signal);
+    const hit = byKey.get(a.id) ?? (a.uuid ? byKey.get(a.uuid) : undefined);
+    if (hit) out.set(a.id, hit);
+    else missing.push(a);
+  }
+  if (missing.length > limits.singleReads) {
+    return { kind: 'unreadable', reason: `${fmt(actors.length)} members, ${fmt(missing.length)} of them readable only one by one because the persons list ignored the cohort filter; more than the console reads that way (${fmt(limits.singleReads)}). ${CSV_HINT}` };
+  }
+  for (const [i, a] of missing.entries()) {
+    if (signal?.aborted) throw abortError(signal);
+    detail(`(${fmt(out.size)}/${fmt(actors.length)}, reading member ${fmt(i + 1)} of ${fmt(missing.length)} singly)${state}`);
+    const p = (await client.getPerson(projectId, a.id, signal)) ?? (a.uuid && a.uuid !== a.id ? await client.getPerson(projectId, a.uuid, signal) : null);
     if (p) out.set(a.id, p);
   }
+  return { kind: 'members', members: [...out.values()].sort((a, b) => a.id.localeCompare(b.id)) };
+}
+
+/** A paged list can repeat a person when the list shifts under it; keep one per id, sorted. */
+function dedupe(persons: PhPerson[]): PhPerson[] {
+  const out = new Map<string, PhPerson>();
+  for (const p of persons) if (!out.has(p.id)) out.set(p.id, p);
   return [...out.values()].sort((a, b) => a.id.localeCompare(b.id));
+}
+
+function abortError(signal: AbortSignal): unknown {
+  return signal.reason ?? new DOMException('Aborted', 'AbortError');
 }
 
 function reason(e: unknown): string {

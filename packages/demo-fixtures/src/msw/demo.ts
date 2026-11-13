@@ -3,6 +3,7 @@ import { ACME_PROJECTS, type AcmeAlias } from '../acme/index.ts';
 import type { ConsoleProjectDataset } from '../console/dataset.ts';
 import { acmeLegacyProject } from '../ld/acme-legacy.ts';
 import { acmeHogProject } from '../posthog/acme-hog.ts';
+import { acmeHogStagingProject } from '../posthog/acme-hog-staging.ts';
 import { createLdApiHandlers } from './ld-api.ts';
 import { createPostHogApiHandlers } from './posthog-api.ts';
 import { createStatsigConsoleHandlers, type MockStatsigOptions } from './statsig-console.ts';
@@ -25,6 +26,15 @@ export function demoPostHogBaseUrl(root: string): string {
 }
 
 /**
+ * Same-origin origin for the demo's second PostHog project, "Acme Hog Staging" (PLAN §22.1: one
+ * project per stage, each its own source). A distinct origin, because a PostHog source is one
+ * host plus one project id and the mock serves one project per handler set; the same demo key opens both.
+ */
+export function demoPostHogStagingBaseUrl(root: string): string {
+  return `${root.replace(/\/+$/, '')}/__demo/posthog-staging`;
+}
+
+/**
  * Same-origin path, so the strict CSP (`connect-src 'self' …`) needs no extra host for the demo.
  * `root` is the app's origin plus any base path (GitHub Pages serves under /<repo>/), which also
  * keeps the URL inside the mock service worker's scope.
@@ -38,7 +48,7 @@ export interface DemoHandlerOptions extends Omit<MockStatsigOptions, 'baseUrl' |
   getDataset: (alias: AcmeAlias) => ConsoleProjectDataset;
 }
 
-/** Handlers for both Acme StatSig demo projects, the "Acme Legacy" LD source project and the "Acme Hog" PostHog project. */
+/** Handlers for both Acme StatSig demo projects, the "Acme Legacy" LD source project and the "Acme Hog" and "Acme Hog Staging" PostHog projects. */
 export function createAcmeDemoHandlers(opts: DemoHandlerOptions): HttpHandler[] {
   const { origin, getDataset, ...rest } = opts;
   return [
@@ -53,5 +63,6 @@ export function createAcmeDemoHandlers(opts: DemoHandlerOptions): HttpHandler[] 
     ),
     ...createLdApiHandlers({ baseUrl: demoLdBaseUrl(origin), getProject: acmeLegacyProject, token: DEMO_LD_SOURCE_TOKEN, ...(rest.latencyMs ? { latencyMs: rest.latencyMs } : {}) }),
     ...createPostHogApiHandlers({ baseUrl: demoPostHogBaseUrl(origin), getProject: acmeHogProject, key: DEMO_POSTHOG_KEY, ...(rest.latencyMs ? { latencyMs: rest.latencyMs } : {}) }),
+    ...createPostHogApiHandlers({ baseUrl: demoPostHogStagingBaseUrl(origin), getProject: acmeHogStagingProject, key: DEMO_POSTHOG_KEY, ...(rest.latencyMs ? { latencyMs: rest.latencyMs } : {}) }),
   ];
 }

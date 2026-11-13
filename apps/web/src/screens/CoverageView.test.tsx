@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { CanonicalSnapshot, Experiment, Holdout, Metric } from '@sslm/canonical';
+import type { CanonicalSnapshot, Experiment, Holdout, Metric, NeutralFlag } from '@sslm/canonical';
 import { AREAS, COVERAGE } from '@sslm/coverage';
 import type { SourceRecord } from '@sslm/store';
 import { setFlagOverride } from '../lib/flags.ts';
@@ -88,6 +88,29 @@ describe('CoverageView', () => {
     expect(screen.getByText('Partial rollout re-bucketing')).toBeTruthy();
     expect(screen.getByRole('link', { name: 'LaunchDarkly ↗' })).toBeTruthy();
     expect(screen.getByText(/rows 4\.1, 4\.2/)).toBeTruthy();
+  });
+
+  it('counts the flags and segments of a PostHog or LaunchDarkly source apart and opens their explorer', () => {
+    const onOpenNeutral = vi.fn();
+    const env = { env: 'Acme Hog', on: true, offVariation: 1, fallthrough: { variation: 1 }, rules: [], targets: [], prerequisites: [] };
+    const flag = (key: string, caveats?: NeutralFlag['caveats']): NeutralFlag => ({ kind: 'flag', uid: `s2/flag/${key}`, key, name: key, description: '', flagKind: 'boolean', variations: [{ value: true }, { value: false }], tags: [], temporary: false, archived: false, customProperties: {}, experiments: [], environments: [env], ...(caveats ? { caveats } : {}) });
+    const hog = {
+      ...snapshot,
+      source: { sourceId: 's2', sourceKind: 'posthog', alias: 'hog' },
+      gates: [], configs: [], segments: [], experiments: [], layers: [], holdouts: [], autotunes: [], metrics: [], paramStores: [],
+      neutral: { flags: [flag('hog-a'), flag('hog-b', [{ kind: 'remote_config' }]), { ...flag('hog-old'), archived: true }], segments: [{ kind: 'segment', uid: 's2/segment/vips', key: 'vips', name: 'VIPs', description: '', tags: [], archived: false, environments: [{ env: 'Acme Hog', rules: [], included: [{ contextKind: 'user', values: ['u-1'] }], excluded: [] }] }], contextKinds: [] },
+    } as unknown as CanonicalSnapshot;
+    const hogSource: SourceRecord = { ...source, id: 's2', alias: 'hog', label: 'acme-hog (PostHog)', kind: 'posthog' };
+    render(<CoverageView sources={[hogSource]} snapshots={{ s2: hog }} onOpenResource={vi.fn()} onOpenNeutral={onOpenNeutral} />);
+    // 2 live flags + 1 segment; the archived flag is skipped and said so.
+    expect(screen.getByText(/1 archived item skipped/)).toBeTruthy();
+    const flags = screen.getByRole('button', { name: /Source flags\s*2/ });
+    expect(flags.textContent).toMatch(/Source flags\s*2\s*1\s*1/);
+    fireEvent.click(flags);
+    expect(onOpenNeutral).toHaveBeenCalledWith('flag');
+    fireEvent.click(screen.getByRole('button', { name: /Source segments\s*1/ }));
+    expect(onOpenNeutral).toHaveBeenCalledWith('segment');
+    expect(screen.getByRole('button', { name: /^Migrates(?! with)/ }).textContent).toMatch(/2\s*of your 3 items/);
   });
 
   it('counts the workspace inventory against the matrix and opens a kind', () => {

@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { CanonicalSnapshot } from '@sslm/canonical';
 import { envBudget, estimateEnvBytes, mapGate, mapSegment, type Resolution } from '@sslm/mapper';
 import { flagOwner, IN_SYNC_REASON, migrationStatus, ownsSegment, planMigration, recommendedResolutions, syncPropertyKey, type LdProjectState, type Plan, type PlanRequest, type PlanStep } from '../src/index.ts';
-import { acmeSnapshot, CAPS, DIRECTORY, NOW, profileFor, server } from './fixtures.ts';
+import { acmeSnapshot, CAPS, DIRECTORY, hogSnapshot, hogStagingSnapshot, NOW, profileFor, server } from './fixtures.ts';
 
 beforeAll(() => server.listen({ onUnhandledFrame: 'error' }));
 afterAll(() => server.close());
@@ -610,5 +610,259 @@ describe('mappers supplied by the caller', () => {
     expect(gates).toBe(2);
     expect(segments).toBeGreaterThan(0);
     expect(counted).toEqual(plain);
+  });
+});
+
+describe('two PostHog projects → one LaunchDarkly project (PLAN §12, §22.1; KNOWN-EDGE-CASES §16, 19.26)', () => {
+  let hog: CanonicalSnapshot;
+  let staging: CanonicalSnapshot;
+  beforeAll(async () => {
+    hog = await hogSnapshot();
+    staging = await hogStagingSnapshot();
+  });
+  const hogUid = (key: string) => hog.neutral!.flags.find((f) => f.key === key)!.uid;
+  const stagingUid = (key: string) => staging.neutral!.flags.find((f) => f.key === key)!.uid;
+  const hogSeg = (key: string) => hog.neutral!.segments.find((s) => s.key === key)!.uid;
+  const stagingSeg = (key: string) => staging.neutral!.segments.find((s) => s.key === key)!.uid;
+  const ldWithKinds: LdProjectState = { ...EMPTY_LD, contextKinds: ['user', 'company', 'workspace'] };
+  /** Blocking decisions `acceptAll` leaves alone, answered as workspace policies. */
+  const POLICIES = { variant_payloads: 'keys', cohort_snapshot: 'skip' };
+  /** `hog` → production, `hog-staging` → test unless `stagingTo` says otherwise. */
+  function hogRequest(over: Partial<PlanRequest>, stagingTo = 'test'): PlanRequest {
+    return {
+      gates: [],
+      ldEnvs: ['production', 'test'],
+      snapshots: [hog, staging],
+      profile: { version: 1, sources: { [hog.source.sourceId]: { envMapping: { 'Acme Hog': 'production' }, unitTypeKinds: {} }, [staging.source.sourceId]: { envMapping: { 'Acme Hog Staging': stagingTo }, unitTypeKinds: {} } }, attributes: {}, policies: POLICIES },
+      resolutions: new Map(),
+      directory: DIRECTORY,
+      capabilities: { ...CAPS, existingContextKinds: ['user', 'company', 'workspace'] },
+      ld: ldWithKinds,
+      now: NOW,
+      ...over,
+    };
+  }
+  const ids = (plan: Plan) => plan.steps.map((s) => s.id);
+  const envStep = (plan: Plan, id: string) => {
+    const s = plan.steps.find((x) => x.id === id);
+    if (!s || s.op !== 'update_flag_env') throw new Error(`${id} is not an environment step`);
+    return s;
+  };
+  const resolve = (plan: Plan, type: string, optionKey: string): Map<string, Resolution> => {
+    const out = new Map<string, Resolution>();
+    for (const d of plan.decisions.filter((d) => d.type === type)) out.set(d.id, { id: d.id, type: d.type, optionKey, scope: 'resource', fingerprint: d.fingerprint, decidedAt: NOW });
+    return out;
+  };
+
+  it('(a) the same key from both projects in different environments: one shell, one environment step per source, each with its own provenance', () => {
+    const keys = ['hog-kill-switch', 'hog-checkout-redesign', 'hog-pricing-page', 'hog-company-tier'];
+    const plan = planMigration(acceptAll(hogRequest({ flags: [...keys.map(hogUid), ...keys.map(stagingUid)] })));
+    expect(plan.errors).toEqual([]);
+    expect(plan.items.filter((i) => i.status === 'error' || i.status === 'blocked')).toEqual([]);
+    expect(plan.ready).toBe(true);
+    for (const key of keys) {
+      expect(ids(plan).filter((id) => id === `shell:${key}`), key).toHaveLength(1);
+      expect(ids(plan), key).toContain(`env:production:${key}`);
+      expect(ids(plan), key).toContain(`env:test:${key}`);
+      expect(envStep(plan, `env:production:${key}`).provenance).toMatchObject({ sourceKind: 'posthog', sourceAlias: 'hog', statsigType: 'flag', statsigId: key });
+      expect(envStep(plan, `env:test:${key}`).provenance).toMatchObject({ sourceKind: 'posthog', sourceAlias: 'hog-staging', statsigType: 'flag', statsigId: key });
+      expect(envStep(plan, `env:test:${key}`).statsigEnv).toBe('Acme Hog Staging');
+      expect(envStep(plan, `env:production:${key}`).statsigEnv).toBe('Acme Hog');
+    }
+    // The targeting differs per environment: production's checkout redesign ends in a 25% rollout, staging's finished its rollout.
+    const prodCheckout = envStep(plan, 'env:production:hog-checkout-redesign').desired;
+    const testCheckout = envStep(plan, 'env:test:hog-checkout-redesign').desired;
+    expect(JSON.stringify(prodCheckout)).not.toBe(JSON.stringify(testCheckout));
+    expect(JSON.stringify(prodCheckout)).toContain('"weight":25000');
+    expect(JSON.stringify(testCheckout)).not.toContain('"weight":25000');
+    // Production is off in nothing, staging has the kill switch off.
+    expect(envStep(plan, 'env:production:hog-kill-switch').desired.on).toBe(true);
+    expect(envStep(plan, 'env:test:hog-kill-switch').desired.on).toBe(false);
+    // The shell is the first planner's (production comes first in the plan's environment order); the other source is told.
+    const shells = plan.steps.filter((s) => s.op === 'upsert_flag_shell');
+    expect(shells).toHaveLength(keys.length);
+    for (const s of shells) expect(s.op === 'upsert_flag_shell' && s.desired.customProperties['migration.source']?.value).toEqual(['hog']);
+    const stagingItem = plan.items.find((i) => i.sourceId === staging.source.sourceId && i.entityId === 'hog-kill-switch')!;
+    expect(stagingItem.status).toBe('ready');
+    expect(stagingItem.fidelity?.notes.map((n) => n.message)).toContain('Flag settings (name, description, tags) come from source hog, which planned this key first.');
+    expect(stagingItem.fidelity?.overall).toBe('full');
+    const hogItem = plan.items.find((i) => i.sourceId === hog.source.sourceId && i.entityId === 'hog-kill-switch')!;
+    expect(hogItem.fidelity?.notes.map((n) => n.message)).not.toContain(expect.stringContaining('planned this key first'));
+    // No cross items: hog is not planned in test, hog-staging not in production.
+    expect(plan.items.filter((i) => i.kind === 'flag' && i.sourceId === hog.source.sourceId).every((i) => i.ldEnv === 'production')).toBe(true);
+    expect(plan.items.filter((i) => i.kind === 'flag' && i.sourceId === staging.source.sourceId).every((i) => i.ldEnv === 'test')).toBe(true);
+    // Rolled up: one row per key, with both environments.
+    const row = plan.flags.find((f) => f.ldKey === 'hog-checkout-redesign')!;
+    expect(row.envs.map((e) => [e.ldEnv, e.statsigEnv, e.status])).toEqual([
+      ['production', 'Acme Hog', 'ready'],
+      ['test', 'Acme Hog Staging', 'ready'],
+    ]);
+    // A later planning order (test first) hands the shell to staging; the plan is otherwise the same shape.
+    const reversed = planMigration(acceptAll(hogRequest({ flags: [hogUid('hog-kill-switch'), stagingUid('hog-kill-switch')], ldEnvs: ['test', 'production'] })));
+    expect(reversed.ready).toBe(true);
+    expect(ids(reversed)).toEqual(['shell:hog-kill-switch', 'env:test:hog-kill-switch', 'env:production:hog-kill-switch']);
+    const shell = reversed.steps[0];
+    expect(shell?.op === 'upsert_flag_shell' && shell.desired.customProperties['migration.source']?.value).toEqual(['hog-staging']);
+    expect(reversed.items.find((i) => i.sourceId === hog.source.sourceId)!.fidelity?.notes.map((n) => n.message)).toContain('Flag settings (name, description, tags) come from source hog-staging, which planned this key first.');
+  });
+
+  it('(b) a key whose kind or variations differ between the projects is a blocking source_collision the later source can only skip', () => {
+    // hog-staff-tools: boolean in production, multivariate in staging.
+    const req = hogRequest({ flags: [hogUid('hog-staff-tools'), stagingUid('hog-staff-tools')] });
+    const plan = planMigration(acceptAll(req));
+    const prodItem = plan.items.find((i) => i.sourceId === hog.source.sourceId && i.entityId === 'hog-staff-tools')!;
+    const stagingItem = plan.items.find((i) => i.sourceId === staging.source.sourceId && i.entityId === 'hog-staff-tools')!;
+    expect(prodItem.status).toBe('ready');
+    expect(stagingItem.status).toBe('blocked');
+    expect(stagingItem.reason).toBe('“hog-staff-tools” also comes from hog, with another kind');
+    const collisions = plan.decisions.filter((d) => d.type === 'source_collision');
+    expect(collisions).toHaveLength(1);
+    const d = collisions[0]!;
+    expect(d).toMatchObject({ severity: 'blocking', id: `source_collision:${stagingUid('hog-staff-tools')}:source_collision:hog-staff-tools:test`, subject: { uid: stagingUid('hog-staff-tools'), location: 'test' } });
+    expect(d.options.map((o) => o.key)).toEqual(['skip']);
+    expect(d.title).toBe('“hog-staff-tools” comes from hog and hog-staging with different variations');
+    expect(d.explanation).toContain('hog has a boolean flag and hog-staging a multivariate one');
+    expect(ids(plan)).toEqual(['shell:hog-staff-tools', 'env:production:hog-staff-tools']);
+    expect(plan.ready).toBe(false);
+    // Skipping keeps production's flag and leaves staging's in its source.
+    const skipped = planMigration(acceptAll({ ...req, resolutions: resolve(plan, 'source_collision', 'skip') }));
+    expect(skipped.ready).toBe(true);
+    expect(skipped.items.find((i) => i.sourceId === staging.source.sourceId)).toMatchObject({ status: 'skipped', reason: '“hog-staff-tools” is migrated from hog, whose flag has another kind (source_collision)' });
+    expect(ids(skipped)).toEqual(['shell:hog-staff-tools', 'env:production:hog-staff-tools']);
+    // Same kind, other variations: a variation list that differs is named in the decision.
+    const otherVariations: CanonicalSnapshot = {
+      ...staging,
+      neutral: { ...staging.neutral!, flags: staging.neutral!.flags.map((f) => (f.key === 'hog-kill-switch' ? { ...f, flagKind: 'multivariate' as const, variations: [{ value: 'on', name: 'On' }, { value: 'off', name: 'Off' }] } : f)) },
+    };
+    const mixed = planMigration(acceptAll(hogRequest({ flags: [hogUid('hog-kill-switch'), stagingUid('hog-kill-switch')], snapshots: [hog, otherVariations] })));
+    const dd = mixed.decisions.find((d) => d.type === 'source_collision');
+    expect(dd?.explanation).toContain('hog has a boolean flag and hog-staging a multivariate one');
+  });
+
+  it('(c) both projects mapped to the same environment: the later one skips (keeps the first) or replaces it', () => {
+    const req = hogRequest({ flags: [hogUid('hog-checkout-redesign'), stagingUid('hog-checkout-redesign')], ldEnvs: ['production'] }, 'production');
+    const plan = planMigration(acceptAll(req));
+    const hogItem = () => plan.items.find((i) => i.sourceId === hog.source.sourceId && i.kind === 'flag')!;
+    const stagingItem = (p: Plan) => p.items.find((i) => i.sourceId === staging.source.sourceId && i.kind === 'flag')!;
+    expect(hogItem().status).toBe('ready');
+    expect(stagingItem(plan)).toMatchObject({ status: 'blocked', reason: '“hog-checkout-redesign” in production also comes from hog' });
+    const d = plan.decisions.find((d) => d.type === 'source_collision')!;
+    expect(d).toMatchObject({ severity: 'blocking', recommended: 'skip', id: `source_collision:${stagingUid('hog-checkout-redesign')}:source_collision:hog-checkout-redesign:production`, title: '“hog-checkout-redesign” comes from both hog and hog-staging for production' });
+    expect(d.options.map((o) => [o.key, o.label])).toEqual([
+      ['skip', "Keep hog's targeting; skip this one"],
+      ['replace', "This source's targeting wins; hog's flag for this environment is skipped"],
+    ]);
+    expect(ids(plan)).toEqual(['shell:hog-checkout-redesign', 'segment:production:design-partners', 'env:production:hog-checkout-redesign']);
+    expect(envStep(plan, 'env:production:hog-checkout-redesign').provenance.sourceAlias).toBe('hog');
+    expect(plan.ready).toBe(false);
+
+    const skipped = planMigration(acceptAll({ ...req, resolutions: resolve(plan, 'source_collision', 'skip') }));
+    expect(skipped.ready).toBe(true);
+    expect(stagingItem(skipped)).toMatchObject({ status: 'skipped', reason: '“hog-checkout-redesign” in production keeps hog\'s targeting (source_collision)' });
+    expect(envStep(skipped, 'env:production:hog-checkout-redesign').provenance.sourceAlias).toBe('hog');
+    // hog's targeting, unchanged by the question: it ends in the 25% rollout.
+    expect(JSON.stringify(envStep(skipped, 'env:production:hog-checkout-redesign').desired)).toBe(JSON.stringify(envStep(plan, 'env:production:hog-checkout-redesign').desired));
+    expect(JSON.stringify(envStep(skipped, 'env:production:hog-checkout-redesign').desired)).toContain('"weight":25000');
+
+    // Replace: hog's flag yields for production. Staging's flag then needs its own "Design partners" cohort there,
+    // where hog's segment of the same key already stands: the same question, for the segment.
+    const flagReplaced = planMigration(acceptAll({ ...req, resolutions: resolve(plan, 'source_collision', 'replace') }));
+    expect(flagReplaced.items.find((i) => i.sourceId === hog.source.sourceId && i.kind === 'flag')).toMatchObject({ status: 'skipped', reason: 'hog-staging\'s targeting for “hog-checkout-redesign” in production replaces this one (source_collision)' });
+    expect(stagingItem(flagReplaced)).toMatchObject({ status: 'blocked', reason: 'depends on: segment “design-partners” is blocked: segment “design-partners” in production also comes from hog' });
+    expect(flagReplaced.decisions.filter((d) => d.type === 'source_collision').map((d) => [d.subject.kind, d.subject.id])).toEqual([['segment', 'design-partners']]);
+    expect(flagReplaced.ready).toBe(false);
+    // Keeping hog's segment satisfies staging's flag: its environment step stands on that segment step.
+    const replaced = planMigration(acceptAll({ ...req, resolutions: new Map([...resolve(plan, 'source_collision', 'replace'), ...resolve(flagReplaced, 'source_collision', 'skip')]) }));
+    expect(replaced.ready).toBe(true);
+    expect(replaced.items.filter((i) => i.kind === 'segment').map((i) => [i.sourceId, i.status])).toEqual([
+      [hog.source.sourceId, 'ready'],
+      [staging.source.sourceId, 'skipped'],
+    ]);
+    expect(stagingItem(replaced).status).toBe('ready');
+    expect(ids(replaced)).toEqual(['shell:hog-checkout-redesign', 'segment:production:design-partners', 'env:production:hog-checkout-redesign']);
+    const seg = replaced.steps[1];
+    expect(seg?.op === 'upsert_segment' && seg.provenance.sourceAlias).toBe('hog');
+    const env = envStep(replaced, 'env:production:hog-checkout-redesign');
+    expect(env.deps).toContain('segment:production:design-partners');
+    expect(env.provenance.sourceAlias).toBe('hog-staging');
+    expect(env.statsigEnv).toBe('Acme Hog Staging');
+    // Staging's targeting: its last set finished its rollout, so the 25% split is gone.
+    expect(JSON.stringify(env.desired)).not.toBe(JSON.stringify(envStep(plan, 'env:production:hog-checkout-redesign').desired));
+    expect(JSON.stringify(env.desired)).not.toContain('"weight":25000');
+    // The shell was planned by hog first and is kept (same kind and variations).
+    expect(ids(replaced)).toContain('shell:hog-checkout-redesign');
+    const row = replaced.flags.find((f) => f.ldKey === 'hog-checkout-redesign')!;
+    expect(row.status).toBe('ready');
+    expect(row.envs.map((e) => [e.statsigEnv, e.status])).toEqual([
+      ['Acme Hog', 'skipped'],
+      ['Acme Hog Staging', 'ready'],
+    ]);
+  });
+
+  it('(d) the same cohort from both projects into one environment is a source_collision too; in different environments they are separate segments', () => {
+    const same = planMigration(acceptAll(hogRequest({ segments: [hogSeg('design-partners'), stagingSeg('design-partners')], ldEnvs: ['production'] }, 'production')));
+    expect(same.items.map((i) => [i.sourceId, i.status])).toEqual([
+      [hog.source.sourceId, 'ready'],
+      [staging.source.sourceId, 'blocked'],
+    ]);
+    const d = same.decisions.find((d) => d.type === 'source_collision')!;
+    expect(d).toMatchObject({ severity: 'blocking', subject: { kind: 'segment', uid: stagingSeg('design-partners') }, title: '“design-partners” comes from both hog and hog-staging for production' });
+    expect(d.options.map((o) => o.key)).toEqual(['skip', 'replace']);
+    expect(ids(same)).toEqual(['segment:production:design-partners']);
+    const step = same.steps[0];
+    expect(step?.op === 'upsert_segment' && step.provenance.sourceAlias).toBe('hog');
+
+    const replaced = planMigration(acceptAll({ ...hogRequest({ segments: [hogSeg('design-partners'), stagingSeg('design-partners')], ldEnvs: ['production'] }, 'production'), resolutions: new Map([...resolve(same, 'source_collision', 'replace')]) }));
+    expect(replaced.ready).toBe(true);
+    expect(replaced.items.map((i) => [i.sourceId, i.status])).toEqual([
+      [hog.source.sourceId, 'skipped'],
+      [staging.source.sourceId, 'ready'],
+    ]);
+    const rs = replaced.steps[0];
+    expect(rs?.op === 'upsert_segment' && rs.provenance.sourceAlias).toBe('hog-staging');
+
+    const apart = planMigration(acceptAll(hogRequest({ segments: [hogSeg('design-partners'), stagingSeg('design-partners')] })));
+    expect(apart.ready).toBe(true);
+    expect(apart.decisions.filter((d) => d.type === 'source_collision')).toEqual([]);
+    expect(ids(apart)).toEqual(['segment:production:design-partners', 'segment:test:design-partners']);
+    expect(apart.steps.map((s) => s.op === 'upsert_segment' && s.provenance.sourceAlias)).toEqual(['hog', 'hog-staging']);
+  });
+
+  it('(e) a LaunchDarkly flag another project of the workspace created is accepted for a different environment, and keeps that project as its flag-level owner', () => {
+    const owned = (sync?: Record<string, string[]>) => ({
+      key: 'hog-kill-switch',
+      tags: ['migrated-from-posthog', 'migration-src-hog'],
+      customProperties: {
+        'migration.kind': { value: ['posthog'] },
+        'migration.id': { value: ['hog-kill-switch'] },
+        'migration.source': { value: ['hog'] },
+        'migration.type': { value: ['flag'] },
+        ...Object.fromEntries(Object.entries(sync ?? {}).map(([env, v]) => [syncPropertyKey(env), { value: v }])),
+      },
+      kind: 'boolean' as const,
+    });
+    // Only staging is selected, into test; the flag exists and was created by hog for production.
+    const plan = planMigration(acceptAll(hogRequest({ flags: [stagingUid('hog-kill-switch')], ld: { ...ldWithKinds, flags: new Map([['hog-kill-switch', owned({ production: ['fp-prod', '3', NOW, 'd'] })]]) } })));
+    expect(plan.errors).toEqual([]);
+    expect(plan.ready).toBe(true);
+    expect(plan.items[0]).toMatchObject({ status: 'ready', exists: true, owned: true, sync: 'not_migrated' });
+    expect(ids(plan)).toEqual(['shell:hog-kill-switch', 'env:test:hog-kill-switch']);
+    const shell = plan.steps[0];
+    if (shell?.op !== 'upsert_flag_shell') throw new Error('shell');
+    expect(shell.exists).toBe(true);
+    expect(shell.adopt).toBe(false);
+    // Flag-level provenance stays the creator's; the environment step carries staging's.
+    expect(shell.desired.customProperties['migration.source']?.value).toEqual(['hog']);
+    expect(shell.desired.customProperties['migration.id']?.value).toEqual(['hog-kill-switch']);
+    expect(shell.desired.customProperties['migration.kind']?.value).toEqual(['posthog']);
+    expect(shell.desired.tags).toContain('migration-src-hog-staging');
+    expect(envStep(plan, 'env:test:hog-kill-switch').provenance).toMatchObject({ sourceAlias: 'hog-staging', sourceKind: 'posthog' });
+    // The owner mapped to the same environment, and not in this plan: its targeting is in LaunchDarkly, so the same-environment question is asked.
+    const sameEnv = planMigration(acceptAll(hogRequest({ flags: [stagingUid('hog-kill-switch')], ldEnvs: ['production'], ld: { ...ldWithKinds, flags: new Map([['hog-kill-switch', owned({ production: ['fp-prod', '3', NOW, 'd'] })]]) } }, 'production')));
+    expect(sameEnv.items[0]).toMatchObject({ status: 'blocked', reason: '“hog-kill-switch” in production was migrated from hog' });
+    expect(sameEnv.decisions.map((d) => d.type)).toEqual(['source_collision']);
+    // A flag from a source that is not in the workspace stays an error.
+    const foreign = planMigration(acceptAll(hogRequest({ flags: [stagingUid('hog-kill-switch')], snapshots: [staging], ld: { ...ldWithKinds, flags: new Map([['hog-kill-switch', owned()]]) } })));
+    expect(foreign.items[0]).toMatchObject({ status: 'error', reason: 'LaunchDarkly flag “hog-kill-switch” was migrated from hog/hog-kill-switch, which is not a source of this workspace producing this key' });
   });
 });

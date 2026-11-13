@@ -17,7 +17,7 @@
  * model here is pure: it tallies what each step still needs from the mapping results and LD
  * state, and the view renders it. Nothing is written.
  */
-import { parseFooter, type Alert, type CanonicalSnapshot, type EntityKind } from '@sslm/canonical';
+import { migrationKindOf, parseFooter, SOURCE_KIND_LABEL, type Alert, type CanonicalSnapshot, type EntityKind } from '@sslm/canonical';
 import { defaultKindFor, kindFor, teamKeyForName, type DecisionPoint } from '@sslm/mapper';
 import { migrationStatus, ownsSegment } from '@sslm/planner';
 import type { AccountAccess, SourceRecord } from '@sslm/store';
@@ -73,14 +73,17 @@ export const STEP_TITLE: Record<StepKey, string> = {
   cutover: 'Cut over',
 };
 
-/** A StatSig owner across the workspace's sources, and how they become an LD maintainer (PLAN §8.3). */
+/**
+ * An owner across the workspace's sources, and how they become an LD maintainer (PLAN §8.3): a
+ * StatSig entity's `owner`, or a neutral-model flag's `maintainer` (LaunchDarkly, PostHog).
+ */
 export interface OwnerRow {
   /** Lower-cased email. */
   email: string;
   name?: string;
-  /** The StatSig team their items most often belong to. */
+  /** The source team their items most often belong to (a StatSig team name, or a neutral flag's maintainer team key). */
   team?: string;
-  /** Gates, configs, autotunes and prompts they own. */
+  /** Gates, configs, autotunes, prompts and neutral-model flags they own. */
   items: number;
   /**
    * - member: matched an LD member by email (maintainer set automatically)
@@ -103,12 +106,15 @@ export function teamKeysFor(owner: Pick<OwnerRow, 'email' | 'team'>, teams: read
   return [...new Set(keys)].sort();
 }
 
-/** A StatSig team and its LD counterpart. */
+/**
+ * A source team and its LD counterpart: a StatSig team (by name) or the maintainer team of
+ * neutral-model flags (by its key, which `teamKeyForName` resolves against LD by key as well).
+ */
 export interface TeamRow {
   name: string;
   description?: string;
   memberEmails: string[];
-  /** Items (gates, configs, autotunes, prompts) in the team. */
+  /** Items (gates, configs, autotunes, prompts, neutral-model flags) in the team. */
   items: number;
   /** exists: an LD team is matched or mapped; skipped: the user chose no team; missing: nothing in LD yet. */
   status: 'exists' | 'skipped' | 'missing';
@@ -205,6 +211,8 @@ export interface GuideModel {
     access: AccountAccess;
     /** The question on the Connect step has been answered. */
     accessAnswered: boolean;
+    /** The provider every synced source reads from (“StatSig”, “PostHog”, …); undefined when the sources mix providers or there are none. */
+    sourceLabel?: string;
   };
   contexts: {
     /** Unit types seen in sources that take part in this environment. */
@@ -460,30 +468,47 @@ export function computeGuide(input: GuideInput): GuideModel {
 
 /**
  * Owners and teams across every source. An owner is one email, however many sources and items;
- * the status comes from the profile's choice first, then from the LD member directory.
+ * the status comes from the profile's choice first, then from the LD member directory. StatSig
+ * entities carry `owner` and `team`; flags read onto the neutral model (LaunchDarkly, PostHog)
+ * carry `maintainer`, whose email is the owner and whose `teamKey` counts as a team named by that
+ * key (the mapper hands the same key to `teamKeyForName`, which matches an LD team by key too).
+ * A neutral flag names nobody, so the owner's display name comes from the snapshot's member list.
  */
 export function computePeople(snapshots: CanonicalSnapshot[], m: GuideInput['m'], caps: { membersReadable: boolean; teamsReadable: boolean; canInvite: boolean; canCreateTeams: boolean; access?: AccountAccess }): GuideModel['people'] {
   const access: AccountAccess = caps.access ?? 'launchdarkly';
   const owners = new Map<string, OwnerRow & { teams: Map<string, number> }>();
   const teamItems = new Map<string, number>();
   const teamNames = new Map<string, { description?: string; memberEmails: string[] }>();
+  /** One live item owned by `owner` (email, optional display name) and sitting in `team`, if any. */
+  const tally = (owner: { email?: string; name?: string } | undefined, team: string | null | undefined) => {
+    if (team) {
+      teamItems.set(team, (teamItems.get(team) ?? 0) + 1);
+      if (!teamNames.has(team)) teamNames.set(team, { memberEmails: [] });
+    }
+    const email = owner?.email?.trim().toLowerCase();
+    if (!email) return;
+    const row = owners.get(email) ?? { email, items: 0, status: 'missing' as const, teams: new Map<string, number>() };
+    row.items++;
+    if (!row.name && owner?.name) row.name = owner.name;
+    if (team) row.teams.set(team, (row.teams.get(team) ?? 0) + 1);
+    owners.set(email, row);
+  };
   for (const s of snapshots) {
     for (const t of s.teams ?? []) if (!teamNames.has(t.name)) teamNames.set(t.name, { ...(t.description ? { description: t.description } : {}), memberEmails: t.memberEmails ?? [] });
     const entities = [...s.gates, ...s.configs, ...s.autotunes, ...(s.prompts ?? [])].filter((e) => !e.archived);
-    for (const e of entities) {
-      if (e.team) {
-        teamItems.set(e.team, (teamItems.get(e.team) ?? 0) + 1);
-        if (!teamNames.has(e.team)) teamNames.set(e.team, { memberEmails: [] });
-      }
-      const email = e.owner?.email?.trim().toLowerCase();
-      if (!email) continue;
-      const row = owners.get(email) ?? { email, items: 0, status: 'missing' as const, teams: new Map<string, number>() };
-      row.items++;
-      if (!row.name && e.owner?.name) row.name = e.owner.name;
-      if (e.team) row.teams.set(e.team, (row.teams.get(e.team) ?? 0) + 1);
-      owners.set(email, row);
+    for (const e of entities) tally(e.owner, e.team);
+    const neutralFlags = (s.neutral?.flags ?? []).filter((f) => !f.archived && f.maintainer);
+    if (neutralFlags.length === 0) continue;
+    const memberNames = new Map<string, string>();
+    for (const u of s.users ?? []) if (u.email && u.name && !memberNames.has(u.email.trim().toLowerCase())) memberNames.set(u.email.trim().toLowerCase(), u.name);
+    for (const f of neutralFlags) {
+      const email = f.maintainer!.email?.trim().toLowerCase();
+      const name = email ? memberNames.get(email) : undefined;
+      tally(email ? { email, ...(name ? { name } : {}) } : undefined, f.maintainer!.teamKey);
     }
   }
+  const providers = new Set(snapshots.map((s) => migrationKindOf(s.source.sourceKind)));
+  const sourceLabel = providers.size === 1 ? SOURCE_KIND_LABEL[[...providers][0]!] : undefined;
   const members = new Map((m?.ld.members ?? []).map((x) => [x.email.toLowerCase(), x]));
   const ownerRows: OwnerRow[] = [...owners.values()]
     .map(({ teams, ...row }) => {
@@ -517,6 +542,7 @@ export function computePeople(snapshots: CanonicalSnapshot[], m: GuideInput['m']
     canCreateTeams: caps.canCreateTeams && access !== 'scim_team_sync',
     access,
     accessAnswered: caps.access !== undefined,
+    ...(sourceLabel ? { sourceLabel } : {}),
   };
 }
 

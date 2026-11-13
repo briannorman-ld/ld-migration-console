@@ -492,7 +492,7 @@
       "flagKind": "boolean",
       "fidelity": "partial",
       "notes": [
-        "partial: Early-access enrollment relies on the application sending “$feature_enrollment/hog-early-access”. [flag settings]"
+        "partial: Early-access enrollment in “Hog early access” relies on the application sending “$feature_enrollment/hog-early-access”. [flag settings]"
       ],
       "decisions": [
         "acknowledge early_access_enrollment (flag settings) → acknowledge"
@@ -521,7 +521,8 @@
           "migration.kind",
           "migration.source",
           "migration.type",
-          "migration.version"
+          "migration.version",
+          "posthog.earlyAccess"
         ],
         "clientSideAvailability": {
           "usingEnvironmentId": true,
@@ -1284,13 +1285,15 @@
       "notes": [
         "partial: Payloads not served: control → {\"layout\":\"classic\"}; plus → {\"layout\":\"plus\"}; enterprise → {\"layout\":\"enterprise\",\"salesCta\":true}. [variations]",
         "partial: 50% / 25% / 25% rollout re-buckets contexts (new flag, new salt). [rule “Condition set 2”]",
-        "full: PostHog hashes rollouts without a per-flag salt (the same contexts fall into equal percentages across flags); LaunchDarkly salts per flag, so that correlation is not carried. [rollouts]"
+        "full: PostHog hashes rollouts without a per-flag salt (the same contexts fall into equal percentages across flags); LaunchDarkly salts per flag, so that correlation is not carried. [rollouts]",
+        "partial: Pending scheduled change not carried: update_variants at 2027-03-01T09:00:00Z. [scheduled changes]"
       ],
       "decisions": [
         "blocking variant_payloads (variations) → no default",
         "choice multivariate_no_match (variations) → add",
         "choice case_insensitive_match (rule “Condition set 1” › clause 1) → regex",
-        "acknowledge partial_rollout_rebucket (rule “Condition set 2”) → acknowledge"
+        "acknowledge partial_rollout_rebucket (rule “Condition set 2”) → acknowledge",
+        "acknowledge scheduled_rule (scheduled changes) → acknowledge"
       ],
       "dependencies": [],
       "shell": {
@@ -1436,12 +1439,12 @@
     {
       "flag": "hog-scheduled-launch",
       "flagKind": "boolean",
-      "fidelity": "partial",
+      "fidelity": "full",
       "notes": [
-        "partial: Pending scheduled change not carried: update_status at 2027-01-04T09:00:00Z. [scheduled changes]"
+        "full: 1 LaunchDarkly scheduled change (2027-01-04T09:00:00Z) applies the pending PostHog change at its time; scheduled changes need an Enterprise plan, checked on the first write. [scheduled changes]"
       ],
       "decisions": [
-        "acknowledge scheduled_rule (scheduled changes) → acknowledge"
+        "choice scheduled_rule (scheduled changes) → schedule"
       ],
       "dependencies": [],
       "shell": {
@@ -1484,7 +1487,23 @@
         },
         "rules": [],
         "targets": [],
-        "prerequisites": []
+        "prerequisites": [],
+        "scheduledChanges": [
+          {
+            "executionDate": "2027-01-04T09:00:00Z",
+            "description": "PostHog scheduled change: turn on at 2027-01-04T09:00:00Z",
+            "state": {
+              "on": true,
+              "offVariation": 1,
+              "fallthrough": {
+                "variation": 0
+              },
+              "rules": [],
+              "targets": [],
+              "prerequisites": []
+            }
+          }
+        ]
       }
     },
     {
@@ -1548,14 +1567,16 @@
       "fidelity": "partial",
       "notes": [
         "partial: 40% / 60% rollout re-buckets contexts (new flag, new salt). [rule “Condition set 1”]",
-        "partial: Pending scheduled change not carried: update_status at 2027-01-05T17:00:00Z (recurring). [scheduled changes]",
-        "full: PostHog hashes rollouts without a per-flag salt (the same contexts fall into equal percentages across flags); LaunchDarkly salts per flag, so that correlation is not carried. [rollouts]"
+        "full: PostHog hashes rollouts without a per-flag salt (the same contexts fall into equal percentages across flags); LaunchDarkly salts per flag, so that correlation is not carried. [rollouts]",
+        "full: 1 LaunchDarkly scheduled change (2027-02-01T09:00:00Z) applies the pending PostHog change at its time; scheduled changes need an Enterprise plan, checked on the first write. [scheduled changes]",
+        "partial: Pending scheduled change not carried: update_status at 2027-01-05T17:00:00Z (recurring): recurring schedules are not LaunchDarkly scheduled changes. [scheduled changes]"
       ],
       "decisions": [
         "choice case_insensitive_match (rule “Condition set 1” › clause 1) → regex",
         "acknowledge partial_rollout_rebucket (rule “Condition set 1”) → acknowledge",
         "choice case_insensitive_match (rule “Condition set 2” › clause 1) → regex",
-        "acknowledge scheduled_rule (scheduled changes) → acknowledge"
+        "choice scheduled_rule (scheduled changes) → schedule",
+        "choice case_insensitive_match (rule “Scheduled condition set 1 (2027-02-01T09:00:00Z)” › clause 1) → regex"
       ],
       "dependencies": [],
       "shell": {
@@ -1641,7 +1662,81 @@
           }
         ],
         "targets": [],
-        "prerequisites": []
+        "prerequisites": [],
+        "scheduledChanges": [
+          {
+            "executionDate": "2027-02-01T09:00:00Z",
+            "description": "PostHog scheduled change: add 1 rule at 2027-02-01T09:00:00Z",
+            "state": {
+              "on": true,
+              "offVariation": 1,
+              "fallthrough": {
+                "variation": 1
+              },
+              "rules": [
+                {
+                  "description": "Condition set 1",
+                  "clauses": [
+                    {
+                      "contextKind": "user",
+                      "attribute": "email",
+                      "op": "matches",
+                      "values": [
+                        "@[aA][cC][mM][eE]\\.[eE][xX][aA][mM][pP][lL][eE]$"
+                      ],
+                      "negate": false
+                    }
+                  ],
+                  "rollout": {
+                    "contextKind": "user",
+                    "variations": [
+                      {
+                        "variation": 0,
+                        "weight": 40000
+                      },
+                      {
+                        "variation": 1,
+                        "weight": 60000
+                      }
+                    ]
+                  }
+                },
+                {
+                  "description": "Condition set 2",
+                  "clauses": [
+                    {
+                      "contextKind": "user",
+                      "attribute": "country",
+                      "op": "matches",
+                      "values": [
+                        "^[gG][bB]$"
+                      ],
+                      "negate": false
+                    }
+                  ],
+                  "variation": 0
+                },
+                {
+                  "description": "Scheduled condition set 1 (2027-02-01T09:00:00Z)",
+                  "clauses": [
+                    {
+                      "contextKind": "user",
+                      "attribute": "email",
+                      "op": "matches",
+                      "values": [
+                        "@[aA][cC][mM][eE][rR][eE][tT][aA][iI][lL]\\.[eE][xX][aA][mM][pP][lL][eE]$"
+                      ],
+                      "negate": false
+                    }
+                  ],
+                  "variation": 0
+                }
+              ],
+              "targets": [],
+              "prerequisites": []
+            }
+          }
+        ]
       }
     },
     {

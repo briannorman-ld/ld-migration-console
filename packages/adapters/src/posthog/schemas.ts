@@ -199,6 +199,7 @@ export const PhPersonActorSchema = z.looseObject({
   name: optStr,
   properties: z.record(z.string(), z.unknown()).nullish(),
 });
+export type PhPersonActor = z.output<typeof PhPersonActorSchema>;
 
 /** `GET /api/projects/{id}/persons/` items and `GET /persons/{id}/`. */
 export const PhPersonSchema = z.looseObject({

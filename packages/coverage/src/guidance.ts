@@ -4,7 +4,7 @@
  * bare list without a verdict (the user asked for "any feature of StatSig", so every item gets
  * an answer, even when the answer is "not yet" or "no equivalent").
  */
-import type { Config, Entity, EntityKind, Experiment, Holdout, Layer, Metric, ParamStore } from '@sslm/canonical';
+import type { Config, Entity, EntityKind, Experiment, Holdout, Layer, Metric, NeutralFlag, NeutralSegment, ParamStore } from '@sslm/canonical';
 import { COVERAGE } from './matrix.ts';
 import type { CoverageEntry, CoverageStatus } from './types.ts';
 
@@ -104,12 +104,46 @@ export interface InventorySummary {
   byStatus: Record<CoverageStatus, number>;
   /** Live items by kind and status. */
   byKind: Partial<Record<EntityKind, Record<CoverageStatus, number>>>;
+  /**
+   * Live flags and segments of neutral-model sources (a LaunchDarkly or PostHog project, PLAN §20,
+   * §22), counted apart because they are not StatSig entity kinds. Present only when a source has them.
+   */
+  neutral?: { flags: Record<CoverageStatus, number>; segments: Record<CoverageStatus, number> };
   total: number;
   archived: number;
 }
 
+/** What happens to a neutral-source flag: every caveat and experiment allocation raises a decision; a purpose-marked flag (survey, …) is skipped. */
+export function neutralFlagStatus(f: Pick<NeutralFlag, 'purpose' | 'caveats' | 'experiments' | 'environments'>): CoverageStatus {
+  if (f.purpose) return 'none';
+  if ((f.caveats?.length ?? 0) > 0 || f.experiments.length > 0) return 'decisions';
+  if (f.environments.some((e) => e.rules.some((r) => r.experiment || (r.coverage !== undefined && r.coverage < 1) || (r.prerequisites?.length ?? 0) > 0))) return 'decisions';
+  return 'migrates';
+}
+
+/** What happens to a neutral-source segment: an unreadable or frozen membership and every other caveat raise a decision. */
+export function neutralSegmentStatus(s: Pick<NeutralSegment, 'caveats' | 'environments'>): CoverageStatus {
+  if ((s.caveats?.length ?? 0) > 0) return 'decisions';
+  if (s.environments.some((e) => e.unbounded)) return 'decisions';
+  return 'migrates';
+}
+
+type InventorySnapshot = {
+  gates: Entity[];
+  configs: Entity[];
+  segments: Entity[];
+  experiments: Entity[];
+  layers: Entity[];
+  holdouts: Entity[];
+  autotunes: Entity[];
+  metrics: Entity[];
+  paramStores: Entity[];
+  prompts?: Entity[];
+  neutral?: { flags: NeutralFlag[]; segments: NeutralSegment[] };
+};
+
 /** Counts a workspace's inventory against the matrix: what migrates now, what waits, what has no equivalent. */
-export function summarizeInventory(snapshots: readonly { gates: Entity[]; configs: Entity[]; segments: Entity[]; experiments: Entity[]; layers: Entity[]; holdouts: Entity[]; autotunes: Entity[]; metrics: Entity[]; paramStores: Entity[]; prompts?: Entity[] }[]): InventorySummary {
+export function summarizeInventory(snapshots: readonly InventorySnapshot[]): InventorySummary {
   const zero = (): Record<CoverageStatus, number> => ({ migrates: 0, decisions: 0, guided: 0, planned: 0, none: 0 });
   const out: InventorySummary = { byStatus: zero(), byKind: {}, total: 0, archived: 0 };
   for (const s of snapshots) {
@@ -124,6 +158,29 @@ export function summarizeInventory(snapshots: readonly { gates: Entity[]; config
       out.byStatus[g.status]++;
       const k = (out.byKind[e.kind] ??= zero());
       k[g.status]++;
+    }
+    if (s.neutral && (s.neutral.flags.length > 0 || s.neutral.segments.length > 0)) {
+      const n = (out.neutral ??= { flags: zero(), segments: zero() });
+      for (const f of s.neutral.flags) {
+        if (f.archived) {
+          out.archived++;
+          continue;
+        }
+        const st = neutralFlagStatus(f);
+        out.total++;
+        out.byStatus[st]++;
+        n.flags[st]++;
+      }
+      for (const g of s.neutral.segments) {
+        if (g.archived) {
+          out.archived++;
+          continue;
+        }
+        const st = neutralSegmentStatus(g);
+        out.total++;
+        out.byStatus[st]++;
+        n.segments[st]++;
+      }
     }
   }
   return out;

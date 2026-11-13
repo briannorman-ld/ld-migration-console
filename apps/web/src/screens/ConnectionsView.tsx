@@ -6,7 +6,7 @@ import { LdMark } from '../components/Brand.tsx';
 import { Badge, Button, Card, cx, Dot, PageTitle, Spinner, type Tone } from '../components/ui.tsx';
 import { useFlag } from '../lib/flags.ts';
 import type { LdSession } from '../lib/ld.ts';
-import { SOURCE_BADGE } from '../lib/kinds.ts';
+import { SOURCE_BADGE, uploadable } from '../lib/kinds.ts';
 import { timeAgo } from '../lib/time.ts';
 
 /**
@@ -22,6 +22,7 @@ export function ConnectionsView({
   ld,
   onAddSource,
   onRemoveSource,
+  onReuploadSource,
   onOpenLd,
   onOpenGates,
 }: {
@@ -31,6 +32,8 @@ export function ConnectionsView({
   ld: LdSession;
   onAddSource: () => void;
   onRemoveSource: (source: SourceRecord) => void | Promise<void>;
+  /** A newer file for an uploaded source (StatSig config spec or PostHog flags payload) replaces its snapshot. */
+  onReuploadSource?: (source: SourceRecord, file: File) => void | Promise<void>;
   onOpenLd: () => void;
   onOpenGates: () => void;
 }) {
@@ -91,6 +94,22 @@ export function ConnectionsView({
                         {sn ? <span title={new Date(sn.takenAt).toLocaleString()}>synced {timeAgo(sn.takenAt)}</span> : <span>not synced yet</span>}
                       </div>
                     </div>
+                    {uploadable(s) && onReuploadSource && (
+                      <label className="shrink-0 cursor-pointer rounded-md px-2 py-1 text-xs text-fg-muted hover:bg-surface-hover hover:text-fg" title={`Replace the ${SOURCE_BADGE[s.kind].label.toLowerCase()} with a newer export`}>
+                        Upload a new file
+                        <input
+                          type="file"
+                          accept="application/json,.json"
+                          className="sr-only"
+                          aria-label={`Upload a new file for ${s.label}`}
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            e.target.value = '';
+                            if (file) void onReuploadSource(s, file);
+                          }}
+                        />
+                      </label>
+                    )}
                     <Button
                       variant="ghost"
                       className="shrink-0 px-2 py-1 text-xs hover:text-error"

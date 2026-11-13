@@ -1,8 +1,9 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { http, HttpResponse } from 'msw';
 import { setupServer } from 'msw/node';
-import { acmeHogLocalEvaluationPayload, acmeHogProject, ACME_HOG_PROJECT_ID, createPostHogApiHandlers } from '@sslm/demo-fixtures';
+import { acmeHogLocalEvaluationPayload, acmeHogProject, ACME_HOG_PROJECT_ID, createPostHogApiHandlers, type PostHogProjectFixture } from '@sslm/demo-fixtures';
 import type { NeutralFlag } from '@sslm/canonical';
-import { normalizePostHogSnapshot, parsePostHogPayload, PostHogClient, PostHogPayloadError, PostHogReadAuthError, readPostHogProject, semverRange, translateFilter, typeValues, type TranslateContext } from '../src/index.ts';
+import { DEFAULT_MAX_MEMBERS_PER_COHORT, normalizePostHogSnapshot, parsePostHogPayload, PostHogClient, PostHogPayloadError, PostHogReadAuthError, readPostHogProject, semverRange, translateFilter, typeValues, type TranslateContext } from '../src/index.ts';
 
 const ORIGIN = 'https://demo-posthog.test';
 const KEY = 'phx_test-key';
@@ -40,9 +41,14 @@ describe('PostHog source adapter (PLAN §22.2)', () => {
     expect(raw.cohortMembers['301']!.flatMap((p) => p.distinct_ids)).toEqual(['u-1', 'u-2', 'u-2-legacy', 'u-3']);
     expect(raw.cohortMembers['304']).toHaveLength(2);
     expect(raw.membersUnreadable).toEqual({});
-    expect(raw.scheduledChanges.map((s) => s.record_id)).toEqual(['1019', '1007']);
+    expect(raw.scheduledChanges.map((s) => s.record_id)).toEqual(['1019', '1007', '1007', '1003']);
     expect(raw.skipped).toEqual([]);
     expect(requests.every((r) => r.startsWith('200 '))).toBe(true);
+    // Members come from one filtered `/persons/?cohort=` page per cohort (3 and 2 members fit one
+    // page). The actor list `/cohorts/{id}/persons/` is no longer read first: it is only the
+    // fallback when the filter is ignored, and no single `/persons/{id}/` read happens either.
+    expect(requests.filter((r) => r === `200 /api/projects/${ACME_HOG_PROJECT_ID}/persons/`)).toHaveLength(2);
+    expect(requests.filter((r) => /\/cohorts\/\d+\/persons\/$/.test(r) || /\/persons\/[^/?]+\/$/.test(r))).toEqual([]);
     expect(progress.at(-1)).toBe('done');
   });
 
@@ -146,12 +152,12 @@ describe('PostHog source adapter (PLAN §22.2)', () => {
     const early = flagOf(flags, 'hog-early-access');
     // The 0% "everyone" set matches nobody and is dropped (exact).
     expect(early.environments[0]!.rules.map((r) => r.id)).toEqual(['enrollment-in', 'enrollment-out']);
-    expect(early.caveats).toEqual([{ kind: 'early_access_enrollment', detail: { attribute: '$feature_enrollment/hog-early-access', stage: 'beta' } }]);
+    expect(early.caveats).toEqual([{ kind: 'early_access_enrollment', detail: { attribute: '$feature_enrollment/hog-early-access', stage: 'beta', name: 'Hog early access', description: 'Try the new storefront before everyone else.', documentationUrl: 'https://acmeretail.example/docs/early-access' } }]);
     const holdout = flagOf(flags, 'hog-holdout-experiment');
     expect(holdout.environments[0]!.rules[0]!.experiment).toEqual({ key: 'Holdout experiment' });
     expect(holdout.caveats).toContainEqual({ kind: 'holdout', detail: { id: '3', percentage: 10 } });
     expect(flagOf(flags, 'hog-device-rollout').caveats!.map((c) => c.kind).sort()).toEqual(['device_bucketing', 'experience_continuity', 'unsalted_rollout']);
-    expect(flagOf(flags, 'hog-scheduled-launch').caveats).toEqual([{ kind: 'scheduled_changes', detail: { changes: [{ at: '2027-01-04T09:00:00Z', operation: 'update_status', recurring: false }] } }]);
+    expect(flagOf(flags, 'hog-scheduled-launch').caveats).toEqual([{ kind: 'scheduled_changes', detail: { changes: [{ at: '2027-01-04T09:00:00Z', operation: 'update_status', recurring: false, on: true }] } }]);
     expect(flagOf(flags, 'hog-encrypted-config').caveats).toContainEqual({ kind: 'encrypted_payload', detail: { readable: true } });
     expect(flagOf(flags, 'survey-targeting-checkout-nps').purpose).toBe('survey');
     expect(flagOf(flags, 'hog-server-only').customProperties['posthog.evaluationContexts']).toEqual({ name: 'PostHog evaluation contexts', value: ['backend'] });
@@ -236,5 +242,227 @@ describe('PostHog filter translation', () => {
     expect(one({ key: 'n', value: 'abc', operator: 'gt' })[0]).toMatchObject({ op: 'posthog:gt against a non-numeric value "abc"' });
     expect(one({ key: 'x', value: [], operator: 'exact' })[0]).toMatchObject({ op: expect.stringContaining('posthog:exact') });
     expect(one({ key: 'created_at', type: 'person_metadata', value: '2026' })[0]).toMatchObject({ op: 'posthog:a person_metadata property' });
+  });
+});
+
+describe('cohort membership at scale', () => {
+  const BIG = 399;
+  const PERSONS = `/api/projects/${ACME_HOG_PROJECT_ID}/persons/`;
+  const ACTORS = `/api/projects/${ACME_HOG_PROJECT_ID}/cohorts/${BIG}/persons/`;
+  const uuidOf = (id: number) => `4e5a1c00-0000-4000-8000-${String(id).padStart(12, '0')}`;
+  type Row = Record<string, unknown>;
+
+  /**
+   * Acme Hog plus a synthetic static cohort 399 of `n` persons (ids 10000…; every third one has
+   * two distinct ids), referenced by a new flag `hog-big-list`, so readPostHogProject reads it
+   * beside cohorts 301 and 304.
+   */
+  function bigFixture(n: number, cohort: Row = {}): PostHogProjectFixture {
+    const p = structuredClone(acmeHogProject());
+    const persons = Array.from({ length: n }, (_, i) => {
+      const id = 10_000 + i;
+      return { id, uuid: uuidOf(id), name: `big-${i}@acme.example`, distinct_ids: i % 3 === 0 ? [`big-${i}`, `big-${i}-legacy`] : [`big-${i}`], properties: { email: `big-${i}@acme.example` }, created_at: '2026-01-01T00:00:00Z' };
+    });
+    p.persons.push(...persons);
+    const template = p.cohorts.find((c) => c.id === 301)!;
+    p.cohorts.push({ ...template, id: BIG, name: 'Big static list', description: `${n} imported accounts.`, count: n, last_import_total_count: n, ...cohort });
+    p.cohortMembers[String(BIG)] = persons.map((x) => String(x.id));
+    const flag = p.flags.find((f) => f.key === 'hog-checkout-redesign')! as Row;
+    p.flags.push({ ...flag, id: 1399, key: 'hog-big-list', name: 'Targets the big list.', filters: { ...(flag.filters as Row), groups: [{ properties: [{ key: 'id', type: 'cohort', value: BIG, operator: 'in' }], rollout_percentage: 100, variant: null }] } } as (typeof p.flags)[number]);
+    return p;
+  }
+
+  /** Serve `fixture` and record every request URL (path + query) the client sends. */
+  function serve(fixture: PostHogProjectFixture, onUrl?: (url: string) => void) {
+    const urls: string[] = [];
+    server.use(...createPostHogApiHandlers({ baseUrl: ORIGIN, getProject: () => fixture, key: KEY }));
+    const recording: typeof fetch = (input, init) => {
+      const u = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
+      urls.push(u.pathname + u.search);
+      onUrl?.(u.pathname + u.search);
+      return fetch(input, init);
+    };
+    const c = new PostHogClient({ region: { origin: ORIGIN }, key: KEY, transport: { fetch: recording, budgets: [], retry: { baseDelayMs: 1, maxDelayMs: 5, maxAttempts: 2 } } });
+    return { c, urls };
+  }
+
+  /** PostHog's envelope over `items`, honouring `limit`/`offset` (and a server-side page clamp). */
+  const envelope = (items: unknown[], url: URL, maxPage = 1000, withCount = true) => {
+    const limit = Math.min(Number(url.searchParams.get('limit') ?? 100), maxPage);
+    const offset = Number(url.searchParams.get('offset') ?? 0);
+    const at = (o: number) => {
+      const u = new URL(url);
+      u.searchParams.set('offset', String(o));
+      return u.toString();
+    };
+    return { ...(withCount ? { count: items.length } : {}), next: offset + limit < items.length ? at(offset + limit) : null, previous: null, results: items.slice(offset, offset + limit) };
+  };
+  /** A persons list that ignores `?cohort=` (every person of the project, paged). */
+  const ignoringFilter = (fixture: PostHogProjectFixture, maxPage = 1000) => http.get(`${ORIGIN}${PERSONS}`, ({ request }) => HttpResponse.json(envelope(fixture.persons, new URL(request.url), maxPage)));
+  /** `GET /persons/{id}/` accepting the uuid too, as PostHog does (the fixture route takes the numeric id only). */
+  const personByIdOrUuid = (fixture: PostHogProjectFixture) =>
+    http.get(`${ORIGIN}${PERSONS}:id/`, ({ params }) => {
+      const hit = fixture.persons.find((x) => String(x.id) === params.id || x.uuid === params.id);
+      return hit ? HttpResponse.json(hit) : HttpResponse.json({ detail: 'Not found.' }, { status: 404 });
+    });
+
+  /** Requests about cohort 399: its filtered pages, its actor list and single reads of its persons (ids 10000+). */
+  const memberUrls = (urls: string[]) => urls.filter((u) => u.includes(`cohort=${BIG}`) || u.startsWith(ACTORS) || u.startsWith(`${PERSONS}4e5a1c00-0000-4000-8000-00000001`));
+  const distinctIds = (members: { distinct_ids?: string[] | null }[]) => members.flatMap((m) => m.distinct_ids ?? []);
+
+  it('(a) reads 2,500 members through the filtered persons list alone, in pages of 1,000', async () => {
+    const { c, urls } = serve(bigFixture(2500));
+    const raw = await readPostHogProject(c, ACME_HOG_PROJECT_ID);
+    const members = raw.cohortMembers[String(BIG)]!;
+    expect(members).toHaveLength(2500);
+    expect(new Set(members.map((m) => m.id)).size).toBe(2500);
+    const ids = distinctIds(members);
+    expect(ids).toHaveLength(2500 + 834); // every third person carries a second id
+    expect(ids).toEqual(expect.arrayContaining(['big-0', 'big-0-legacy', 'big-1', 'big-2499', 'big-2499-legacy']));
+    expect(raw.membersUnreadable).toEqual({});
+    // Three page requests for the cohort and nothing else: no actor list, no single person read.
+    expect(memberUrls(urls)).toEqual([`${PERSONS}?cohort=${BIG}&limit=1000&offset=0`, `${PERSONS}?cohort=${BIG}&limit=1000&offset=1000`, `${PERSONS}?cohort=${BIG}&limit=1000&offset=2000`]);
+    // The whole read: project, flags, cohorts, group types, 3 property-definition lists, scheduled
+    // changes, early access, experiments, members = 11; cohorts 301 and 304 one page each; 399 three.
+    expect(urls).toHaveLength(16);
+    // The small cohorts still come out right beside it.
+    expect(distinctIds(raw.cohortMembers['301']!)).toEqual(['u-1', 'u-2', 'u-2-legacy', 'u-3']);
+  });
+
+  it('(a) a server that clamps the page size below the 1,000 asked for is paged to the end, not cut off after one page', async () => {
+    // PostHog Cloud's real ceiling for `limit` is unverified (P0 spike): if it hands back 100 per page
+    // regardless, a short first page must not be read as "no more members".
+    const fixture = bigFixture(2500);
+    const { c, urls } = serve(fixture);
+    server.use(
+      http.get(`${ORIGIN}${PERSONS}`, ({ request }) => {
+        const url = new URL(request.url);
+        const cohort = url.searchParams.get('cohort');
+        const items = cohort === null ? fixture.persons : fixture.persons.filter((x) => fixture.cohortMembers[cohort]!.includes(String(x.id)));
+        return HttpResponse.json(envelope(items, url, 100));
+      }),
+    );
+    const raw = await readPostHogProject(c, ACME_HOG_PROJECT_ID);
+    const members = raw.cohortMembers[String(BIG)]!;
+    expect(members).toHaveLength(2500);
+    expect(new Set(members.map((m) => m.id)).size).toBe(2500);
+    expect(raw.membersUnreadable).toEqual({});
+    const pages = memberUrls(urls).filter((u) => u.startsWith(`${PERSONS}?cohort=${BIG}`));
+    expect(pages).toHaveLength(25);
+    expect(pages[0]).toBe(`${PERSONS}?cohort=${BIG}&limit=1000&offset=0`);
+    expect(pages[24]).toBe(`${PERSONS}?cohort=${BIG}&limit=1000&offset=2400`);
+    // Still no actor list and no single person read: the filter was honoured, only the page was small.
+    expect(memberUrls(urls).some((u) => u.startsWith(ACTORS) || /\/persons\/\d+\/$/.test(u))).toBe(false);
+  });
+  it('(b) a cohort whose own count exceeds the cap is refused before any member request', async () => {
+    const { c, urls } = serve(bigFixture(10, { count: DEFAULT_MAX_MEMBERS_PER_COHORT + 1 }));
+    const raw = await readPostHogProject(c, ACME_HOG_PROJECT_ID);
+    expect(raw.cohortMembers[String(BIG)]).toBeUndefined();
+    expect(raw.membersUnreadable[String(BIG)]).toBe('100,001 members; more than the console reads from the API (100,000). Export the cohort as CSV in PostHog and import it into the LaunchDarkly segment.');
+    expect(memberUrls(urls)).toEqual([]);
+    // Not an error: the other cohorts were read and nothing was skipped.
+    expect(raw.skipped).toEqual([]);
+    expect(raw.cohortMembers['304']).toHaveLength(2);
+  });
+
+  it('(b) the paged read stops at the cap, from the envelope count or from the pages themselves', async () => {
+    // Count unknown on the cohort (PostHog has not calculated it): the first page's envelope says 2,500.
+    const first = serve(bigFixture(2500, { count: null }));
+    const raw = await readPostHogProject(first.c, ACME_HOG_PROJECT_ID, { maxMembersPerCohort: 1500 });
+    expect(raw.membersUnreadable[String(BIG)]).toMatch(/^2,500 members; more than the console reads from the API \(1,500\)\. Export the cohort as CSV/);
+    expect(memberUrls(first.urls)).toEqual([`${PERSONS}?cohort=${BIG}&limit=1000&offset=0`]);
+    server.resetHandlers();
+
+    // No envelope count either: the second page carries the read past the cap and the read stops there.
+    const fixture = bigFixture(2500, { count: null });
+    const second = serve(fixture);
+    server.use(http.get(`${ORIGIN}${PERSONS}`, ({ request }) => {
+      const url = new URL(request.url);
+      const members = fixture.persons.filter((x) => fixture.cohortMembers[url.searchParams.get('cohort')!]?.includes(String(x.id)));
+      return HttpResponse.json(envelope(members, url, 1000, false));
+    }));
+    const raw2 = await readPostHogProject(second.c, ACME_HOG_PROJECT_ID, { maxMembersPerCohort: 1500 });
+    expect(raw2.membersUnreadable[String(BIG)]).toMatch(/^2,000 members; more than the console reads from the API \(1,500\)/);
+    expect(memberUrls(second.urls)).toEqual([`${PERSONS}?cohort=${BIG}&limit=1000&offset=0`, `${PERSONS}?cohort=${BIG}&limit=1000&offset=1000`]);
+  });
+
+  it('(c) a server that ignores the cohort filter falls back to the actor list and yields exactly the members', async () => {
+    const fixture = bigFixture(40);
+    const { c, urls } = serve(fixture);
+    server.use(ignoringFilter(fixture));
+    const raw = await readPostHogProject(c, ACME_HOG_PROJECT_ID);
+    const members = raw.cohortMembers[String(BIG)]!;
+    expect(members.map((m) => m.id).sort()).toEqual(fixture.cohortMembers[String(BIG)]!.sort());
+    expect(distinctIds(members)).toHaveLength(40 + 14);
+    expect(raw.membersUnreadable).toEqual({});
+    // The 45-person page disagreed with the cohort's count of 40, so paging stopped after one page;
+    // the actor list named the 40 members, all of which were already on that page: no single read.
+    expect(memberUrls(urls)).toEqual([`${PERSONS}?cohort=${BIG}&limit=1000&offset=0`, `${ACTORS}?limit=100&offset=0`]);
+    // The small cohorts took the same route and are still exact.
+    expect(distinctIds(raw.cohortMembers['301']!)).toEqual(['u-1', 'u-2', 'u-2-legacy', 'u-3']);
+    expect(raw.cohortMembers['304']!.map((m) => m.id)).toEqual(['504', '505']);
+  });
+
+  it('(c) members the ignored-filter page did not carry are read one by one, up to a cap', async () => {
+    const fixture = bigFixture(40);
+    const { c, urls } = serve(fixture);
+    // The server also clamps pages to 10, so the one page holds persons 501–505 and big-0…big-4.
+    server.use(ignoringFilter(fixture, 10), personByIdOrUuid(fixture));
+    const raw = await readPostHogProject(c, ACME_HOG_PROJECT_ID);
+    const members = raw.cohortMembers[String(BIG)]!;
+    expect(members.map((m) => m.id).sort()).toEqual(fixture.cohortMembers[String(BIG)]!.sort());
+    expect(distinctIds(members)).toEqual(expect.arrayContaining(['big-4', 'big-5', 'big-39-legacy']));
+    const singles = urls.filter((u) => u.startsWith(`${PERSONS}4e5a1c00-0000-4000-8000-00000001`));
+    expect(singles).toHaveLength(35);
+    expect(singles[0]).toBe(`${PERSONS}${uuidOf(10_005)}/`);
+    expect(memberUrls(urls).slice(0, 2)).toEqual([`${PERSONS}?cohort=${BIG}&limit=1000&offset=0`, `${ACTORS}?limit=100&offset=0`]);
+    server.resetHandlers();
+
+    // Above the single-read cap the membership is unreadable, with the CSV instruction, and no single read is made.
+    const capped = serve(fixture);
+    server.use(ignoringFilter(fixture, 10), personByIdOrUuid(fixture));
+    const raw2 = await readPostHogProject(capped.c, ACME_HOG_PROJECT_ID, { maxSinglePersonReads: 20 });
+    expect(raw2.cohortMembers[String(BIG)]).toBeUndefined();
+    expect(raw2.membersUnreadable[String(BIG)]).toBe('40 members, 35 of them readable only one by one because the persons list ignored the cohort filter; more than the console reads that way (20). Export the cohort as CSV in PostHog and import it into the LaunchDarkly segment.');
+    expect(capped.urls.filter((u) => u.startsWith(`${PERSONS}4e5a1c00-0000-4000-8000-00000001`))).toEqual([]);
+  });
+
+  it('(d) an empty filtered list for a cohort with members falls back to the actor list', async () => {
+    const fixture = bigFixture(3);
+    const { c, urls } = serve(fixture);
+    server.use(http.get(`${ORIGIN}${PERSONS}`, () => HttpResponse.json({ count: 0, next: null, previous: null, results: [] })), personByIdOrUuid(fixture));
+    const raw = await readPostHogProject(c, ACME_HOG_PROJECT_ID);
+    expect(distinctIds(raw.cohortMembers[String(BIG)]!)).toEqual(['big-0', 'big-0-legacy', 'big-1', 'big-2']);
+    expect(memberUrls(urls)).toEqual([`${PERSONS}?cohort=${BIG}&limit=1000&offset=0`, `${ACTORS}?limit=100&offset=0`, `${PERSONS}${uuidOf(10_000)}/`, `${PERSONS}${uuidOf(10_001)}/`, `${PERSONS}${uuidOf(10_002)}/`]);
+    expect(raw.membersUnreadable).toEqual({});
+  });
+
+  it('(e) progress reports each page of the big cohort, and says when the count is being recalculated', async () => {
+    const { c } = serve(bigFixture(2500));
+    const progress: string[] = [];
+    await readPostHogProject(c, ACME_HOG_PROJECT_ID, { onProgress: (p) => progress.push(p.endpoint) });
+    const pages = progress.filter((e) => e.startsWith(`${PERSONS}?cohort=${BIG}`));
+    expect(pages).toEqual([`${PERSONS}?cohort=${BIG}`, `${PERSONS}?cohort=${BIG} (1,000/2,500)`, `${PERSONS}?cohort=${BIG} (2,000/2,500)`, `${PERSONS}?cohort=${BIG} (2,500/2,500)`]);
+    server.resetHandlers();
+
+    // While PostHog recalculates, the cohort's count is not trusted: the read probes the project's
+    // person count once to tell a filtered list from an unfiltered one, and the progress says so.
+    const calc = serve(bigFixture(1200, { is_calculating: true, count: 7 }));
+    const progress2: string[] = [];
+    const raw = await readPostHogProject(calc.c, ACME_HOG_PROJECT_ID, { onProgress: (p) => progress2.push(p.endpoint) });
+    expect(raw.cohortMembers[String(BIG)]).toHaveLength(1200);
+    expect(progress2).toContain(`${PERSONS}?cohort=${BIG} (1,200/1,200) (recalculating)`);
+    expect(memberUrls(calc.urls)).toEqual([`${PERSONS}?cohort=${BIG}&limit=1000&offset=0`, `${PERSONS}?cohort=${BIG}&limit=1000&offset=1000`]);
+    expect(calc.urls.filter((u) => u === `${PERSONS}?limit=1&offset=0`)).toHaveLength(1);
+  });
+
+  it('(f) an abort during the paged read rejects instead of returning partial members', async () => {
+    const ctrl = new AbortController();
+    const { c, urls } = serve(bigFixture(2500), (url) => {
+      if (url === `${PERSONS}?cohort=${BIG}&limit=1000&offset=1000`) ctrl.abort();
+    });
+    await expect(readPostHogProject(c, ACME_HOG_PROJECT_ID, { signal: ctrl.signal })).rejects.toMatchObject({ name: 'AbortError' });
+    expect(urls.filter((u) => u.includes('offset=2000'))).toEqual([]);
+    expect(urls.at(-1)).toBe(`${PERSONS}?cohort=${BIG}&limit=1000&offset=1000`);
   });
 });

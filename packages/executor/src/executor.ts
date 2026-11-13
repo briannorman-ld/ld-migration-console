@@ -1029,7 +1029,10 @@ export class Executor {
     // starts with an empty cache and reads.
     const flag = this.flags.get(s.key) ?? (await this.c.getFlag(this.p, s.key, this.signal));
     if (!flag) {
-      if (run.dryRun) return `Would set targeting in ${s.ldEnv}: ${envSummary(s.desired, s.variations)}.`;
+      if (run.dryRun) {
+        const sched = s.desired.scheduledChanges ?? [];
+        return `Would set targeting in ${s.ldEnv}${sched.length ? ` and create ${sched.length} scheduled change${sched.length === 1 ? '' : 's'} (${sched.map((c) => c.executionDate).join(', ')})` : ''}: ${envSummary(s.desired, s.variations)}.`;
+      }
       throw new Error(`Flag “${s.key}” doesn't exist (its settings step didn't run).`);
     }
     this.flags.set(s.key, flag);

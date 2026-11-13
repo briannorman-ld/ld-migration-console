@@ -2,8 +2,8 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { ENTITY_KINDS } from '@sslm/canonical';
-import { AREAS, BLOCK_END, BLOCK_START, COVERAGE, coverageFor, guidanceFor, renderCoverageMarkdown, spliceCoverageBlock } from '../src/index.ts';
+import { ENTITY_KINDS, type NeutralFlag, type NeutralSegment } from '@sslm/canonical';
+import { AREAS, BLOCK_END, BLOCK_START, COVERAGE, coverageFor, guidanceFor, neutralFlagStatus, neutralSegmentStatus, renderCoverageMarkdown, spliceCoverageBlock, summarizeInventory } from '../src/index.ts';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
@@ -55,6 +55,41 @@ describe('coverage matrix', () => {
   it('docs/LIMITATIONS.md carries the current generated block (run pnpm coverage:generate)', () => {
     const doc = readFileSync(join(root, 'docs', 'LIMITATIONS.md'), 'utf8');
     expect(spliceCoverageBlock(doc)).toBe(doc);
+  });
+});
+
+describe('inventory summary with neutral-model sources (PLAN §20, §22)', () => {
+  const env = (rules: NeutralFlag['environments'][number]['rules'] = []) => ({ env: 'Acme Hog', on: true, offVariation: 1, fallthrough: { variation: 1 }, rules, targets: [], prerequisites: [] });
+  const flag = (key: string, over: Partial<NeutralFlag> = {}): NeutralFlag => ({ kind: 'flag', uid: `src/flag/${key}`, key, name: key, description: '', flagKind: 'boolean', variations: [{ value: true }, { value: false }], tags: [], temporary: false, archived: false, customProperties: {}, experiments: [], environments: [env()], ...over });
+  const segment = (key: string, over: Partial<NeutralSegment> = {}): NeutralSegment => ({ kind: 'segment', uid: `src/segment/${key}`, key, name: key, description: '', tags: [], archived: false, environments: [{ env: 'Acme Hog', rules: [], included: [{ contextKind: 'user', values: ['u-1'] }], excluded: [] }], ...over });
+  const empty = { gates: [], configs: [], segments: [], experiments: [], layers: [], holdouts: [], autotunes: [], metrics: [], paramStores: [] };
+
+  it('a plain flag migrates, a caveat or an experiment allocation needs decisions, a survey flag has no equivalent', () => {
+    expect(neutralFlagStatus(flag('plain'))).toBe('migrates');
+    expect(neutralFlagStatus(flag('continuity', { caveats: [{ kind: 'experience_continuity' }] }))).toBe('decisions');
+    expect(neutralFlagStatus(flag('exp', { experiments: ['checkout-exp'] }))).toBe('decisions');
+    expect(neutralFlagStatus(flag('covered', { environments: [env([{ description: 'set 1', clauses: [], variation: 0, coverage: 0.3 }])] }))).toBe('decisions');
+    expect(neutralFlagStatus(flag('dep', { environments: [env([{ description: 'set 1', clauses: [], variation: 0, prerequisites: [{ key: 'parent', variation: 0 }] }])] }))).toBe('decisions');
+    expect(neutralFlagStatus(flag('survey', { purpose: 'survey' }))).toBe('none');
+  });
+
+  it('a list segment migrates, an unreadable or frozen membership needs a decision', () => {
+    expect(neutralSegmentStatus(segment('static'))).toBe('migrates');
+    expect(neutralSegmentStatus(segment('big', { environments: [{ env: 'Acme Hog', rules: [], included: [], excluded: [], unbounded: { contextKind: 'user' } }] }))).toBe('decisions');
+    expect(neutralSegmentStatus(segment('frozen', { caveats: [{ kind: 'frozen_membership', detail: { cohortType: 'behavioral', count: 2 } }] }))).toBe('decisions');
+  });
+
+  it('counts neutral flags and segments into the totals, archived ones apart, and leaves the StatSig kinds alone', () => {
+    const snap = { ...empty, neutral: { flags: [flag('a'), flag('b', { caveats: [{ kind: 'remote_config' }] }), flag('old', { archived: true }), flag('nps', { purpose: 'survey' })], segments: [segment('s1'), segment('s2', { archived: true })] } };
+    const inv = summarizeInventory([snap]);
+    expect(inv.total).toBe(4);
+    expect(inv.archived).toBe(2);
+    expect(inv.byStatus).toEqual({ migrates: 2, decisions: 1, guided: 0, planned: 0, none: 1 });
+    expect(inv.byKind).toEqual({});
+    expect(inv.neutral).toEqual({ flags: { migrates: 1, decisions: 1, guided: 0, planned: 0, none: 1 }, segments: { migrates: 1, decisions: 0, guided: 0, planned: 0, none: 0 } });
+    // A workspace without a neutral source has no neutral block at all.
+    expect(summarizeInventory([empty]).neutral).toBeUndefined();
+    expect(summarizeInventory([{ ...empty, neutral: { flags: [], segments: [] } }]).neutral).toBeUndefined();
   });
 });
 

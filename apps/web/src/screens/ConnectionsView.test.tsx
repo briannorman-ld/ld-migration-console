@@ -67,4 +67,26 @@ describe('ConnectionsView', () => {
     expect(screen.getByText('Could not reach LaunchDarkly: 401')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Connect LaunchDarkly' })).toBeTruthy();
   });
+
+  it('lets an uploaded source take a newer file, and offers nothing of the kind for a live source', () => {
+    const payload: SourceRecord = { id: 's2', workspaceId: 'w1', alias: 'hog', label: 'posthog-flags (PostHog payload)', kind: 'posthog_payload', createdAt: '2026-11-12T10:00:00Z' };
+    const spec: SourceRecord = { id: 's3', workspaceId: 'w1', alias: 'mobile', label: 'acme-mobile (spec)', kind: 'config_spec', createdAt: '2026-11-12T10:00:00Z' };
+    const onReuploadSource = vi.fn();
+    setup({ sources: [source, payload, spec], onReuploadSource });
+    expect(screen.queryByLabelText('Upload a new file for acme-web')).toBeNull();
+    const input = screen.getByLabelText('Upload a new file for posthog-flags (PostHog payload)') as HTMLInputElement;
+    expect(screen.getByLabelText('Upload a new file for acme-mobile (spec)')).toBeTruthy();
+    const file = new File(['{"flags":[]}'], 'posthog-flags-2.json', { type: 'application/json' });
+    fireEvent.change(input, { target: { files: [file] } });
+    expect(onReuploadSource).toHaveBeenCalledTimes(1);
+    expect(onReuploadSource).toHaveBeenCalledWith(payload, file);
+    // The input is cleared so the same file can be chosen again after a fix.
+    expect(input.value).toBe('');
+  });
+
+  it('shows no upload control when the screen has no handler for it', () => {
+    const payload: SourceRecord = { id: 's2', workspaceId: 'w1', alias: 'hog', label: 'payload', kind: 'posthog_payload', createdAt: '2026-11-12T10:00:00Z' };
+    setup({ sources: [payload] });
+    expect(screen.queryByLabelText('Upload a new file for payload')).toBeNull();
+  });
 });

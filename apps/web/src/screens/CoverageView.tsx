@@ -22,12 +22,15 @@ export function CoverageView({
   snapshots,
   focus,
   onOpenResource,
+  onOpenNeutral,
 }: {
   sources: SourceRecord[];
   snapshots: Record<string, CanonicalSnapshot | undefined>;
   /** Coverage row id to scroll to and expand (from an item's guidance link). */
   focus?: string;
   onOpenResource: (kind: EntityKind) => void;
+  /** Opens the flags or segments of the neutral-model sources (LaunchDarkly or PostHog projects, PLAN §20, §22). */
+  onOpenNeutral?: (resource: 'flag' | 'segment') => void;
 }) {
   const [q, setQ] = useState('');
   const [status, setStatus] = useState<CoverageStatus | 'all'>('all');
@@ -119,6 +122,28 @@ export function CoverageView({
                 </button>
               );
             })}
+            {inventory.neutral &&
+              (['flag', 'segment'] as const).map((r) => {
+                const c = inventory.neutral![r === 'flag' ? 'flags' : 'segments'];
+                const total = ORDER.reduce((n, s) => n + c[s], 0);
+                if (!total) return null;
+                return (
+                  <button
+                    key={`neutral-${r}`}
+                    type="button"
+                    onClick={() => onOpenNeutral?.(r)}
+                    className="flex items-center gap-2 rounded-md border border-line px-2.5 py-1.5 text-xs hover:bg-surface-hover"
+                  >
+                    <span className="font-medium">{r === 'flag' ? 'Source flags' : 'Source segments'}</span>
+                    <span className="text-fg-muted tabular-nums">{total}</span>
+                    {ORDER.filter((s) => c[s] > 0).map((s) => (
+                      <Badge key={s} tone={COVERAGE_TONE[s]} title={STATUS_LABEL[s]}>
+                        {c[s]}
+                      </Badge>
+                    ))}
+                  </button>
+                );
+              })}
           </div>
         </Card>
       )}

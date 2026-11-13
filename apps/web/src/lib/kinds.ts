@@ -25,6 +25,8 @@ export const SOURCE_BADGE: Record<SourceKind, { label: string; tone: Tone }> = {
 
 /** Sources that read live (not an uploaded file) and so have a refresh action. */
 export const refreshable = (s: Pick<SourceDescriptor, 'kind'>): boolean => s.kind === 'console_api' || s.kind === 'launchdarkly' || s.kind === 'posthog';
+/** Sources fed by an uploaded file (a StatSig config spec or a PostHog flags payload): refreshed by uploading a newer export. */
+export const uploadable = (s: Pick<SourceDescriptor, 'kind'>): boolean => s.kind === 'config_spec' || s.kind === 'posthog_payload';
 
 /** `secrets` kind holding this source's credential, when it has one. */
 export const secretKindOf = (s: Pick<SourceDescriptor, 'kind'>): 'statsig' | 'ld_source' | 'ph_source' | null =>

@@ -454,7 +454,7 @@ function Teams({ workspaceId, g, m }: { workspaceId: string; g: GuideModel; m: M
       <p className="text-fg-muted">
         {p.access === 'scim_team_sync'
           ? 'Okta team sync is on, so LaunchDarkly teams are created and filled only by Okta Group Push. The console lists the groups to push and matches them by name; nothing is created from here.'
-          : 'StatSig teams become LaunchDarkly teams with the members that already exist in LaunchDarkly. Teams come first so invitations can place people straight into them, and a flag whose owner is not a LaunchDarkly member can take its team as maintainer. Creating a team sends no email.'}
+          : `${p.sourceLabel ?? 'Source'} teams become LaunchDarkly teams with the members that already exist in LaunchDarkly. Teams come first so invitations can place people straight into them, and a flag whose owner is not a LaunchDarkly member can take its team as maintainer. Creating a team sends no email.`}
       </p>
       {!g.connected && <Callout tone="blue">Connect LaunchDarkly (step 1) to see which teams it already has.</Callout>}
       {g.connected && p.access === 'scim_team_sync' && missing.length > 0 && (
@@ -513,14 +513,17 @@ function Teams({ workspaceId, g, m }: { workspaceId: string; g: GuideModel; m: M
 }
 
 /**
- * Owners → maintainers, once per person (PLAN §8.3, edge case 1.5). Inviting sends an email from
- * LaunchDarkly, so inviting everyone at once asks for a typed confirmation first.
+ * Owners → maintainers, once per person (PLAN §8.3, edge case 1.5). Owners come from every source
+ * kind (StatSig entity owners, LaunchDarkly and PostHog flag maintainers), so the copy names the
+ * provider only when all the sources share one. Inviting sends an email from LaunchDarkly, so
+ * inviting everyone at once asks for a typed confirmation first.
  */
 function People({ workspaceId, g, m, nav }: { workspaceId: string; g: GuideModel; m: MigrationContext | null; nav: GuideNav }) {
   const { busy, error, run, saveProfile } = useAccountWrites(m);
   const [role, setRole] = useState<LdInviteRole>('reader');
   const [confirmAll, setConfirmAll] = useState(false);
   const p = g.people;
+  const ownerNoun = `${p.sourceLabel ?? 'source'} owner`;
   const missing = p.owners.filter((o) => o.status === 'missing');
   const choose = (email: string, choice: MappingProfile['maintainers'] extends Record<string, infer C> | undefined ? C | null : never) =>
     saveProfile((prof) => {
@@ -542,7 +545,7 @@ function People({ workspaceId, g, m, nav }: { workspaceId: string; g: GuideModel
       <p className="text-fg-muted">
         {provisioned
           ? 'A LaunchDarkly maintainer must be a member of the account. Members come from your identity provider over SCIM, so nobody is invited from here: owners are matched by email as they are provisioned, and until then their items can take the team as maintainer or go without one.'
-          : 'A LaunchDarkly maintainer must be a member of the account, so each StatSig owner is matched by email before any flag is written. Owners without a LaunchDarkly member can be invited (LaunchDarkly emails them, they join the teams created in the previous step, and they become maintainers on the next sync), handed to their team, or left unassigned.'}
+          : `A LaunchDarkly maintainer must be a member of the account, so each ${ownerNoun} is matched by email before any flag is written. Owners without a LaunchDarkly member can be invited (LaunchDarkly emails them, they join the teams created in the previous step, and they become maintainers on the next sync), handed to their team, or left unassigned.`}
       </p>
       {!g.connected && <Callout tone="blue">Connect LaunchDarkly (step 1) to match owners against its members.</Callout>}
       {g.connected && !p.membersReadable && (
@@ -599,7 +602,7 @@ function People({ workspaceId, g, m, nav }: { workspaceId: string; g: GuideModel
         <table className="w-full text-sm">
           <thead className="text-left text-xs text-fg-muted">
             <tr>
-              <th className="py-1 pr-3 font-medium">StatSig owner</th>
+              <th className="py-1 pr-3 font-medium">Owner</th>
               <th className="py-1 pr-3 font-medium">Items</th>
               <th className="py-1 pr-3 font-medium">Team</th>
               <th className="py-1 font-medium">In LaunchDarkly</th>

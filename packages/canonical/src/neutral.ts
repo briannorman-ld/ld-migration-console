@@ -115,14 +115,41 @@ export interface NeutralVariation {
 }
 
 /**
+ * One pending scheduled change in the source (PostHog `ScheduledChange`, PLAN §22.3). `at`,
+ * `operation` and `recurring` are always set; the typed fields are set when the adapter could
+ * translate the payload, so the mapper can carry the change as an LD scheduled change:
+ * - `on`: a status flip (`update_status`);
+ * - `rules`: condition sets the change appends to the flag's targeting (`add_release_condition`),
+ *   translated like the flag's own rules (variation indexes into the flag's variations);
+ * - `variants`: a new variant split (`update_variants`), kept as a note only.
+ * A change with none of them (an unknown operation, or a payload the adapter could not read) is
+ * noted, never scheduled.
+ */
+export interface NeutralScheduledChange {
+  /** ISO instant the source applies the change (empty when the source gave none). */
+  at: string;
+  /** The source's operation name, verbatim. */
+  operation: string;
+  /** A cron or interval schedule; LD scheduled changes are one-off. */
+  recurring: boolean;
+  on?: boolean;
+  rules?: NeutralRule[];
+  /** Weights in thousandths of a percent, as in `NeutralRollout`. */
+  variants?: { key: string; weight: number }[];
+}
+
+/**
  * Facts about a flag or segment that LD has no field for and the mapper must surface as a
  * decision or note (PLAN §22.3). Adapters emit them; the mapper owns the wording and the options.
  */
 export type NeutralCaveat =
   /** The source persists the pre-login assignment to the identified person (PostHog experience continuity). */
   | { kind: 'experience_continuity' }
-  /** Early-access opt-in overrides every rule through a person attribute. */
-  | { kind: 'early_access_enrollment'; detail: { attribute: string; stage?: string } }
+  /**
+   * Early-access opt-in overrides every rule through a person attribute. `name`, `description` and
+   * `documentationUrl` come from the source's early-access feature definition when it was read.
+   */
+  | { kind: 'early_access_enrollment'; detail: { attribute: string; stage?: string; name?: string; description?: string; documentationUrl?: string } }
   /** Rollouts bucket by an attribute other than the context key (PostHog `bucketing_identifier: device_id`). */
   | { kind: 'device_bucketing'; detail: { attribute: string } }
   /** The flag evaluates only for requests that pass these contexts (PostHog `evaluation_contexts`). */
@@ -131,8 +158,8 @@ export type NeutralCaveat =
   | { kind: 'encrypted_payload'; detail: { readable: boolean } }
   /** A holdout excludes a share of contexts before the rules run. */
   | { kind: 'holdout'; detail: { id: string; percentage: number } }
-  /** Pending scheduled changes in the source (ISO instants; `recurring` for cron schedules). */
-  | { kind: 'scheduled_changes'; detail: { changes: { at: string; operation: string; recurring: boolean }[] } }
+  /** Pending scheduled changes in the source (see `NeutralScheduledChange`). */
+  | { kind: 'scheduled_changes'; detail: { changes: NeutralScheduledChange[] } }
   /** The source hashes rollouts without a per-flag salt, so equal percentages pick the same contexts across flags. */
   | { kind: 'unsalted_rollout' }
   /** The flag always serves one static payload (PostHog remote config). */

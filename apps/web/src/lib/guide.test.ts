@@ -114,6 +114,91 @@ describe('guide: people and teams (PLAN §8.3)', () => {
     ]);
   });
 
+  /** A flag read onto the neutral model (PostHog here): the maintainer is the owner; the flag itself names nobody. */
+  const neutralFlag = (key: string, maintainer: { id?: string; email?: string; teamKey?: string } | undefined, archived = false): Record<string, unknown> => ({
+    kind: 'flag',
+    uid: `src-hog/flag/${key}`,
+    key,
+    name: key,
+    description: '',
+    flagKind: 'boolean',
+    variations: [{ value: true }, { value: false }],
+    tags: [],
+    temporary: false,
+    archived,
+    customProperties: {},
+    experiments: [],
+    environments: [],
+    ...(maintainer ? { maintainer } : {}),
+  });
+  const hogSnapshot = {
+    source: { sourceId: 'src-hog', sourceKind: 'posthog', alias: 'hog' },
+    environments: [],
+    unitTypes: [],
+    // The organization's members: the only place a PostHog flag's owner has a name.
+    users: [
+      { id: 'u-bob', email: 'Bob@acme.example', name: 'Bob Okafor' },
+      { email: 'dana@acme.example', name: 'Dana Whitfield' },
+    ],
+    gates: [],
+    configs: [],
+    segments: [],
+    experiments: [],
+    layers: [],
+    holdouts: [],
+    autotunes: [],
+    prompts: [],
+    teams: [],
+    alerts: [],
+    neutral: {
+      flags: [
+        neutralFlag('hog_checkout', { id: '7', email: 'bob@acme.example' }), // the same person as the StatSig gate owner
+        neutralFlag('hog_search', { email: 'Dana@acme.example', teamKey: 'platform' }),
+        neutralFlag('hog_retired', { email: 'retired@acme.example' }, true), // archived: never migrated, so not an item
+        neutralFlag('hog_idonly', { id: '9' }), // a member ID of the source account: nobody to match
+        neutralFlag('hog_nobody', undefined),
+      ],
+      segments: [],
+      contextKinds: [],
+    },
+  } as never;
+
+  it('counts neutral-model flags (LaunchDarkly, PostHog) for their maintainer, adding to the StatSig owner of the same email, naming them from the member list and skipping archived flags', () => {
+    const p = computePeople([snapshot, hogSnapshot], m(), { membersReadable: true, teamsReadable: true, canInvite: true, canCreateTeams: true });
+    expect(p.owners.map((o) => [o.email, o.items, o.status, o.team ?? null, o.name ?? null])).toEqual([
+      ['bob@acme.example', 3, 'member', 'Checkout', 'Bob Okafor'],
+      ['gone@acme.example', 2, 'missing', 'Checkout', 'Jordan Former'],
+      ['dana@acme.example', 1, 'missing', 'platform', 'Dana Whitfield'],
+      ['priya@acme.example', 1, 'missing', 'Search', 'Priya Raman'],
+    ]);
+    expect(p.owners.find((o) => o.email === 'retired@acme.example')).toBeUndefined();
+    // The maintainer team key is a team of its own, with no member list to read, and is matched to LD by key.
+    expect(p.teams.map((t) => [t.name, t.items, t.status, t.memberEmails])).toEqual([
+      ['Checkout', 2, 'missing', ['bob@acme.example', 'gone@acme.example']],
+      ['platform', 1, 'missing', []],
+      ['Search', 1, 'missing', []],
+    ]);
+    const withTeam = computePeople([snapshot, hogSnapshot], m({ directory: { members: [{ id: 'mem-bob', email: 'bob@acme.example' }], teams: [{ key: 'platform', name: 'Platform Engineering' }], membersReadable: true, teamsReadable: true } }), { membersReadable: true, teamsReadable: true, canInvite: true, canCreateTeams: true });
+    expect(withTeam.teams.find((t) => t.name === 'platform')).toMatchObject({ status: 'exists', ldKey: 'platform' });
+    // A PostHog-only workspace: the same rows, with the member directory deciding the status.
+    const hogOnly = computePeople([hogSnapshot], m(), { membersReadable: true, teamsReadable: true, canInvite: true, canCreateTeams: true });
+    expect(hogOnly.owners.map((o) => [o.email, o.items, o.status, o.name ?? null, o.memberId ?? null])).toEqual([
+      ['bob@acme.example', 1, 'member', 'Bob Okafor', 'mem-bob'],
+      ['dana@acme.example', 1, 'missing', 'Dana Whitfield', null],
+    ]);
+    // The profile's choice applies to neutral owners too.
+    const decided = computePeople([hogSnapshot], m({ profile: { version: 1, sources: {}, attributes: {}, policies: {}, maintainers: { 'dana@acme.example': { teamKey: 'platform' } } } }), { membersReadable: true, teamsReadable: true, canInvite: true, canCreateTeams: true });
+    expect(decided.owners.find((o) => o.email === 'dana@acme.example')).toMatchObject({ status: 'chosen_team', teamKey: 'platform' });
+  });
+
+  it('names the provider for the step copy only when every source shares one', () => {
+    const caps = { membersReadable: true, teamsReadable: true, canInvite: true, canCreateTeams: true };
+    expect(computePeople([snapshot], m(), caps).sourceLabel).toBe('StatSig');
+    expect(computePeople([hogSnapshot], m(), caps).sourceLabel).toBe('PostHog');
+    expect(computePeople([snapshot, hogSnapshot], m(), caps).sourceLabel).toBeUndefined();
+    expect(computePeople([], m(), caps).sourceLabel).toBeUndefined();
+  });
+
   it('reads the profile first: chosen members, teams and "unassigned" owners, and mapped or skipped teams', () => {
     const profile = { version: 1, sources: {}, attributes: {}, policies: {}, maintainers: { 'gone@acme.example': 'unassigned', 'priya@acme.example': { memberId: 'mem-alice' } }, teams: { Search: null } };
     const p = computePeople([snapshot], m({ profile, directory: { members: [{ id: 'mem-bob', email: 'bob@acme.example' }], teams: [{ key: 'checkout', name: 'Checkout' }], membersReadable: true, teamsReadable: true } }), { membersReadable: true, teamsReadable: true, canInvite: false, canCreateTeams: false });

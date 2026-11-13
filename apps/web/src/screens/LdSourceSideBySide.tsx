@@ -30,6 +30,23 @@ interface FlagRow {
   result: NeutralFlagMapResult;
   ldEnv: string | null;
   strip: { ldEnv: string; status: MigrationStatus }[];
+  /** The flag's maintainer as the source states it, with the display name from the snapshot's member list (a PostHog flag names only its creator's email). */
+  owner?: FlagOwner;
+}
+
+interface FlagOwner {
+  email?: string;
+  name?: string;
+  teamKey?: string;
+}
+
+/** What the detail shows as the flag's owner: nothing for a maintainer the source gave only as a member ID (it belongs to the source account; the mapper notes it). */
+export function flagOwner(flag: NeutralFlag, users: CanonicalSnapshot['users'] | undefined): FlagOwner | undefined {
+  const mt = flag.maintainer;
+  if (!mt || (!mt.email && !mt.teamKey)) return undefined;
+  const email = mt.email?.trim().toLowerCase();
+  const name = email ? users?.find((u) => u.email?.trim().toLowerCase() === email)?.name : undefined;
+  return { ...(email ? { email } : {}), ...(name ? { name } : {}), ...(mt.teamKey ? { teamKey: mt.teamKey } : {}) };
 }
 interface SegmentRow {
   kind: 'segment';
@@ -109,7 +126,8 @@ export function LdSourceSideBySide({
             const lf = ldFlags.get(r.flagKey);
             return { ldEnv: le, status: migrationStatus(lf && ldFlagState(lf), le, r, { id: f.key, source: snap.source.alias }).status };
           });
-          out.push({ kind: 'flag', sourceId: s.id, sourceKind: s.kind, alias: s.alias, entity: f, result, ldEnv, strip });
+          const owner = flagOwner(f, snap.users);
+          out.push({ kind: 'flag', sourceId: s.id, sourceKind: s.kind, alias: s.alias, entity: f, result, ldEnv, strip, ...(owner ? { owner } : {}) });
         }
       } else {
         for (const g of snap.neutral!.segments) {
@@ -334,6 +352,18 @@ function Detail({ row, m, readOnly, sourceEnv }: { row: Row; m: MigrationContext
           Source ({SOURCE_BADGE[row.sourceKind].label} {row.alias})
         </div>
         {row.kind === 'flag' ? <SourceFlag flag={row.entity} env={sourceEnv} /> : <SourceSegment segment={row.entity} env={sourceEnv} />}
+        {row.kind === 'flag' && row.owner && (
+          <div className="mt-1.5 text-xs text-fg-subtle" data-testid="flag-owner">
+            owner:{' '}
+            {row.owner.email ? (
+              <>
+                {row.owner.name && <span className="text-fg-muted">{row.owner.name} </span>}
+                <span className="font-mono">{row.owner.email}</span>
+              </>
+            ) : null}
+            {row.owner.teamKey && <span>{row.owner.email ? ' · ' : ''}team “{row.owner.teamKey}”</span>}
+          </div>
+        )}
       </div>
       <div>
         <div className="mb-1.5 text-xs font-semibold tracking-wide text-fg-muted uppercase">Target {row.ldEnv ? `(${row.ldEnv})` : ''}</div>
