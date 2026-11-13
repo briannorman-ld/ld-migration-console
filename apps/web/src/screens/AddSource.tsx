@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { ENTITY_KINDS, type EntityKind, type SourceDescriptor, type SourceKind } from '@sslm/canonical';
-import { MAX_SPEC_BYTES } from '@sslm/adapters';
+import { MAX_SPEC_BYTES, POSTHOG_REGIONS, PostHogClient, type PostHogRegionId } from '@sslm/adapters';
 import { LD_INSTANCES, LdClient, type LdInstanceId, type LdProject } from '@sslm/ld-client';
 import { STATSIG_CONSOLE_BASE_URL, StatsigConsoleClient } from '@sslm/statsig-client';
 import { appendLog, describeProgress, describeTransportEvent, SyncActivity, type SyncLogEntry } from '../components/SyncActivity.tsx';
@@ -10,19 +10,35 @@ import { KIND_LABEL } from '../lib/kinds.ts';
 import { secrets } from '../lib/secrets.ts';
 import { deriveAlias, specSourceLabel } from '../lib/sourceNaming.ts';
 import { store } from '../lib/store.ts';
-import { syncConsoleSource, syncLdSource, uploadSpec } from '../lib/sync.ts';
+import { useFlag } from '../lib/flags.ts';
+import { syncConsoleSource, syncLdSource, syncPostHogSource, uploadPostHogPayload, uploadSpec } from '../lib/sync.ts';
 
 /** Shortest string we try as a LaunchDarkly token; anything shorter is still being typed. */
 const MIN_LD_TOKEN_LENGTH = 8;
+/** Shortest string we try as a PostHog personal API key (`phx_…`); anything shorter is still being typed. */
+const MIN_PH_KEY_LENGTH = 8;
+
+/** The read scopes a PostHog personal API key needs (PLAN §22.1); the console never writes. */
+const POSTHOG_READ_SCOPES = ['feature_flag:read', 'cohort:read', 'group:read', 'person:read', 'project:read', 'property_definition:read', 'user:read', 'organization_member:read'];
+
+/** A PostHog project the key can read, as `PostHogClient.listReadableProjects` returns it. */
+interface PostHogProjectOption {
+  id: string;
+  name: string;
+  organizationId: string;
+  organizationName: string;
+}
 
 /**
  * Add a source: a StatSig project (Console API key, recommended, or an uploaded config spec,
- * PLAN §4.2), or another LaunchDarkly project read with its own token (PLAN §20.2).
+ * PLAN §4.2), another LaunchDarkly project read with its own token (PLAN §20.2), or a PostHog
+ * project read with a personal API key or from an uploaded local-evaluation payload (PLAN §22.2).
  *
  * The source names itself. A Console key belongs to one StatSig project, so its name comes from
- * `GET /project`; a LaunchDarkly token can read many projects, so they are listed and one is
- * picked; a spec file is named after the file. The alias (tags, provenance, consolidation
- * prefix; see `sourceNaming.ts`) is derived from that name and made unique in the workspace.
+ * `GET /project`; a LaunchDarkly token or PostHog key can read many projects, so they are listed
+ * and one is picked; a spec or payload file is named after the file. The alias (tags, provenance,
+ * consolidation prefix; see `sourceNaming.ts`) is derived from that name and made unique in the
+ * workspace.
  */
 export function AddSource({ workspaceId, onDone }: { workspaceId: string; onDone: () => void }) {
   const [kind, setKind] = useState<SourceKind>('console_api');
@@ -32,6 +48,13 @@ export function AddSource({ workspaceId, onDone }: { workspaceId: string; onDone
   const [ldProjects, setLdProjects] = useState<LdProject[]>();
   const [ldListing, setLdListing] = useState(false);
   const [ldListError, setLdListError] = useState<string>();
+  // PLAN §22 ships behind the console's own `posthog-source` flag: off, the tile is not offered.
+  const posthogOn = useFlag('posthogSource');
+  const [phRegion, setPhRegion] = useState<PostHogRegionId>('us');
+  const [phProject, setPhProject] = useState('');
+  const [phProjects, setPhProjects] = useState<PostHogProjectOption[]>();
+  const [phListing, setPhListing] = useState(false);
+  const [phListError, setPhListError] = useState<string>();
   const [file, setFile] = useState<File>();
   const [kinds, setKinds] = useState<Set<EntityKind>>(() => new Set(ENTITY_KINDS));
   const [busy, setBusy] = useState(false);
@@ -68,6 +91,36 @@ export function AddSource({ workspaceId, onDone }: { workspaceId: string; onDone
   };
   const ldDisclaimer = LD_INSTANCES[ldInstance].disclaimer;
 
+  // Same rule for PostHog: the key is sent once, on a click, to the region chosen at that moment.
+  const listPhProjects = async () => {
+    const k = key.trim();
+    if (k.length < MIN_PH_KEY_LENGTH) return;
+    const ctrl = new AbortController();
+    setPhListing(true);
+    setPhProjects(undefined);
+    setPhListError(undefined);
+    setPhProject('');
+    try {
+      const listed = await new PostHogClient({ region: phRegion, key: k }).listReadableProjects(ctrl.signal);
+      const projects = [...listed].sort((a, b) => a.name.localeCompare(b.name) || a.organizationName.localeCompare(b.organizationName));
+      setPhProjects(projects);
+      if (projects.length === 1) setPhProject(projects[0]!.id);
+    } catch (e) {
+      setPhListError((e as Error).message);
+    } finally {
+      setPhListing(false);
+    }
+  };
+  const resetPhListing = () => {
+    setPhProjects(undefined);
+    setPhListError(undefined);
+    setPhProject('');
+  };
+  // The PostHog tile covers both PostHog inputs: the API read and the payload upload.
+  const isPostHog = kind === 'posthog' || kind === 'posthog_payload';
+  // Live sources sync on add and show the activity log; uploads just parse the file.
+  const isLive = kind !== 'config_spec' && kind !== 'posthog_payload';
+
   const add = async () => {
     setBusy(true);
     setError(undefined);
@@ -97,6 +150,25 @@ export function AddSource({ workspaceId, onDone }: { workspaceId: string; onDone
         secrets.set('ld_source', source.id, key.trim(), workspaceId);
         setKey('');
         await syncLdSource(workspaceId, source, handlers);
+      } else if (kind === 'posthog') {
+        const project = phProjects?.find((p) => p.id === phProject);
+        if (!project) throw new Error('Choose the PostHog project to read.');
+        const source: SourceDescriptor = {
+          ...base,
+          alias: deriveAlias(project.name, taken, 'posthog'),
+          label: `${project.name} (PostHog)`,
+          posthog: { region: phRegion, projectId: project.id, projectName: project.name },
+        };
+        await store.addSource(workspaceId, source);
+        secrets.set('ph_source', source.id, key.trim(), workspaceId);
+        setKey('');
+        await syncPostHogSource(workspaceId, source, handlers);
+      } else if (kind === 'posthog_payload') {
+        if (!file) throw new Error('Choose the flags definitions file to upload.');
+        const stem = file.name.replace(/\.json$/i, '').trim();
+        const source: SourceDescriptor = { ...base, alias: deriveAlias('posthog', taken, 'posthog'), label: stem ? `${stem} (PostHog payload)` : 'PostHog payload' };
+        await store.addSource(workspaceId, source);
+        await uploadPostHogPayload(workspaceId, source, file);
       } else if (kind === 'console_api') {
         // One request validates the key and names the project before anything is saved.
         const apiKey = key.trim();
@@ -124,7 +196,8 @@ export function AddSource({ workspaceId, onDone }: { workspaceId: string; onDone
     }
   };
 
-  const canAdd = kind === 'console_api' ? !!key.trim() && kinds.size > 0 : kind === 'launchdarkly' ? !!key.trim() && !!ldProject : !!file;
+  const canAdd =
+    kind === 'console_api' ? !!key.trim() && kinds.size > 0 : kind === 'launchdarkly' ? !!key.trim() && !!ldProject : kind === 'posthog' ? !!key.trim() && !!phProject : !!file;
 
   return (
     <div className="max-w-2xl space-y-4">
@@ -139,9 +212,139 @@ export function AddSource({ workspaceId, onDone }: { workspaceId: string; onDone
         <Button variant={kind === 'launchdarkly' ? 'primary' : 'secondary'} onClick={() => setKind('launchdarkly')}>
           LaunchDarkly project
         </Button>
+        {posthogOn && (
+          <Button variant={isPostHog ? 'primary' : 'secondary'} onClick={() => setKind('posthog')}>
+            PostHog project
+          </Button>
+        )}
       </div>
       <Card className="space-y-4 p-5">
-        {kind === 'launchdarkly' ? (
+        {isPostHog ? (
+          <>
+            <fieldset className="flex flex-wrap gap-x-4 gap-y-1 text-sm">
+              <legend className="sr-only">How to read the PostHog project</legend>
+              <label className="flex items-center gap-1.5">
+                <input
+                  type="radio"
+                  name="src-ph-input"
+                  checked={kind === 'posthog'}
+                  onChange={() => {
+                    setKind('posthog');
+                    setFile(undefined);
+                  }}
+                />
+                Read the project with a personal API key
+              </label>
+              <label className="flex items-center gap-1.5">
+                <input
+                  type="radio"
+                  name="src-ph-input"
+                  checked={kind === 'posthog_payload'}
+                  onChange={() => {
+                    setKind('posthog_payload');
+                    resetPhListing();
+                  }}
+                />
+                Upload a local-evaluation payload instead
+              </label>
+            </fieldset>
+            {kind === 'posthog' ? (
+              <>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label htmlFor="src-ph-region">Region</Label>
+                    <Select
+                      id="src-ph-region"
+                      value={phRegion}
+                      onChange={(e) => {
+                        setPhRegion(e.target.value as PostHogRegionId);
+                        resetPhListing();
+                      }}
+                    >
+                      {Object.values(POSTHOG_REGIONS).map((r) => (
+                        <option key={r.id} value={r.id}>
+                          {r.label}
+                        </option>
+                      ))}
+                    </Select>
+                  </div>
+                  <div>
+                    <Label htmlFor="src-ph-key">Personal API key (read scopes)</Label>
+                    <Input
+                      id="src-ph-key"
+                      type="password"
+                      autoComplete="off"
+                      spellCheck={false}
+                      placeholder="phx_…"
+                      value={key}
+                      onChange={(e) => {
+                        setKey(e.target.value);
+                        resetPhListing();
+                      }}
+                    />
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <Button variant="secondary" onClick={listPhProjects} disabled={phListing || key.trim().length < MIN_PH_KEY_LENGTH}>
+                    {phListing && <Spinner />} List projects
+                  </Button>
+                  <span className="text-xs text-fg-muted">Sends the key to {POSTHOG_REGIONS[phRegion].origin.replace('https://', '')} once, to list the projects it can read.</span>
+                </div>
+                <div>
+                  <Label htmlFor="src-ph-project">Project to read</Label>
+                  <SearchSelect
+                    id="src-ph-project"
+                    value={phProject}
+                    options={(phProjects ?? []).map((p) => ({ key: p.id, name: `${p.name} (${p.organizationName})` }))}
+                    disabled={!phProjects}
+                    placeholder={
+                      phListing
+                        ? 'Listing the projects this key can read…'
+                        : phProjects
+                          ? phProjects.length
+                            ? `Search ${phProjects.length} projects…`
+                            : 'This key can read no project'
+                          : phListError
+                            ? 'Could not list projects'
+                            : 'Paste the key and list its projects first'
+                    }
+                    emptyText="No project matches"
+                    onChange={setPhProject}
+                  />
+                  {phListError && <p className="mt-1.5 text-xs text-error">{phListError}</p>}
+                  <p className="mt-1.5 text-xs text-fg-muted">
+                    The key needs only the read scopes <code>{POSTHOG_READ_SCOPES.join(', ')}</code>. It is kept encrypted on this device and sent only to that region’s API; the
+                    project is only ever read (flags, cohorts, group types and property definitions) and nothing is written to PostHog. A PostHog project has no environments, so
+                    this source maps to <b>one LaunchDarkly environment</b>; add one source per PostHog project (dev, staging, prod) and they consolidate here.
+                  </p>
+                </div>
+              </>
+            ) : (
+              <div>
+                <Label htmlFor="src-ph-file">Flags definitions payload (.json)</Label>
+                <input
+                  id="src-ph-file"
+                  type="file"
+                  accept=".json,application/json"
+                  onChange={(e) => {
+                    setError(undefined);
+                    setFile(e.target.files?.[0]);
+                  }}
+                  className="text-sm"
+                />
+                <p className="mt-1.5 text-xs text-fg-muted">
+                  Download it with{' '}
+                  <code>
+                    curl -H "Authorization: Bearer &lt;personal or secret key&gt;" "https://us.posthog.com/flags/definitions?token=&lt;project api token&gt;&amp;send_cohorts" -o
+                    posthog-flags.json
+                  </code>{' '}
+                  (use <code>eu.posthog.com</code> or your own host as needed). The file stays in this browser. The payload holds every active flag with its full targeting and the
+                  property cohorts, but <b>no archived flags, static-cohort members, owners or scheduled changes</b>; read the project with a key when you need those.
+                </p>
+              </div>
+            )}
+          </>
+        ) : kind === 'launchdarkly' ? (
           <>
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -296,7 +499,7 @@ export function AddSource({ workspaceId, onDone }: { workspaceId: string; onDone
         {error && <Callout tone="red">{error}</Callout>}
         <div className="flex items-center gap-3">
           <Button onClick={add} disabled={busy || !canAdd}>
-            {busy && <Spinner />} {busy && kind !== 'config_spec' ? 'Syncing…' : 'Add source'}
+            {busy && <Spinner />} {busy && isLive ? 'Syncing…' : 'Add source'}
           </Button>
           {busy && progress && (
             <span className="text-xs text-fg-muted tabular-nums">
@@ -304,7 +507,7 @@ export function AddSource({ workspaceId, onDone }: { workspaceId: string; onDone
             </span>
           )}
         </div>
-        {kind !== 'config_spec' && (busy || (error && log.length > 0)) && <SyncActivity log={log} running={busy} />}
+        {isLive && (busy || (error && log.length > 0)) && <SyncActivity log={log} running={busy} />}
       </Card>
     </div>
   );

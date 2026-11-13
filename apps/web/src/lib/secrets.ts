@@ -14,8 +14,11 @@ import { useSyncExternalStore } from 'react';
 import { decryptVault, encryptVault, isDeviceVault, isPassphraseVault, newDeviceVaultKey, newVaultKey, unlockVaultKey, WrongPassphraseError, type UnlockedVault, type VaultRecord } from '@sslm/store';
 import { store } from './store.ts';
 
-/** `ld_source`: the read token of an LD project attached as a *source* (PLAN §20.2), keyed by source id. */
-type SecretKind = 'statsig' | 'ld' | 'ld_source';
+/**
+ * `ld_source`: the read token of an LD project attached as a *source* (PLAN §20.2), keyed by
+ * source id. `ph_source`: the personal API key of a PostHog project source (PLAN §22.2), same keying.
+ */
+type SecretKind = 'statsig' | 'ld' | 'ld_source' | 'ph_source';
 
 const vault = new Map<string, string>();
 /** Which workspace each in-memory secret belongs to (StatSig keys are keyed by source id). */
@@ -91,16 +94,18 @@ export interface Restored {
   ld: boolean;
   statsig: string[];
   ldSources: string[];
+  phSources: string[];
 }
 
 function load(workspaceId: string, entries: Record<string, string>): Restored {
-  const restored: Restored = { ld: false, statsig: [], ldSources: [] };
+  const restored: Restored = { ld: false, statsig: [], ldSources: [], phSources: [] };
   for (const [k, v] of Object.entries(entries)) {
     vault.set(k, v);
     owners.set(k, workspaceId);
     if (k === key('ld', workspaceId)) restored.ld = true;
     else if (k.startsWith('statsig:')) restored.statsig.push(k.slice('statsig:'.length));
     else if (k.startsWith('ld_source:')) restored.ldSources.push(k.slice('ld_source:'.length));
+    else if (k.startsWith('ph_source:')) restored.phSources.push(k.slice('ph_source:'.length));
   }
   return restored;
 }

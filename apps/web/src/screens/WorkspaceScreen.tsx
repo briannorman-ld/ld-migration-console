@@ -10,6 +10,7 @@ import type { RunJournalRecord, SourceRecord } from "@sslm/store";
 import { LdMark } from "../components/Brand.tsx";
 import { UnlockKeysBar } from "../components/DeviceVault.tsx";
 import { ThemeToggle } from "../components/ThemeToggle.tsx";
+import { isPostHogKind, useFlag } from "../lib/flags.ts";
 import {
   appendLog,
   describeProgress,
@@ -112,9 +113,16 @@ export function WorkspaceScreen({
   useEffect(() => {
     if (workspaceQuery && !workspaceQuery.ws) onExit();
   }, [workspaceQuery, onExit]);
-  const sources = useLiveQuery(
+  const allSources = useLiveQuery(
     () => store.listSources(workspaceId),
     [workspaceId],
+  );
+  // PLAN §22 ships behind the console's `posthog-source` flag: off, a PostHog source the
+  // workspace already has stays in the store but is not shown, synced or planned.
+  const posthogOn = useFlag("posthogSource");
+  const sources = useMemo(
+    () => (posthogOn ? allSources : allSources?.filter((s) => !isPostHogKind(s.kind))),
+    [allSources, posthogOn],
   );
   // sourceId → snapshot id pinned for read-only viewing of a past sync (Snapshots view). Empty = latest.
   const [viewing, setViewing] = useState<Record<string, string>>({});
@@ -293,7 +301,11 @@ export function WorkspaceScreen({
     () => visibleSnaps.reduce((acc, s) => ({ flags: acc.flags + (s.neutral?.flags.length ?? 0), segments: acc.segments + (s.neutral?.segments.length ?? 0) }), { flags: 0, segments: 0 }),
     [visibleSnaps],
   );
-  const hasLdSource = visibleSnaps.some((s) => s.neutral);
+  // Which source kinds feed the neutral block (LD projects, PostHog projects or payloads): the
+  // sidebar section is named after them when they agree, "Source flags" when they mix.
+  const neutralKinds = useMemo(() => new Set(visibleSnaps.filter((s) => s.neutral).map((s) => s.source.sourceKind)), [visibleSnaps]);
+  const hasNeutralSource = neutralKinds.size > 0;
+  const neutralTitle = [...neutralKinds].every((k) => k === "launchdarkly") ? "LaunchDarkly source" : [...neutralKinds].every((k) => k === "posthog" || k === "posthog_payload") ? "PostHog source" : "Source flags";
   const m = useMigration(workspaceId, visibleSnaps);
   // The walks below map every entity (through the memo in lib/migration.ts) and key on the
   // mapping inputs, not on `m`: the context is rebuilt on every LD session patch and exclusion
@@ -547,7 +559,15 @@ export function WorkspaceScreen({
                         {sn.projectName && (
                           <span
                             className="block truncate"
-                            title={s.kind === "launchdarkly" ? `LaunchDarkly project “${sn.projectName}” (${s.ld?.projectKey ?? ""} on ${s.ld?.instance ?? "us"})` : `StatSig project “${sn.projectName}” (one Console key reads one project)`}
+                            title={
+                              s.kind === "launchdarkly"
+                                ? `LaunchDarkly project “${sn.projectName}” (${s.ld?.projectKey ?? ""} on ${s.ld?.instance ?? "us"})`
+                                : s.kind === "posthog"
+                                  ? `PostHog project “${sn.projectName}” (${s.posthog?.projectId ?? ""} on ${s.posthog?.region ?? "us"})`
+                                  : s.kind === "posthog_payload"
+                                    ? `PostHog project “${sn.projectName}” (uploaded payload)`
+                                    : `StatSig project “${sn.projectName}” (one Console key reads one project)`
+                            }
                           >
                             project {sn.projectName}
                           </span>
@@ -666,9 +686,9 @@ export function WorkspaceScreen({
             ))}
           </ul>
 
-          {hasLdSource && (
+          {hasNeutralSource && (
             <>
-              <SectionTitle>LaunchDarkly source</SectionTitle>
+              <SectionTitle>{neutralTitle}</SectionTitle>
               <ul>
                 {(["flag", "segment"] as const).map((k) => (
                   <li key={k}>

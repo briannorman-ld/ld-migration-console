@@ -91,6 +91,9 @@ export function UnitTypeMapping({ sources, snapshots, m, onConnect }: { sources:
           usage.map((x) => x.u.name),
         );
         const isLd = s.kind === 'launchdarkly';
+        const isPostHog = s.kind === 'posthog' || s.kind === 'posthog_payload';
+        // What the source calls the thing that becomes an LD context kind.
+        const sourceWord = isLd ? 'context kind' : isPostHog ? 'group type' : 'unit type';
         return (
           <div key={s.id} className="space-y-3">
             {withSnap.length > 1 && (
@@ -99,12 +102,14 @@ export function UnitTypeMapping({ sources, snapshots, m, onConnect }: { sources:
               </h4>
             )}
             {usage.length === 0 ? (
-              <p className="text-sm text-fg-muted">{isLd ? 'This project declares no context kinds beyond user.' : 'This source declares no unit types; userID maps to the user context.'}</p>
+              <p className="text-sm text-fg-muted">
+                {isLd ? `This project declares no ${sourceWord}s beyond user.` : `This source declares no ${sourceWord}s; ${isPostHog ? 'distinct_id' : 'userID'} maps to the user context.`}
+              </p>
             ) : (
               <table className="w-full text-sm">
                 <thead className="text-left text-xs font-semibold tracking-wide text-fg-muted uppercase">
                   <tr>
-                    <th className="py-1.5 pr-3 font-semibold">{isLd ? 'Source context kind' : 'Unit type'}</th>
+                    <th className="py-1.5 pr-3 font-semibold">{isLd ? `Source ${sourceWord}` : `${sourceWord[0]!.toUpperCase()}${sourceWord.slice(1)}`}</th>
                     <th className="py-1.5 pr-3 font-semibold">LaunchDarkly context kind</th>
                     <th className="py-1.5 pr-3 font-semibold">Experiments</th>
                     <th className="py-1.5 font-semibold">Standing</th>

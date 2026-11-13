@@ -30,7 +30,7 @@ describe('secrets vault', () => {
     // New tab: memory is empty; opening the workspace restores the tokens.
     resetSecretsForTests();
     expect(secrets.get('ld', w)).toBeUndefined();
-    expect(await restoreDeviceVault(w)).toEqual({ ld: true, statsig: ['src-1'], ldSources: [] });
+    expect(await restoreDeviceVault(w)).toEqual({ ld: true, statsig: ['src-1'], ldSources: [], phSources: [] });
     expect(secrets.get('ld', w)).toBe('api-ld-token');
     expect(secrets.get('statsig', 'src-1')).toBe('console-key');
     expect(secrets.get('statsig', 'other-ws-src')).toBeUndefined();
@@ -42,7 +42,7 @@ describe('secrets vault', () => {
     secrets.set('statsig', 'src-2', 'console-key-2', w);
     await flush();
     resetSecretsForTests();
-    expect(await restoreDeviceVault(w)).toEqual({ ld: true, statsig: ['src-1', 'src-2'], ldSources: [] });
+    expect(await restoreDeviceVault(w)).toEqual({ ld: true, statsig: ['src-1', 'src-2'], ldSources: [], phSources: [] });
   });
 
   it('memory only is an opt-out: nothing reaches disk until the user keeps keys on the device again', async () => {
@@ -57,7 +57,7 @@ describe('secrets vault', () => {
     await keepOnDevice(w);
     expect((await store.getVault(w))?.device).toBeInstanceOf(CryptoKey);
     resetSecretsForTests();
-    expect(await restoreDeviceVault(w)).toEqual({ ld: true, statsig: [], ldSources: [] });
+    expect(await restoreDeviceVault(w)).toEqual({ ld: true, statsig: [], ldSources: [], phSources: [] });
   });
 
   it('a passphrase replaces the device key: the blob carries the salt, the record no key, and a new tab must unlock', async () => {
@@ -82,7 +82,7 @@ describe('secrets vault', () => {
     expect(secrets.get('ld', w)).toBeUndefined();
     await expect(unlockDeviceVault(w, 'wrong')).rejects.toBeInstanceOf(WrongPassphraseError);
     expect(isDeviceVaultUnlocked(w)).toBe(false);
-    expect(await unlockDeviceVault(w, 'correct horse battery staple')).toEqual({ ld: true, statsig: ['src-1', 'src-2'], ldSources: [] });
+    expect(await unlockDeviceVault(w, 'correct horse battery staple')).toEqual({ ld: true, statsig: ['src-1', 'src-2'], ldSources: [], phSources: [] });
     expect(secrets.get('statsig', 'src-2')).toBe('console-key-2');
   });
 
@@ -99,7 +99,7 @@ describe('secrets vault', () => {
     secrets.set('statsig', 'src-1', 'console-key', w); // re-entered (or re-saved) while unlocked
     await flush();
     resetSecretsForTests();
-    expect(await unlockDeviceVault(w, 'correct horse battery staple')).toEqual({ ld: true, statsig: ['src-1'], ldSources: [] });
+    expect(await unlockDeviceVault(w, 'correct horse battery staple')).toEqual({ ld: true, statsig: ['src-1'], ldSources: [], phSources: [] });
   });
 
   it('drops a forgotten token from the stored blob, and keeps nothing on disk after opting out', async () => {
@@ -110,7 +110,7 @@ describe('secrets vault', () => {
     secrets.forget('ld', w);
     await flush();
     resetSecretsForTests();
-    expect(await restoreDeviceVault(w)).toEqual({ ld: false, statsig: ['src-1'], ldSources: [] });
+    expect(await restoreDeviceVault(w)).toEqual({ ld: false, statsig: ['src-1'], ldSources: [], phSources: [] });
     await keepInMemoryOnly(w);
     expect(await store.getVault(w)).toBeUndefined();
     expect(secrets.get('statsig', 'src-1')).toBe('console-key');

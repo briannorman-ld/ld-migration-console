@@ -6,6 +6,7 @@ export interface Reconnected {
   ld: boolean;
   statsig: number;
   ldSources: number;
+  phSources: number;
 }
 
 /** After tokens come back: reconnect LaunchDarkly (the saved project is kept and re-probed by connectLd). */
@@ -13,7 +14,7 @@ function reconnect(workspaceId: string, workspace: WorkspaceRecord, restored: Re
   const token = secrets.get('ld', workspaceId);
   if (restored.ld && token) void connectLd(workspaceId, workspace.ld?.instance ?? 'us', token);
   else reconnectSkipped(workspaceId);
-  return { ld: restored.ld, statsig: restored.statsig.length, ldSources: restored.ldSources.length };
+  return { ld: restored.ld, statsig: restored.statsig.length, ldSources: restored.ldSources.length, phSources: restored.phSources.length };
 }
 
 /** Unlock a passphrase vault and bring the workspace back to where it was. */

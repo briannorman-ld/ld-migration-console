@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Source adapters -> canonical model: StatSig (Console API, config spec v1/v2) and LaunchDarkly projects (neutral model).",
+  "description": "Source adapters -> canonical model: StatSig (Console API, config spec v1/v2), LaunchDarkly projects and PostHog projects (neutral model).",
   "exports": {
     ".": "./src/index.ts"
   },

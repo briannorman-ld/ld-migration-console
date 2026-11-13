@@ -1,0 +1,1841 @@
+{
+  "flags": [
+    {
+      "flag": "hog-archived-promo",
+      "flagKind": "boolean",
+      "skipped": "archived in PostHog",
+      "fidelity": "skipped",
+      "notes": [
+        "skipped: Not migrated: archived in PostHog."
+      ],
+      "decisions": [],
+      "dependencies": []
+    },
+    {
+      "flag": "hog-checkout-redesign",
+      "flagKind": "boolean",
+      "fidelity": "partial",
+      "notes": [
+        "partial: 25% / 75% rollout re-buckets contexts (new flag, new salt). [rule “Condition set 3”]",
+        "full: PostHog hashes rollouts without a per-flag salt (the same contexts fall into equal percentages across flags); LaunchDarkly salts per flag, so that correlation is not carried. [rollouts]"
+      ],
+      "decisions": [
+        "choice case_insensitive_match (rule “Condition set 1” › clause 1) → regex",
+        "acknowledge partial_rollout_rebucket (rule “Condition set 3”) → acknowledge"
+      ],
+      "dependencies": [
+        "segment:design-partners"
+      ],
+      "shell": {
+        "name": "hog-checkout-redesign",
+        "description": "New checkout. Staff first, then the design partners, then a quarter of everyone.",
+        "tags": [
+          "migrated-from-posthog",
+          "migration-src-hog",
+          "checkout"
+        ],
+        "variations": [
+          {
+            "value": true,
+            "name": "true"
+          },
+          {
+            "value": false,
+            "name": "false"
+          }
+        ],
+        "customProperties": [
+          "migration.id",
+          "migration.kind",
+          "migration.source",
+          "migration.type",
+          "migration.version"
+        ],
+        "clientSideAvailability": {
+          "usingEnvironmentId": true,
+          "usingMobileKey": true
+        }
+      },
+      "env": {
+        "ldEnv": "production",
+        "statsigEnv": "Acme Hog",
+        "on": true,
+        "offVariation": 1,
+        "fallthrough": {
+          "rollout": {
+            "contextKind": "user",
+            "variations": [
+              {
+                "variation": 0,
+                "weight": 25000
+              },
+              {
+                "variation": 1,
+                "weight": 75000
+              }
+            ]
+          }
+        },
+        "rules": [
+          {
+            "description": "Condition set 1",
+            "clauses": [
+              {
+                "contextKind": "user",
+                "attribute": "email",
+                "op": "matches",
+                "values": [
+                  "@[aA][cC][mM][eE]\\.[eE][xX][aA][mM][pP][lL][eE]"
+                ],
+                "negate": false
+              }
+            ],
+            "variation": 0
+          },
+          {
+            "description": "Condition set 2",
+            "clauses": [
+              {
+                "contextKind": "user",
+                "attribute": "key",
+                "op": "segmentMatch",
+                "values": [
+                  "design-partners"
+                ],
+                "negate": false
+              }
+            ],
+            "variation": 0
+          }
+        ],
+        "targets": [],
+        "prerequisites": []
+      }
+    },
+    {
+      "flag": "hog-company-tier",
+      "flagKind": "boolean",
+      "fidelity": "partial",
+      "notes": [
+        "partial: 10% / 90% rollout re-buckets contexts (new flag, new salt). [rule “Condition set 2”]",
+        "full: PostHog hashes rollouts without a per-flag salt (the same contexts fall into equal percentages across flags); LaunchDarkly salts per flag, so that correlation is not carried. [rollouts]"
+      ],
+      "decisions": [
+        "choice case_insensitive_match (rule “Condition set 1” › clause 1) → regex",
+        "choice unit_type_kind (company) → create:company",
+        "acknowledge partial_rollout_rebucket (rule “Condition set 2”) → acknowledge"
+      ],
+      "dependencies": [
+        "context_kind:company"
+      ],
+      "shell": {
+        "name": "hog-company-tier",
+        "description": "Gold and platinum companies, then a tenth of all companies.",
+        "tags": [
+          "migrated-from-posthog",
+          "migration-src-hog",
+          "b2b"
+        ],
+        "variations": [
+          {
+            "value": true,
+            "name": "true"
+          },
+          {
+            "value": false,
+            "name": "false"
+          }
+        ],
+        "customProperties": [
+          "migration.id",
+          "migration.kind",
+          "migration.source",
+          "migration.type",
+          "migration.version"
+        ],
+        "clientSideAvailability": {
+          "usingEnvironmentId": true,
+          "usingMobileKey": true
+        }
+      },
+      "env": {
+        "ldEnv": "production",
+        "statsigEnv": "Acme Hog",
+        "on": true,
+        "offVariation": 1,
+        "fallthrough": {
+          "rollout": {
+            "contextKind": "company",
+            "variations": [
+              {
+                "variation": 0,
+                "weight": 10000
+              },
+              {
+                "variation": 1,
+                "weight": 90000
+              }
+            ]
+          }
+        },
+        "rules": [
+          {
+            "description": "Condition set 1",
+            "clauses": [
+              {
+                "contextKind": "company",
+                "attribute": "tier",
+                "op": "matches",
+                "values": [
+                  "^[gG][oO][lL][dD]$",
+                  "^[pP][lL][aA][tT][iI][nN][uU][mM]$"
+                ],
+                "negate": false
+              }
+            ],
+            "variation": 0
+          }
+        ],
+        "targets": [],
+        "prerequisites": []
+      }
+    },
+    {
+      "flag": "hog-cross-group",
+      "flagKind": "boolean",
+      "fidelity": "full",
+      "notes": [],
+      "decisions": [
+        "choice case_insensitive_match (rule “Condition set 1” › clause 1) → regex",
+        "choice unit_type_kind (company) → create:company",
+        "choice case_insensitive_match (rule “Condition set 2” › clause 1) → regex"
+      ],
+      "dependencies": [
+        "context_kind:company"
+      ],
+      "shell": {
+        "name": "hog-cross-group",
+        "description": "Platinum companies, and enterprise-plan people.",
+        "tags": [
+          "migrated-from-posthog",
+          "migration-src-hog",
+          "b2b"
+        ],
+        "variations": [
+          {
+            "value": true,
+            "name": "true"
+          },
+          {
+            "value": false,
+            "name": "false"
+          }
+        ],
+        "customProperties": [
+          "migration.id",
+          "migration.kind",
+          "migration.source",
+          "migration.type",
+          "migration.version"
+        ],
+        "clientSideAvailability": {
+          "usingEnvironmentId": true,
+          "usingMobileKey": true
+        }
+      },
+      "env": {
+        "ldEnv": "production",
+        "statsigEnv": "Acme Hog",
+        "on": true,
+        "offVariation": 1,
+        "fallthrough": {
+          "variation": 1
+        },
+        "rules": [
+          {
+            "description": "Condition set 1",
+            "clauses": [
+              {
+                "contextKind": "company",
+                "attribute": "tier",
+                "op": "matches",
+                "values": [
+                  "^[pP][lL][aA][tT][iI][nN][uU][mM]$"
+                ],
+                "negate": false
+              }
+            ],
+            "variation": 0
+          },
+          {
+            "description": "Condition set 2",
+            "clauses": [
+              {
+                "contextKind": "user",
+                "attribute": "plan",
+                "op": "matches",
+                "values": [
+                  "^[eE][nN][tT][eE][rR][pP][rR][iI][sS][eE]$"
+                ],
+                "negate": false
+              }
+            ],
+            "variation": 0
+          }
+        ],
+        "targets": [],
+        "prerequisites": []
+      }
+    },
+    {
+      "flag": "hog-depends-on-checkout",
+      "flagKind": "boolean",
+      "fidelity": "full",
+      "notes": [
+        "full: Dependency on “hog-checkout-redesign” hoisted to a flag prerequisite (every rule required it, so this is exact). [prerequisites]",
+        "full: Prerequisites need an Enterprise plan; the target's plan is checked on the first write. [prerequisites]"
+      ],
+      "decisions": [],
+      "dependencies": [
+        "flag:hog-checkout-redesign"
+      ],
+      "shell": {
+        "name": "hog-depends-on-checkout",
+        "description": "Only where the checkout redesign is on, for accounts with more than ten seats.",
+        "tags": [
+          "migrated-from-posthog",
+          "migration-src-hog",
+          "checkout"
+        ],
+        "variations": [
+          {
+            "value": true,
+            "name": "true"
+          },
+          {
+            "value": false,
+            "name": "false"
+          }
+        ],
+        "customProperties": [
+          "migration.id",
+          "migration.kind",
+          "migration.source",
+          "migration.type",
+          "migration.version"
+        ],
+        "clientSideAvailability": {
+          "usingEnvironmentId": true,
+          "usingMobileKey": true
+        }
+      },
+      "env": {
+        "ldEnv": "production",
+        "statsigEnv": "Acme Hog",
+        "on": true,
+        "offVariation": 1,
+        "fallthrough": {
+          "variation": 1
+        },
+        "rules": [
+          {
+            "description": "Condition set 1",
+            "clauses": [
+              {
+                "contextKind": "user",
+                "attribute": "seats",
+                "op": "greaterThan",
+                "values": [
+                  10
+                ],
+                "negate": false
+              }
+            ],
+            "variation": 0
+          }
+        ],
+        "targets": [],
+        "prerequisites": [
+          {
+            "key": "hog-checkout-redesign",
+            "variation": 0
+          }
+        ]
+      }
+    },
+    {
+      "flag": "hog-device-rollout",
+      "flagKind": "boolean",
+      "fidelity": "partial",
+      "notes": [
+        "partial: 30% / 70% rollout re-buckets contexts (new flag, new salt). [rule “Condition set 1”]",
+        "partial: Persisted assignments across login are not reproduced. [flag settings]",
+        "partial: Rollouts bucket by the “device” context kind (the application must send it). [rollouts]",
+        "full: PostHog hashes rollouts without a per-flag salt (the same contexts fall into equal percentages across flags); LaunchDarkly salts per flag, so that correlation is not carried. [rollouts]"
+      ],
+      "decisions": [
+        "acknowledge partial_rollout_rebucket (rule “Condition set 1”) → acknowledge",
+        "acknowledge experience_continuity (flag settings) → acknowledge",
+        "choice device_bucketing (rollouts) → device_kind",
+        "choice unit_type_kind (device) → create:device"
+      ],
+      "dependencies": [
+        "context_kind:device"
+      ],
+      "shell": {
+        "name": "hog-device-rollout",
+        "description": "A 30% rollout bucketed by device, sticky across login.",
+        "tags": [
+          "migrated-from-posthog",
+          "migration-src-hog",
+          "anon"
+        ],
+        "variations": [
+          {
+            "value": true,
+            "name": "true"
+          },
+          {
+            "value": false,
+            "name": "false"
+          }
+        ],
+        "customProperties": [
+          "migration.id",
+          "migration.kind",
+          "migration.source",
+          "migration.type",
+          "migration.version"
+        ],
+        "clientSideAvailability": {
+          "usingEnvironmentId": true,
+          "usingMobileKey": true
+        }
+      },
+      "env": {
+        "ldEnv": "production",
+        "statsigEnv": "Acme Hog",
+        "on": true,
+        "offVariation": 1,
+        "fallthrough": {
+          "rollout": {
+            "contextKind": "device",
+            "variations": [
+              {
+                "variation": 0,
+                "weight": 30000
+              },
+              {
+                "variation": 1,
+                "weight": 70000
+              }
+            ]
+          }
+        },
+        "rules": [],
+        "targets": [],
+        "prerequisites": []
+      }
+    },
+    {
+      "flag": "hog-disabled-legacy",
+      "flagKind": "boolean",
+      "fidelity": "full",
+      "notes": [],
+      "decisions": [],
+      "dependencies": [],
+      "shell": {
+        "name": "hog-disabled-legacy",
+        "description": "Legacy checkout, switched off.",
+        "tags": [
+          "migrated-from-posthog",
+          "migration-src-hog",
+          "legacy"
+        ],
+        "variations": [
+          {
+            "value": true,
+            "name": "true"
+          },
+          {
+            "value": false,
+            "name": "false"
+          }
+        ],
+        "customProperties": [
+          "migration.id",
+          "migration.kind",
+          "migration.source",
+          "migration.type",
+          "migration.version"
+        ],
+        "clientSideAvailability": {
+          "usingEnvironmentId": true,
+          "usingMobileKey": true
+        }
+      },
+      "env": {
+        "ldEnv": "production",
+        "statsigEnv": "Acme Hog",
+        "on": false,
+        "offVariation": 1,
+        "fallthrough": {
+          "variation": 0
+        },
+        "rules": [],
+        "targets": [],
+        "prerequisites": []
+      }
+    },
+    {
+      "flag": "hog-early-access",
+      "flagKind": "boolean",
+      "fidelity": "partial",
+      "notes": [
+        "partial: Early-access enrollment relies on the application sending “$feature_enrollment/hog-early-access”. [flag settings]"
+      ],
+      "decisions": [
+        "acknowledge early_access_enrollment (flag settings) → acknowledge"
+      ],
+      "dependencies": [],
+      "shell": {
+        "name": "hog-early-access",
+        "description": "Beta program opt-in.",
+        "tags": [
+          "migrated-from-posthog",
+          "migration-src-hog",
+          "beta"
+        ],
+        "variations": [
+          {
+            "value": true,
+            "name": "true"
+          },
+          {
+            "value": false,
+            "name": "false"
+          }
+        ],
+        "customProperties": [
+          "migration.id",
+          "migration.kind",
+          "migration.source",
+          "migration.type",
+          "migration.version"
+        ],
+        "clientSideAvailability": {
+          "usingEnvironmentId": true,
+          "usingMobileKey": true
+        }
+      },
+      "env": {
+        "ldEnv": "production",
+        "statsigEnv": "Acme Hog",
+        "on": true,
+        "offVariation": 1,
+        "fallthrough": {
+          "variation": 1
+        },
+        "rules": [
+          {
+            "description": "Early access: opted in",
+            "clauses": [
+              {
+                "contextKind": "user",
+                "attribute": "$feature_enrollment/hog-early-access",
+                "op": "in",
+                "values": [
+                  true
+                ],
+                "negate": false
+              }
+            ],
+            "variation": 0
+          },
+          {
+            "description": "Early access: opted out",
+            "clauses": [
+              {
+                "contextKind": "user",
+                "attribute": "$feature_enrollment/hog-early-access",
+                "op": "in",
+                "values": [
+                  false
+                ],
+                "negate": false
+              }
+            ],
+            "variation": 1
+          }
+        ],
+        "targets": [],
+        "prerequisites": []
+      }
+    },
+    {
+      "flag": "hog-encrypted-config",
+      "flagKind": "multivariate",
+      "fidelity": "partial",
+      "notes": [
+        "full: Remote-config flag: one static payload served to everyone, as a JSON flag with no rules. [flag settings]",
+        "partial: Payload stored in plain text in LaunchDarkly (encrypted in the source). [variations]"
+      ],
+      "decisions": [
+        "choice multivariate_no_match (variations) → add",
+        "acknowledge encrypted_payload (variations) → acknowledge"
+      ],
+      "dependencies": [],
+      "shell": {
+        "name": "hog-encrypted-config",
+        "description": "Internal API base URL.",
+        "tags": [
+          "migrated-from-posthog",
+          "migration-src-hog",
+          "config"
+        ],
+        "variations": [
+          {
+            "value": {
+              "apiBase": "https://internal.acme.example"
+            },
+            "name": "Remote config"
+          },
+          {
+            "value": null,
+            "name": "Not served"
+          }
+        ],
+        "customProperties": [
+          "migration.id",
+          "migration.kind",
+          "migration.source",
+          "migration.type",
+          "migration.version"
+        ],
+        "clientSideAvailability": {
+          "usingEnvironmentId": true,
+          "usingMobileKey": true
+        }
+      },
+      "env": {
+        "ldEnv": "production",
+        "statsigEnv": "Acme Hog",
+        "on": true,
+        "offVariation": 1,
+        "fallthrough": {
+          "variation": 0
+        },
+        "rules": [],
+        "targets": [],
+        "prerequisites": []
+      }
+    },
+    {
+      "flag": "hog-eu-rollout",
+      "flagKind": "boolean",
+      "fidelity": "partial",
+      "notes": [
+        "partial: Regex uses lookahead; not portable to every SDK. [rule “Condition set 1” › clause 4]"
+      ],
+      "decisions": [
+        "choice regex_dialect (rule “Condition set 1” › clause 4) → keep"
+      ],
+      "dependencies": [
+        "segment:eu-or-uk"
+      ],
+      "shell": {
+        "name": "hog-eu-rollout",
+        "description": "EU and UK accounts with 5 to 50 seats whose address is not a test account.",
+        "tags": [
+          "migrated-from-posthog",
+          "migration-src-hog",
+          "eu"
+        ],
+        "variations": [
+          {
+            "value": true,
+            "name": "true"
+          },
+          {
+            "value": false,
+            "name": "false"
+          }
+        ],
+        "customProperties": [
+          "migration.id",
+          "migration.kind",
+          "migration.source",
+          "migration.type",
+          "migration.version"
+        ],
+        "clientSideAvailability": {
+          "usingEnvironmentId": true,
+          "usingMobileKey": true
+        }
+      },
+      "env": {
+        "ldEnv": "production",
+        "statsigEnv": "Acme Hog",
+        "on": true,
+        "offVariation": 1,
+        "fallthrough": {
+          "variation": 1
+        },
+        "rules": [
+          {
+            "description": "Condition set 1",
+            "clauses": [
+              {
+                "contextKind": "user",
+                "attribute": "key",
+                "op": "segmentMatch",
+                "values": [
+                  "eu-or-uk"
+                ],
+                "negate": false
+              },
+              {
+                "contextKind": "user",
+                "attribute": "seats",
+                "op": "greaterThanOrEqual",
+                "values": [
+                  5
+                ],
+                "negate": false
+              },
+              {
+                "contextKind": "user",
+                "attribute": "seats",
+                "op": "lessThanOrEqual",
+                "values": [
+                  50
+                ],
+                "negate": false
+              },
+              {
+                "contextKind": "user",
+                "attribute": "email",
+                "op": "matches",
+                "values": [
+                  "^(?!.*test).*@acme\\.example$"
+                ],
+                "negate": false
+              }
+            ],
+            "variation": 0
+          }
+        ],
+        "targets": [],
+        "prerequisites": []
+      }
+    },
+    {
+      "flag": "hog-holdout-experiment",
+      "flagKind": "multivariate",
+      "fidelity": "partial",
+      "notes": [
+        "partial: Experiment “Holdout experiment” on rule “Condition set 1” frozen as a plain rollout; analysis stays in PostHog. [rule “Condition set 1”]",
+        "partial: 50% / 50% rollout re-buckets contexts (new flag, new salt). [rule “Condition set 1”]",
+        "partial: Holdout “3” (10%) not carried. [holdout “3”]",
+        "full: PostHog hashes rollouts without a per-flag salt (the same contexts fall into equal percentages across flags); LaunchDarkly salts per flag, so that correlation is not carried. [rollouts]"
+      ],
+      "decisions": [
+        "choice multivariate_no_match (variations) → add",
+        "choice experiment_rule (rule “Condition set 1”) → freeze",
+        "acknowledge partial_rollout_rebucket (rule “Condition set 1”) → acknowledge",
+        "acknowledge holdout_attached (holdout “3”) → acknowledge"
+      ],
+      "dependencies": [],
+      "shell": {
+        "name": "hog-holdout-experiment",
+        "description": "An A/B test still running in PostHog, with 10% held out.",
+        "tags": [
+          "migrated-from-posthog",
+          "migration-src-hog",
+          "experiment"
+        ],
+        "variations": [
+          {
+            "value": "control",
+            "name": "Control"
+          },
+          {
+            "value": "test",
+            "name": "Test"
+          },
+          {
+            "value": "",
+            "name": "Not served"
+          }
+        ],
+        "customProperties": [
+          "migration.id",
+          "migration.kind",
+          "migration.source",
+          "migration.type",
+          "migration.version"
+        ],
+        "clientSideAvailability": {
+          "usingEnvironmentId": true,
+          "usingMobileKey": true
+        }
+      },
+      "env": {
+        "ldEnv": "production",
+        "statsigEnv": "Acme Hog",
+        "on": true,
+        "offVariation": 2,
+        "fallthrough": {
+          "rollout": {
+            "contextKind": "user",
+            "variations": [
+              {
+                "variation": 0,
+                "weight": 50000
+              },
+              {
+                "variation": 1,
+                "weight": 50000
+              }
+            ]
+          }
+        },
+        "rules": [],
+        "targets": [],
+        "prerequisites": []
+      }
+    },
+    {
+      "flag": "hog-ios-min-version",
+      "flagKind": "boolean",
+      "fidelity": "partial",
+      "notes": [
+        "partial: Contexts without “os” no longer match (negated clause on a missing attribute). [rule “Condition set 1” › clause 2]"
+      ],
+      "decisions": [
+        "choice case_insensitive_match (rule “Condition set 1” › clause 2) → regex",
+        "acknowledge negated_missing_attribute (rule “Condition set 1” › clause 2) → acknowledge"
+      ],
+      "dependencies": [],
+      "shell": {
+        "name": "hog-ios-min-version",
+        "description": "Features that need app 4.2 or newer, except iPadOS.",
+        "tags": [
+          "migrated-from-posthog",
+          "migration-src-hog",
+          "mobile"
+        ],
+        "variations": [
+          {
+            "value": true,
+            "name": "true"
+          },
+          {
+            "value": false,
+            "name": "false"
+          }
+        ],
+        "customProperties": [
+          "migration.id",
+          "migration.kind",
+          "migration.source",
+          "migration.type",
+          "migration.version"
+        ],
+        "clientSideAvailability": {
+          "usingEnvironmentId": true,
+          "usingMobileKey": true
+        }
+      },
+      "env": {
+        "ldEnv": "production",
+        "statsigEnv": "Acme Hog",
+        "on": true,
+        "offVariation": 1,
+        "fallthrough": {
+          "variation": 1
+        },
+        "rules": [
+          {
+            "description": "Condition set 1",
+            "clauses": [
+              {
+                "contextKind": "user",
+                "attribute": "app_version",
+                "op": "semVerLessThan",
+                "values": [
+                  "4.2.0"
+                ],
+                "negate": true
+              },
+              {
+                "contextKind": "user",
+                "attribute": "os",
+                "op": "matches",
+                "values": [
+                  "^[iI][pP][aA][dD][oO][sS]$"
+                ],
+                "negate": true
+              }
+            ],
+            "variation": 0
+          }
+        ],
+        "targets": [],
+        "prerequisites": []
+      }
+    },
+    {
+      "flag": "hog-kill-switch",
+      "flagKind": "boolean",
+      "fidelity": "full",
+      "notes": [],
+      "decisions": [],
+      "dependencies": [],
+      "shell": {
+        "name": "hog-kill-switch",
+        "description": "Turns the storefront off entirely.",
+        "tags": [
+          "migrated-from-posthog",
+          "migration-src-hog",
+          "ops"
+        ],
+        "variations": [
+          {
+            "value": true,
+            "name": "true"
+          },
+          {
+            "value": false,
+            "name": "false"
+          }
+        ],
+        "customProperties": [
+          "migration.id",
+          "migration.kind",
+          "migration.source",
+          "migration.type",
+          "migration.version"
+        ],
+        "clientSideAvailability": {
+          "usingEnvironmentId": true,
+          "usingMobileKey": true
+        }
+      },
+      "env": {
+        "ldEnv": "production",
+        "statsigEnv": "Acme Hog",
+        "on": true,
+        "offVariation": 1,
+        "fallthrough": {
+          "variation": 0
+        },
+        "rules": [],
+        "targets": [],
+        "prerequisites": []
+      }
+    },
+    {
+      "flag": "hog-nested-cohort",
+      "flagKind": "boolean",
+      "fidelity": "full",
+      "notes": [],
+      "decisions": [],
+      "dependencies": [
+        "segment:enterprise-admins-in-eu"
+      ],
+      "shell": {
+        "name": "hog-nested-cohort",
+        "description": "Enterprise admins in the EU.",
+        "tags": [
+          "migrated-from-posthog",
+          "migration-src-hog",
+          "b2b"
+        ],
+        "variations": [
+          {
+            "value": true,
+            "name": "true"
+          },
+          {
+            "value": false,
+            "name": "false"
+          }
+        ],
+        "customProperties": [
+          "migration.id",
+          "migration.kind",
+          "migration.source",
+          "migration.type",
+          "migration.version"
+        ],
+        "clientSideAvailability": {
+          "usingEnvironmentId": true,
+          "usingMobileKey": true
+        }
+      },
+      "env": {
+        "ldEnv": "production",
+        "statsigEnv": "Acme Hog",
+        "on": true,
+        "offVariation": 1,
+        "fallthrough": {
+          "variation": 1
+        },
+        "rules": [
+          {
+            "description": "Condition set 1",
+            "clauses": [
+              {
+                "contextKind": "user",
+                "attribute": "key",
+                "op": "segmentMatch",
+                "values": [
+                  "enterprise-admins-in-eu"
+                ],
+                "negate": false
+              }
+            ],
+            "variation": 0
+          }
+        ],
+        "targets": [],
+        "prerequisites": []
+      }
+    },
+    {
+      "flag": "hog-new-onboarding",
+      "flagKind": "boolean",
+      "fidelity": "partial",
+      "notes": [
+        "partial: Relative date -30d frozen to 2026-09-22T12:00:00.000Z; it no longer moves with time. [rule “Condition set 1” › clause 1]",
+        "partial: Contexts outside the 50% rollout get the default rule's value instead of the later rules. [rule “Condition set 1”]",
+        "partial: 50% / 50% rollout re-buckets contexts (new flag, new salt). [rule “Condition set 1”]",
+        "full: PostHog hashes rollouts without a per-flag salt (the same contexts fall into equal percentages across flags); LaunchDarkly salts per flag, so that correlation is not carried. [rollouts]"
+      ],
+      "decisions": [
+        "choice relative_date (rule “Condition set 1” › clause 1) → freeze",
+        "choice rollout_coverage (rule “Condition set 1”) → fallthrough",
+        "acknowledge partial_rollout_rebucket (rule “Condition set 1”) → acknowledge"
+      ],
+      "dependencies": [],
+      "shell": {
+        "name": "hog-new-onboarding",
+        "description": "New onboarding for half of the recent signups, and every beta tester.",
+        "tags": [
+          "migrated-from-posthog",
+          "migration-src-hog",
+          "growth"
+        ],
+        "variations": [
+          {
+            "value": true,
+            "name": "true"
+          },
+          {
+            "value": false,
+            "name": "false"
+          }
+        ],
+        "customProperties": [
+          "migration.id",
+          "migration.kind",
+          "migration.source",
+          "migration.type",
+          "migration.version"
+        ],
+        "clientSideAvailability": {
+          "usingEnvironmentId": true,
+          "usingMobileKey": true
+        }
+      },
+      "env": {
+        "ldEnv": "production",
+        "statsigEnv": "Acme Hog",
+        "on": true,
+        "offVariation": 1,
+        "fallthrough": {
+          "variation": 1
+        },
+        "rules": [
+          {
+            "description": "Condition set 1",
+            "clauses": [
+              {
+                "contextKind": "user",
+                "attribute": "signup_date",
+                "op": "after",
+                "values": [
+                  "2026-09-22T12:00:00.000Z"
+                ],
+                "negate": false
+              }
+            ],
+            "rollout": {
+              "contextKind": "user",
+              "variations": [
+                {
+                  "variation": 0,
+                  "weight": 50000
+                },
+                {
+                  "variation": 1,
+                  "weight": 50000
+                }
+              ]
+            }
+          },
+          {
+            "description": "Condition set 2",
+            "clauses": [
+              {
+                "contextKind": "user",
+                "attribute": "beta_tester",
+                "op": "in",
+                "values": [
+                  true
+                ],
+                "negate": false
+              }
+            ],
+            "variation": 0
+          }
+        ],
+        "targets": [],
+        "prerequisites": []
+      }
+    },
+    {
+      "flag": "hog-not-between",
+      "flagKind": "boolean",
+      "fidelity": "full",
+      "notes": [],
+      "decisions": [],
+      "dependencies": [],
+      "shell": {
+        "name": "hog-not-between",
+        "description": "Accounts outside the 5 to 50 seat band.",
+        "tags": [
+          "migrated-from-posthog",
+          "migration-src-hog",
+          "growth"
+        ],
+        "variations": [
+          {
+            "value": true,
+            "name": "true"
+          },
+          {
+            "value": false,
+            "name": "false"
+          }
+        ],
+        "customProperties": [
+          "migration.id",
+          "migration.kind",
+          "migration.source",
+          "migration.type",
+          "migration.version"
+        ],
+        "clientSideAvailability": {
+          "usingEnvironmentId": true,
+          "usingMobileKey": true
+        }
+      },
+      "env": {
+        "ldEnv": "production",
+        "statsigEnv": "Acme Hog",
+        "on": true,
+        "offVariation": 1,
+        "fallthrough": {
+          "variation": 1
+        },
+        "rules": [
+          {
+            "description": "Condition set 1 (a)",
+            "clauses": [
+              {
+                "contextKind": "user",
+                "attribute": "seats",
+                "op": "lessThan",
+                "values": [
+                  5
+                ],
+                "negate": false
+              }
+            ],
+            "variation": 0
+          },
+          {
+            "description": "Condition set 1 (b)",
+            "clauses": [
+              {
+                "contextKind": "user",
+                "attribute": "seats",
+                "op": "greaterThan",
+                "values": [
+                  50
+                ],
+                "negate": false
+              }
+            ],
+            "variation": 0
+          }
+        ],
+        "targets": [],
+        "prerequisites": []
+      }
+    },
+    {
+      "flag": "hog-power-users",
+      "flagKind": "boolean",
+      "fidelity": "partial",
+      "notes": [
+        "partial: “is set” approximated with matches \".*\" (strings only). [rule “Condition set 1” › clause 2]"
+      ],
+      "decisions": [
+        "choice null_check (rule “Condition set 1” › clause 2) → matches_any"
+      ],
+      "dependencies": [
+        "segment:enterprise-admins",
+        "segment:power-users"
+      ],
+      "shell": {
+        "name": "hog-power-users",
+        "description": "Power users with an email who are not enterprise admins.",
+        "tags": [
+          "migrated-from-posthog",
+          "migration-src-hog",
+          "growth"
+        ],
+        "variations": [
+          {
+            "value": true,
+            "name": "true"
+          },
+          {
+            "value": false,
+            "name": "false"
+          }
+        ],
+        "customProperties": [
+          "migration.id",
+          "migration.kind",
+          "migration.source",
+          "migration.type",
+          "migration.version"
+        ],
+        "clientSideAvailability": {
+          "usingEnvironmentId": true,
+          "usingMobileKey": true
+        }
+      },
+      "env": {
+        "ldEnv": "production",
+        "statsigEnv": "Acme Hog",
+        "on": true,
+        "offVariation": 1,
+        "fallthrough": {
+          "variation": 1
+        },
+        "rules": [
+          {
+            "description": "Condition set 1",
+            "clauses": [
+              {
+                "contextKind": "user",
+                "attribute": "key",
+                "op": "segmentMatch",
+                "values": [
+                  "power-users"
+                ],
+                "negate": false
+              },
+              {
+                "contextKind": "user",
+                "attribute": "email",
+                "op": "matches",
+                "values": [
+                  ".*"
+                ],
+                "negate": false
+              },
+              {
+                "contextKind": "user",
+                "attribute": "key",
+                "op": "segmentMatch",
+                "values": [
+                  "enterprise-admins"
+                ],
+                "negate": true
+              }
+            ],
+            "variation": 0
+          }
+        ],
+        "targets": [],
+        "prerequisites": []
+      }
+    },
+    {
+      "flag": "hog-pricing-page",
+      "flagKind": "multivariate",
+      "fidelity": "partial",
+      "notes": [
+        "partial: Payloads not served: control → {\"layout\":\"classic\"}; plus → {\"layout\":\"plus\"}; enterprise → {\"layout\":\"enterprise\",\"salesCta\":true}. [variations]",
+        "partial: 50% / 25% / 25% rollout re-buckets contexts (new flag, new salt). [rule “Condition set 2”]",
+        "full: PostHog hashes rollouts without a per-flag salt (the same contexts fall into equal percentages across flags); LaunchDarkly salts per flag, so that correlation is not carried. [rollouts]"
+      ],
+      "decisions": [
+        "blocking variant_payloads (variations) → no default",
+        "choice multivariate_no_match (variations) → add",
+        "choice case_insensitive_match (rule “Condition set 1” › clause 1) → regex",
+        "acknowledge partial_rollout_rebucket (rule “Condition set 2”) → acknowledge"
+      ],
+      "dependencies": [],
+      "shell": {
+        "name": "hog-pricing-page",
+        "description": "Which pricing page a visitor sees.",
+        "tags": [
+          "migrated-from-posthog",
+          "migration-src-hog",
+          "pricing"
+        ],
+        "variations": [
+          {
+            "value": "control",
+            "name": "Control"
+          },
+          {
+            "value": "plus",
+            "name": "Plus"
+          },
+          {
+            "value": "enterprise",
+            "name": "Enterprise"
+          },
+          {
+            "value": "",
+            "name": "Not served"
+          }
+        ],
+        "customProperties": [
+          "migration.id",
+          "migration.kind",
+          "migration.source",
+          "migration.type",
+          "migration.version"
+        ],
+        "clientSideAvailability": {
+          "usingEnvironmentId": true,
+          "usingMobileKey": true
+        }
+      },
+      "env": {
+        "ldEnv": "production",
+        "statsigEnv": "Acme Hog",
+        "on": true,
+        "offVariation": 3,
+        "fallthrough": {
+          "rollout": {
+            "contextKind": "user",
+            "variations": [
+              {
+                "variation": 0,
+                "weight": 50000
+              },
+              {
+                "variation": 1,
+                "weight": 25000
+              },
+              {
+                "variation": 2,
+                "weight": 25000
+              }
+            ]
+          }
+        },
+        "rules": [
+          {
+            "description": "Condition set 1",
+            "clauses": [
+              {
+                "contextKind": "user",
+                "attribute": "plan",
+                "op": "matches",
+                "values": [
+                  "^[eE][nN][tT][eE][rR][pP][rR][iI][sS][eE]$"
+                ],
+                "negate": false
+              }
+            ],
+            "variation": 2
+          }
+        ],
+        "targets": [],
+        "prerequisites": []
+      }
+    },
+    {
+      "flag": "hog-remote-config",
+      "flagKind": "multivariate",
+      "fidelity": "full",
+      "notes": [
+        "full: Remote-config flag: one static payload served to everyone, as a JSON flag with no rules. [flag settings]"
+      ],
+      "decisions": [
+        "choice multivariate_no_match (variations) → add"
+      ],
+      "dependencies": [],
+      "shell": {
+        "name": "hog-remote-config",
+        "description": "Storefront list settings.",
+        "tags": [
+          "migrated-from-posthog",
+          "migration-src-hog",
+          "config"
+        ],
+        "variations": [
+          {
+            "value": {
+              "maxItems": 20,
+              "theme": "dark"
+            },
+            "name": "Remote config"
+          },
+          {
+            "value": null,
+            "name": "Not served"
+          }
+        ],
+        "customProperties": [
+          "migration.id",
+          "migration.kind",
+          "migration.source",
+          "migration.type",
+          "migration.version"
+        ],
+        "clientSideAvailability": {
+          "usingEnvironmentId": true,
+          "usingMobileKey": true
+        }
+      },
+      "env": {
+        "ldEnv": "production",
+        "statsigEnv": "Acme Hog",
+        "on": true,
+        "offVariation": 1,
+        "fallthrough": {
+          "variation": 0
+        },
+        "rules": [],
+        "targets": [],
+        "prerequisites": []
+      }
+    },
+    {
+      "flag": "hog-scheduled-launch",
+      "flagKind": "boolean",
+      "fidelity": "partial",
+      "notes": [
+        "partial: Pending scheduled change not carried: update_status at 2027-01-04T09:00:00Z. [scheduled changes]"
+      ],
+      "decisions": [
+        "acknowledge scheduled_rule (scheduled changes) → acknowledge"
+      ],
+      "dependencies": [],
+      "shell": {
+        "name": "hog-scheduled-launch",
+        "description": "Launches on 4 January 2027.",
+        "tags": [
+          "migrated-from-posthog",
+          "migration-src-hog",
+          "launch"
+        ],
+        "variations": [
+          {
+            "value": true,
+            "name": "true"
+          },
+          {
+            "value": false,
+            "name": "false"
+          }
+        ],
+        "customProperties": [
+          "migration.id",
+          "migration.kind",
+          "migration.source",
+          "migration.type",
+          "migration.version"
+        ],
+        "clientSideAvailability": {
+          "usingEnvironmentId": true,
+          "usingMobileKey": true
+        }
+      },
+      "env": {
+        "ldEnv": "production",
+        "statsigEnv": "Acme Hog",
+        "on": false,
+        "offVariation": 1,
+        "fallthrough": {
+          "variation": 0
+        },
+        "rules": [],
+        "targets": [],
+        "prerequisites": []
+      }
+    },
+    {
+      "flag": "hog-server-only",
+      "flagKind": "boolean",
+      "fidelity": "partial",
+      "notes": [
+        "partial: Evaluates only for requests tagged backend in PostHog; LaunchDarkly has no per-request evaluation contexts (kept as a custom property). [flag settings]"
+      ],
+      "decisions": [
+        "choice copy_custom_properties (custom properties) → copy"
+      ],
+      "dependencies": [],
+      "shell": {
+        "name": "hog-server-only",
+        "description": "Backend-only switch.",
+        "tags": [
+          "migrated-from-posthog",
+          "migration-src-hog",
+          "backend"
+        ],
+        "variations": [
+          {
+            "value": true,
+            "name": "true"
+          },
+          {
+            "value": false,
+            "name": "false"
+          }
+        ],
+        "customProperties": [
+          "migration.id",
+          "migration.kind",
+          "migration.source",
+          "migration.type",
+          "migration.version",
+          "posthog.evaluationContexts"
+        ],
+        "clientSideAvailability": {
+          "usingEnvironmentId": false,
+          "usingMobileKey": false
+        }
+      },
+      "env": {
+        "ldEnv": "production",
+        "statsigEnv": "Acme Hog",
+        "on": true,
+        "offVariation": 1,
+        "fallthrough": {
+          "variation": 0
+        },
+        "rules": [],
+        "targets": [],
+        "prerequisites": []
+      }
+    },
+    {
+      "flag": "hog-staff-tools",
+      "flagKind": "boolean",
+      "fidelity": "partial",
+      "notes": [
+        "partial: 40% / 60% rollout re-buckets contexts (new flag, new salt). [rule “Condition set 1”]",
+        "partial: Pending scheduled change not carried: update_status at 2027-01-05T17:00:00Z (recurring). [scheduled changes]",
+        "full: PostHog hashes rollouts without a per-flag salt (the same contexts fall into equal percentages across flags); LaunchDarkly salts per flag, so that correlation is not carried. [rollouts]"
+      ],
+      "decisions": [
+        "choice case_insensitive_match (rule “Condition set 1” › clause 1) → regex",
+        "acknowledge partial_rollout_rebucket (rule “Condition set 1”) → acknowledge",
+        "choice case_insensitive_match (rule “Condition set 2” › clause 1) → regex",
+        "acknowledge scheduled_rule (scheduled changes) → acknowledge"
+      ],
+      "dependencies": [],
+      "shell": {
+        "name": "hog-staff-tools",
+        "description": "Internal tools: 40% of staff; everyone in the UK. Stops at the first matching set.",
+        "tags": [
+          "migrated-from-posthog",
+          "migration-src-hog",
+          "internal"
+        ],
+        "variations": [
+          {
+            "value": true,
+            "name": "true"
+          },
+          {
+            "value": false,
+            "name": "false"
+          }
+        ],
+        "customProperties": [
+          "migration.id",
+          "migration.kind",
+          "migration.source",
+          "migration.type",
+          "migration.version"
+        ],
+        "clientSideAvailability": {
+          "usingEnvironmentId": true,
+          "usingMobileKey": true
+        }
+      },
+      "env": {
+        "ldEnv": "production",
+        "statsigEnv": "Acme Hog",
+        "on": true,
+        "offVariation": 1,
+        "fallthrough": {
+          "variation": 1
+        },
+        "rules": [
+          {
+            "description": "Condition set 1",
+            "clauses": [
+              {
+                "contextKind": "user",
+                "attribute": "email",
+                "op": "matches",
+                "values": [
+                  "@[aA][cC][mM][eE]\\.[eE][xX][aA][mM][pP][lL][eE]$"
+                ],
+                "negate": false
+              }
+            ],
+            "rollout": {
+              "contextKind": "user",
+              "variations": [
+                {
+                  "variation": 0,
+                  "weight": 40000
+                },
+                {
+                  "variation": 1,
+                  "weight": 60000
+                }
+              ]
+            }
+          },
+          {
+            "description": "Condition set 2",
+            "clauses": [
+              {
+                "contextKind": "user",
+                "attribute": "country",
+                "op": "matches",
+                "values": [
+                  "^[gG][bB]$"
+                ],
+                "negate": false
+              }
+            ],
+            "variation": 0
+          }
+        ],
+        "targets": [],
+        "prerequisites": []
+      }
+    },
+    {
+      "flag": "survey-targeting-checkout-nps",
+      "flagKind": "boolean",
+      "skipped": "it is a survey flag, which the console does not copy as a plain flag",
+      "fidelity": "skipped",
+      "notes": [
+        "skipped: Not migrated: it is a survey flag, which the console does not copy as a plain flag."
+      ],
+      "decisions": [],
+      "dependencies": []
+    }
+  ],
+  "segments": [
+    {
+      "segment": "design-partners",
+      "fidelity": "full",
+      "notes": [
+        "full: 3 members listed by all 4 of their ids."
+      ],
+      "decisions": [
+        "acknowledge cohort_person_ids (membership)"
+      ],
+      "desired": {
+        "key": "design-partners",
+        "ldEnv": "production",
+        "statsigEnv": "Acme Hog",
+        "name": "Design partners",
+        "description": "Hand-picked design partner accounts.",
+        "tags": [
+          "migrated-from-posthog",
+          "migration-src-hog"
+        ],
+        "rules": [],
+        "included": [
+          "u-1",
+          "u-2",
+          "u-2-legacy",
+          "u-3"
+        ],
+        "includedContexts": []
+      }
+    },
+    {
+      "segment": "enterprise-admins",
+      "fidelity": "full",
+      "notes": [],
+      "decisions": [
+        "choice case_insensitive_match (rule “Enterprise admins” › clause 1)",
+        "choice case_insensitive_match (rule “Enterprise admins” › clause 2)"
+      ],
+      "desired": {
+        "key": "enterprise-admins",
+        "ldEnv": "production",
+        "statsigEnv": "Acme Hog",
+        "name": "Enterprise admins",
+        "description": "",
+        "tags": [
+          "migrated-from-posthog",
+          "migration-src-hog"
+        ],
+        "rules": [
+          {
+            "description": "Enterprise admins",
+            "clauses": [
+              {
+                "contextKind": "user",
+                "attribute": "plan",
+                "op": "matches",
+                "values": [
+                  "^[eE][nN][tT][eE][rR][pP][rR][iI][sS][eE]$"
+                ],
+                "negate": false
+              },
+              {
+                "contextKind": "user",
+                "attribute": "role",
+                "op": "matches",
+                "values": [
+                  "^[aA][dD][mM][iI][nN]$"
+                ],
+                "negate": false
+              }
+            ]
+          }
+        ],
+        "included": [],
+        "includedContexts": []
+      }
+    },
+    {
+      "segment": "enterprise-admins-in-eu",
+      "fidelity": "partial",
+      "notes": [
+        "partial: Dropped the rule because of its clause with operator “segmentMatch”."
+      ],
+      "decisions": [
+        "blocking unsupported_condition (rule “Enterprise admins in EU” › clause 1)"
+      ],
+      "desired": {
+        "key": "enterprise-admins-in-eu",
+        "ldEnv": "production",
+        "statsigEnv": "Acme Hog",
+        "name": "Enterprise admins in EU",
+        "description": "",
+        "tags": [
+          "migrated-from-posthog",
+          "migration-src-hog"
+        ],
+        "rules": [],
+        "included": [],
+        "includedContexts": []
+      }
+    },
+    {
+      "segment": "eu-or-uk",
+      "fidelity": "full",
+      "notes": [],
+      "decisions": [
+        "choice case_insensitive_match (rule “Condition 1” › clause 1)",
+        "choice case_insensitive_match (rule “Condition 2” › clause 1)"
+      ],
+      "desired": {
+        "key": "eu-or-uk",
+        "ldEnv": "production",
+        "statsigEnv": "Acme Hog",
+        "name": "EU or UK",
+        "description": "",
+        "tags": [
+          "migrated-from-posthog",
+          "migration-src-hog"
+        ],
+        "rules": [
+          {
+            "description": "Condition 1",
+            "clauses": [
+              {
+                "contextKind": "user",
+                "attribute": "country",
+                "op": "matches",
+                "values": [
+                  "^[dD][eE]$",
+                  "^[fF][rR]$"
+                ],
+                "negate": false
+              }
+            ]
+          },
+          {
+            "description": "Condition 2",
+            "clauses": [
+              {
+                "contextKind": "user",
+                "attribute": "country",
+                "op": "matches",
+                "values": [
+                  "^[gG][bB]$"
+                ],
+                "negate": false
+              }
+            ]
+          }
+        ],
+        "included": [],
+        "includedContexts": []
+      }
+    },
+    {
+      "segment": "power-users",
+      "fidelity": "partial",
+      "notes": [
+        "partial: behavioral cohort frozen to its 2 members at read time."
+      ],
+      "decisions": [
+        "choice cohort_snapshot (membership)"
+      ],
+      "desired": {
+        "key": "power-users",
+        "ldEnv": "production",
+        "statsigEnv": "Acme Hog",
+        "name": "Power users",
+        "description": "Five or more pageviews in the last 30 days.",
+        "tags": [
+          "migrated-from-posthog",
+          "migration-src-hog"
+        ],
+        "rules": [],
+        "included": [
+          "u-4",
+          "u-5"
+        ],
+        "includedContexts": []
+      }
+    }
+  ]
+}

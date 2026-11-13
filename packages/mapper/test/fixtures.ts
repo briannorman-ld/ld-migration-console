@@ -1,6 +1,6 @@
 import { setupServer } from 'msw/node';
-import { acmeLegacyProject, ACME_LEGACY_PROJECT_KEY, buildAcmeDataset, createLdApiHandlers, createStatsigConsoleHandlers, DEMO_STATSIG_API_KEY, type AcmeAlias } from '@sslm/demo-fixtures';
-import { crawlConsoleProject, normalizeConsoleSnapshot, normalizeLdSnapshot, readLdProject } from '@sslm/adapters';
+import { acmeHogProject, ACME_HOG_PROJECT_ID, acmeLegacyProject, ACME_LEGACY_PROJECT_KEY, buildAcmeDataset, createLdApiHandlers, createPostHogApiHandlers, createStatsigConsoleHandlers, DEMO_STATSIG_API_KEY, type AcmeAlias } from '@sslm/demo-fixtures';
+import { crawlConsoleProject, normalizeConsoleSnapshot, normalizeLdSnapshot, normalizePostHogSnapshot, PostHogClient, readLdProject, readPostHogProject } from '@sslm/adapters';
 import { LdClient } from '@sslm/ld-client';
 import { StatsigConsoleClient } from '@sslm/statsig-client';
 import type { CanonicalSnapshot } from '@sslm/canonical';
@@ -30,6 +30,18 @@ export async function legacySnapshot(): Promise<CanonicalSnapshot> {
   const client = new LdClient({ instance: { id: 'us', label: 'test', origin }, token: 'api-test', transport: { budgets: [], retry: { baseDelayMs: 1, maxDelayMs: 5 } } });
   const raw = await readLdProject(client, ACME_LEGACY_PROJECT_KEY);
   return normalizeLdSnapshot(raw, { source: { sourceId: 'src-legacy', sourceKind: 'launchdarkly', alias: 'legacy' }, takenAt: '2026-10-30T00:00:00.000Z' });
+}
+
+/**
+ * The demo's PostHog *source* project ("Acme Hog", PLAN §22), read through the real PostHog client
+ * and adapter against the MSW mock. Its one environment is named after the project.
+ */
+export async function hogSnapshot(): Promise<CanonicalSnapshot> {
+  const origin = 'https://demo-posthog.test';
+  server.use(...createPostHogApiHandlers({ baseUrl: origin, getProject: acmeHogProject, key: 'phx_test' }));
+  const client = new PostHogClient({ region: { origin }, key: 'phx_test', transport: { budgets: [], retry: { baseDelayMs: 1, maxDelayMs: 5 } } });
+  const raw = await readPostHogProject(client, ACME_HOG_PROJECT_ID);
+  return normalizePostHogSnapshot(raw, { source: { sourceId: 'src-hog', sourceKind: 'posthog', alias: 'hog' }, takenAt: '2026-11-12T00:00:00.000Z' });
 }
 
 /** Mirrors the real `statsig-migration` LD project: environments `test` and `production`. */

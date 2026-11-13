@@ -4,6 +4,7 @@ import { LD_INSTANCES } from '@sslm/ld-client';
 import type { SourceRecord, WorkspaceRecord } from '@sslm/store';
 import { LdMark } from '../components/Brand.tsx';
 import { Badge, Button, Card, cx, Dot, PageTitle, Spinner, type Tone } from '../components/ui.tsx';
+import { useFlag } from '../lib/flags.ts';
 import type { LdSession } from '../lib/ld.ts';
 import { SOURCE_BADGE } from '../lib/kinds.ts';
 import { timeAgo } from '../lib/time.ts';
@@ -33,6 +34,7 @@ export function ConnectionsView({
   onOpenLd: () => void;
   onOpenGates: () => void;
 }) {
+  const posthogOn = useFlag('posthogSource');
   const synced = sources.filter((s) => snapshots[s.id]);
   const statsigDone = synced.length > 0;
   const ldDone = ld.status === 'connected' && !!ld.projectKey;
@@ -70,8 +72,9 @@ export function ConnectionsView({
         >
           {sources.length === 0 ? (
             <p className="text-sm text-fg-muted">
-              Read a StatSig project with a <b>read-only Console API key</b> or an uploaded <b>config spec</b>, or attach <b>another LaunchDarkly project</b> with a
-              read token. Add more than one source to consolidate several projects into the same LaunchDarkly project.
+              Read a StatSig project with a <b>read-only Console API key</b> or an uploaded <b>config spec</b>, or attach <b>another LaunchDarkly project</b> with a read
+              token{posthogOn && <>, or read a <b>PostHog project</b> with a personal API key or an uploaded flags payload</>}. Add more than one source to consolidate
+              several projects into the same LaunchDarkly project.
             </p>
           ) : (
             <ul className="space-y-2">

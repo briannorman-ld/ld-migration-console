@@ -85,7 +85,7 @@ describe('mapping explainer (resource pages)', () => {
     for (const k of EXPLAINER_KEYS) {
       const x = explainMapping(k);
       expect(x.headline.id).toBeTruthy();
-      if (k !== 'ld_flag' && k !== 'ld_segment') expect(x.headline.kind, `${k}: headline row should count that kind`).toBe(k);
+      if (!k.startsWith('ld_') && !k.startsWith('ph_')) expect(x.headline.kind, `${k}: headline row should count that kind`).toBe(k);
       expect(x.caveats.length, `${k}: a page with no caveats hides something`).toBeGreaterThan(0);
       const all = [...x.clean, ...x.caveats.flatMap((c) => c.rows)];
       expect(all.map((e) => e.id)).not.toContain(x.headline.id);

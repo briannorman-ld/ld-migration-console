@@ -1,6 +1,6 @@
 import { indexByKey } from '../lib/indexByKey.ts';
 import { Fragment, useMemo, useState, type Dispatch, type SetStateAction } from 'react';
-import type { CanonicalSnapshot, NeutralFlag, NeutralSegment } from '@sslm/canonical';
+import type { CanonicalSnapshot, NeutralAttribute, NeutralFlag, NeutralSegment, SourceKind } from '@sslm/canonical';
 import { optionLabel, type DecisionType, type NeutralFlagMapResult, type NeutralSegmentMapResult } from '@sslm/mapper';
 import { migrationStatus, ownsSegment, type MigrationStatus } from '@sslm/planner';
 import type { SourceRecord } from '@sslm/store';
@@ -9,6 +9,7 @@ import { PagerBar, usePager } from '../components/Pager.tsx';
 import { MigrateButton, ReadinessLine, readinessSteps } from '../components/Readiness.tsx';
 import { LdTargeting } from '../components/Targeting.tsx';
 import { Badge, Button, Callout, Card, cx, Input, Select } from '../components/ui.tsx';
+import { SOURCE_BADGE } from '../lib/kinds.ts';
 import { TagFilter } from '../components/TagFilter.tsx';
 import { MappingExplainer } from '../components/MappingExplainer.tsx';
 import { matchesTags, pruneTags, tagOptions } from '../lib/tags.ts';
@@ -23,6 +24,7 @@ type Filter = 'all' | 'open' | 'blocking' | 'not_migrated' | 'in_sync' | 'change
 interface FlagRow {
   kind: 'flag';
   sourceId: string;
+  sourceKind: SourceKind;
   alias: string;
   entity: NeutralFlag;
   result: NeutralFlagMapResult;
@@ -32,6 +34,7 @@ interface FlagRow {
 interface SegmentRow {
   kind: 'segment';
   sourceId: string;
+  sourceKind: SourceKind;
   alias: string;
   entity: NeutralSegment;
   result: NeutralSegmentMapResult;
@@ -41,14 +44,17 @@ interface SegmentRow {
 type Row = FlagRow | SegmentRow;
 
 const WORDS: Record<LdSourceResource, { title: string; one: string; many: string }> = {
-  flag: { title: 'Flags (LaunchDarkly source)', one: 'flag', many: 'flags' },
-  segment: { title: 'Segments (LaunchDarkly source)', one: 'segment', many: 'segments' },
+  flag: { title: 'Flags (source projects)', one: 'flag', many: 'flags' },
+  segment: { title: 'Segments and cohorts', one: 'segment', many: 'segments' },
 };
 
+const isPostHogKind = (k: SourceKind) => k === 'posthog' || k === 'posthog_payload';
+
 /**
- * Side-by-side explorer for an LD project attached as a source (PLAN §20): the source flag or
- * segment on the left, what the console would write into the target on the right, the per
- * environment status strip from target provenance, open decisions inline, and Migrate.
+ * Side-by-side explorer for every source read onto the neutral model (an LD project, PLAN §20;
+ * a PostHog project or payload, PLAN §22): the source flag or segment on the left, what the
+ * console would write into the target on the right, the per environment status strip from
+ * target provenance, open decisions inline, and Migrate.
  */
 export function LdSourceSideBySide({
   resource,
@@ -81,13 +87,14 @@ export function LdSourceSideBySide({
   const [tags, setTags] = useState<Set<string>>(new Set());
   const [open, setOpen] = useState<string>();
   const words = WORDS[resource];
-  const ldSources = useMemo(() => sources.filter((s) => s.kind === 'launchdarkly' && snapshots[s.id]?.neutral), [sources, snapshots]);
+  // Any source whose snapshot carries a neutral block, whatever vocabulary it was read from.
+  const neutralSources = useMemo(() => sources.filter((s) => !!snapshots[s.id]?.neutral), [sources, snapshots]);
   const ldFlags = useMemo(() => new Map((m.ld.flags?.items ?? []).map((f) => [f.key, f])), [m.ld.flags]);
   const ldEnvOf = (sourceId: string, sourceEnv: string) => (m.connected ? (m.profile.sources[sourceId]?.envMapping[sourceEnv] ?? null) : null);
 
   const rows: Row[] = useMemo(() => {
     const out: Row[] = [];
-    for (const s of ldSources) {
+    for (const s of neutralSources) {
       const snap = snapshots[s.id]!;
       const ldEnv = ldEnvOf(s.id, env);
       const envPairs = m.connected
@@ -102,7 +109,7 @@ export function LdSourceSideBySide({
             const lf = ldFlags.get(r.flagKey);
             return { ldEnv: le, status: migrationStatus(lf && ldFlagState(lf), le, r, { id: f.key, source: snap.source.alias }).status };
           });
-          out.push({ kind: 'flag', sourceId: s.id, alias: s.alias, entity: f, result, ldEnv, strip });
+          out.push({ kind: 'flag', sourceId: s.id, sourceKind: s.kind, alias: s.alias, entity: f, result, ldEnv, strip });
         }
       } else {
         for (const g of snap.neutral!.segments) {
@@ -114,13 +121,13 @@ export function LdSourceSideBySide({
             const status: MigrationStatus = !se ? 'not_in_ld' : !existing ? 'not_in_ld' : ownsSegment({ key: existing.key, tags: existing.tags ?? [] }, snap.source.alias) ? 'in_sync' : 'foreign';
             return { ldEnv: le, status };
           });
-          out.push({ kind: 'segment', sourceId: s.id, alias: s.alias, entity: g, result, ldEnv, strip });
+          out.push({ kind: 'segment', sourceId: s.id, sourceKind: s.kind, alias: s.alias, entity: g, result, ldEnv, strip });
         }
       }
     }
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on what the rows read of `m` (see GatesSideBySide)
-  }, [ldSources, snapshots, env, m.inputs, m.connected, m.ldEnvs, m.ld.segments, ldFlags, resource]);
+  }, [neutralSources, snapshots, env, m.inputs, m.connected, m.ldEnvs, m.ld.segments, ldFlags, resource]);
 
   const tagChoices = useMemo(() => tagOptions(rows.map((r) => r.entity)), [rows]);
   const chosenTags = useMemo(() => pruneTags(tags, tagChoices), [tags, tagChoices]);
@@ -154,8 +161,8 @@ export function LdSourceSideBySide({
   const allSelected = selectable.length > 0 && selectable.every((r) => selected.has(r.entity.uid));
   const selectedRows = rows.filter((r) => selected.has(r.entity.uid));
   const blockingIn = (rs: Row[]) => rs.reduce((n, r) => n + r.result.unresolved.filter((d) => d.severity === 'blocking').length, 0);
-  const mappedHere = [...new Set(ldSources.map((s) => ldEnvOf(s.id, env)).filter((x): x is string => !!x))];
-  const steps = readinessSteps({ m, env, mappedHere, hasSnapshot: ldSources.length > 0, kindLabel: words.many, selected: selectedRows.length, blockingSelected: blockingIn(selectedRows), blockingAll: blockingIn(visible), nav });
+  const mappedHere = [...new Set(neutralSources.map((s) => ldEnvOf(s.id, env)).filter((x): x is string => !!x))];
+  const steps = readinessSteps({ m, env, mappedHere, hasSnapshot: neutralSources.length > 0, kindLabel: words.many, selected: selectedRows.length, blockingSelected: blockingIn(selectedRows), blockingAll: blockingIn(visible), nav });
   const toggle = (uid: string) =>
     setSelected((x) => {
       const n = new Set(x);
@@ -175,7 +182,11 @@ export function LdSourceSideBySide({
       return n;
     });
 
-  if (ldSources.length === 0) return <Callout tone="blue">No LaunchDarkly source is attached. Add one under Connections to compare a source LaunchDarkly project with the target.</Callout>;
+  // The explainer speaks for one vocabulary: the PostHog one when every source here is PostHog, else LD's.
+  const explainerKey = neutralSources.length > 0 && neutralSources.every((s) => isPostHogKind(s.kind)) ? (resource === 'flag' ? 'ph_flag' : 'ph_segment') : resource === 'flag' ? 'ld_flag' : 'ld_segment';
+  const attributes = neutralSources.flatMap((s) => (snapshots[s.id]?.neutral?.attributes ?? []).map((a) => ({ ...a, alias: s.alias })));
+
+  if (neutralSources.length === 0) return <Callout tone="blue">No LaunchDarkly or PostHog source is attached. Add one under Connections to compare a source project with the target.</Callout>;
 
   return (
     <div className="pb-20">
@@ -208,7 +219,8 @@ export function LdSourceSideBySide({
           {!readOnly && <MigrateButton steps={steps} onClick={migrate} label={selectedRows.length ? `Migrate ${selectedRows.length.toLocaleString()} ${selectedRows.length === 1 ? words.one : words.many}…` : 'Migrate…'} />}
         </div>
       </div>
-      <MappingExplainer resource={resource === 'flag' ? 'ld_flag' : 'ld_segment'} onOpenCoverage={nav?.coverage} className="mb-3" />
+      <MappingExplainer resource={explainerKey} onOpenCoverage={nav?.coverage} className="mb-3" />
+      {attributes.length > 0 && <AttributesPanel attributes={attributes} showAlias={neutralSources.length > 1} />}
       {!readOnly && <ReadinessLine steps={steps} />}
       {m.ld.status !== 'connected' && (
         <div className="mb-3">
@@ -250,7 +262,11 @@ export function LdSourceSideBySide({
                     <td className="px-3 py-2">
                       <div className="flex flex-wrap items-center gap-1.5">
                         <span className="font-mono text-[13px]">{r.entity.key}</span>
-                        {ldSources.length > 1 && <Badge>{r.alias}</Badge>}
+                        {neutralSources.length > 1 && (
+                          <Badge tone={SOURCE_BADGE[r.sourceKind].tone} title={SOURCE_BADGE[r.sourceKind].label}>
+                            {r.alias}
+                          </Badge>
+                        )}
                         {r.kind === 'flag' && <Badge tone="slate">{r.entity.flagKind}</Badge>}
                         {r.kind === 'segment' && r.entity.environments.some((e) => e.unbounded) && <Badge tone="violet">big segment</Badge>}
                         {r.entity.archived && <Badge>archived</Badge>}
@@ -314,7 +330,9 @@ function Detail({ row, m, readOnly, sourceEnv }: { row: Row; m: MigrationContext
   return (
     <div className="grid gap-4 md:grid-cols-2">
       <div>
-        <div className="mb-1.5 text-xs font-semibold tracking-wide text-fg-muted uppercase">Source (LaunchDarkly {row.alias})</div>
+        <div className="mb-1.5 text-xs font-semibold tracking-wide text-fg-muted uppercase">
+          Source ({SOURCE_BADGE[row.sourceKind].label} {row.alias})
+        </div>
         {row.kind === 'flag' ? <SourceFlag flag={row.entity} env={sourceEnv} /> : <SourceSegment segment={row.entity} env={sourceEnv} />}
       </div>
       <div>
@@ -358,6 +376,52 @@ function Detail({ row, m, readOnly, sourceEnv }: { row: Row; m: MigrationContext
               Reconsider
             </Button>
           )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The source's declared attribute schema (PLAN §21.4 / §22.4: PostHog property definitions, typed
+ * per context kind), collapsed by default: it says what the clauses compare against.
+ */
+function AttributesPanel({ attributes, showAlias }: { attributes: (NeutralAttribute & { alias: string })[]; showAlias: boolean }) {
+  const [open, setOpen] = useState(false);
+  const sorted = useMemo(() => [...attributes].sort((a, b) => a.contextKind.localeCompare(b.contextKind) || a.name.localeCompare(b.name)), [attributes]);
+  return (
+    <div className="mb-3 rounded-md border border-line bg-surface text-sm" data-testid="source-attributes">
+      <button type="button" aria-expanded={open} onClick={() => setOpen((x) => !x)} className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left hover:bg-surface-hover">
+        <span className="font-medium">Attributes</span>
+        <Badge>{attributes.length}</Badge>
+        <span className="text-xs text-fg-muted">the properties the source declares, by context kind</span>
+        <span className="ml-auto text-xs text-fg-subtle">{open ? 'hide' : 'show'}</span>
+      </button>
+      {open && (
+        <div className="max-h-64 overflow-auto border-t border-line-soft px-3 py-2">
+          <table className="w-full text-xs">
+            <thead className="text-left text-fg-muted">
+              <tr>
+                <th className="py-1 pr-3 font-semibold">Name</th>
+                <th className="py-1 pr-3 font-semibold">Context kind</th>
+                <th className="py-1 pr-3 font-semibold">Type</th>
+                {showAlias && <th className="py-1 font-semibold">Source</th>}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-line-soft">
+              {sorted.map((a, i) => (
+                <tr key={`${a.alias}:${a.contextKind}:${a.name}:${i}`}>
+                  <td className="py-1 pr-3 font-mono">
+                    {a.name}
+                    {a.identifier && <Badge tone="slate">identifier</Badge>}
+                  </td>
+                  <td className="py-1 pr-3">{a.contextKind}</td>
+                  <td className="py-1 pr-3 text-fg-muted">{a.type ?? 'unknown'}</td>
+                  {showAlias && <td className="py-1 text-fg-muted">{a.alias}</td>}
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
     </div>

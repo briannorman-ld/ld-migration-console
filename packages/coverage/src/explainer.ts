@@ -9,8 +9,8 @@ import type { EntityKind } from '@sslm/canonical';
 import { AREAS, COVERAGE } from './matrix.ts';
 import type { CoverageArea, CoverageAreaInfo, CoverageEntry } from './types.ts';
 
-/** A StatSig resource kind, or a resource of a LaunchDarkly project attached as a source. */
-export type ExplainerKey = EntityKind | 'ld_flag' | 'ld_segment';
+/** A StatSig resource kind, a resource of a LaunchDarkly project attached as a source, or a PostHog flag or cohort (PLAN §22). */
+export type ExplainerKey = EntityKind | 'ld_flag' | 'ld_segment' | 'ph_flag' | 'ph_segment';
 
 export interface MappingExplanation {
   /** The row for the resource itself: `statsig → ld`, how, detail. */
@@ -40,7 +40,16 @@ const SECTIONS: Record<ExplainerKey, { headline: string; related: (CoverageArea 
   param_store: { headline: 'param_stores.static', related: ['configs.per_param', 'sdk.code_changes'] },
   prompt: { headline: 'operations.ai', related: ['structure.tags_owners'] },
   ld_flag: { headline: 'ld_source.flags', related: ['ld_source.targeting', 'ld_source.rollouts', 'ld_source.context_kinds', 'ld_source.prerequisites', 'ld_source.custom_properties', 'ld_source.maintainers', 'ld_source.experiments'] },
-  ld_segment: { headline: 'ld_source.segments', related: ['ld_source.big_segments', 'ld_source.context_kinds'] },
+  ld_segment: { headline: 'ld_source.segments', related: ['ld_source.big_segments', 'ld_source.context_kinds'] },  ph_flag: {
+    headline: 'posthog.flags',
+    related: [
+      'posthog.project', 'posthog.condition_sets', 'posthog.rollouts', 'posthog.variants', 'posthog.payloads', 'posthog.remote_config',
+      'posthog.equality', 'posthog.text_operators', 'posthog.regex', 'posthog.numeric', 'posthog.presence', 'posthog.dates', 'posthog.semver',
+      'posthog.groups', 'posthog.device_bucketing', 'posthog.dependencies', 'posthog.early_access', 'posthog.holdouts', 'posthog.continuity',
+      'posthog.runtime', 'posthog.experiments', 'posthog.scheduled_changes', 'posthog.encrypted_payloads', 'posthog.payload_upload', 'posthog.maintainers',
+    ],
+  },
+  ph_segment: { headline: 'posthog.cohorts', related: ['posthog.computed_cohorts', 'posthog.groups', 'posthog.payload_upload'] },
 };
 
 export const EXPLAINER_KEYS = Object.keys(SECTIONS) as ExplainerKey[];

@@ -784,7 +784,7 @@ export class Executor {
     // before writing, so a kind the customer already has is never renamed, and never archived by undo.
     const existing = await this.existingContextKind(s.key);
     if (existing && !existing.archived) return `Context kind “${s.key}” already exists in LaunchDarkly; left as is.`;
-    const from = s.sourceKind === 'launchdarkly' ? `Context kind “${s.unitType}” of the source LaunchDarkly project` : `StatSig unit type ${s.unitType}`;
+    const from = s.sourceKind === 'launchdarkly' ? `Context kind “${s.unitType}” of the source LaunchDarkly project` : s.sourceKind === 'posthog' ? `Group type “${s.unitType}” of the source PostHog project` : `StatSig unit type ${s.unitType}`;
     try {
       if (existing) {
         await this.c.putContextKind(this.p, s.key, { name: existing.name ?? s.name, ...(existing.description ? { description: existing.description } : {}), archived: false }, this.signal);

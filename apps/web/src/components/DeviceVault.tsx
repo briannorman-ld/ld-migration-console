@@ -89,6 +89,7 @@ export function RememberKeysCard({ workspaceId, workspace }: { workspaceId: stri
     ...(secrets.has('ld', workspaceId) ? ['the LaunchDarkly token'] : []),
     ...sources.filter((s) => s.kind === 'console_api' && !s.isDemo && secrets.has('statsig', s.id)).map((s) => `the StatSig key for ${s.label}`),
     ...sources.filter((s) => s.kind === 'launchdarkly' && !s.isDemo && secrets.has('ld_source', s.id)).map((s) => `the LaunchDarkly read token for ${s.label}`),
+    ...sources.filter((s) => s.kind === 'posthog' && !s.isDemo && secrets.has('ph_source', s.id)).map((s) => `the PostHog key for ${s.label}`),
   ];
 
   const run = async (fn: () => Promise<string>) => {
@@ -189,7 +190,7 @@ export function RememberKeysCard({ workspaceId, workspace }: { workspaceId: stri
             e.preventDefault();
             void run(async () => {
               const r = await unlockAndReconnect(workspaceId, workspace, passphrase);
-              return `Unlocked: ${[r.ld ? 'LaunchDarkly token' : '', r.statsig ? `${r.statsig} StatSig key${r.statsig === 1 ? '' : 's'}` : '', r.ldSources ? `${r.ldSources} LaunchDarkly source token${r.ldSources === 1 ? '' : 's'}` : ''].filter(Boolean).join(', ') || 'no tokens were stored'}.`;
+              return `Unlocked: ${[r.ld ? 'LaunchDarkly token' : '', r.statsig ? `${r.statsig} StatSig key${r.statsig === 1 ? '' : 's'}` : '', r.ldSources ? `${r.ldSources} LaunchDarkly source token${r.ldSources === 1 ? '' : 's'}` : '', r.phSources ? `${r.phSources} PostHog key${r.phSources === 1 ? '' : 's'}` : ''].filter(Boolean).join(', ') || 'no tokens were stored'}.`;
             });
           }}
         >

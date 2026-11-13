@@ -4,6 +4,7 @@ import { AREAS, COVERAGE, countByStatus, STATUS_DESCRIPTION, STATUS_LABEL, summa
 import type { SourceRecord } from '@sslm/store';
 import { TYPE_LABEL } from '../components/DecisionCard.tsx';
 import { Badge, Button, Callout, Card, cx, Input, PageTitle, Select } from '../components/ui.tsx';
+import { isPostHogArea, useFlag } from '../lib/flags.ts';
 import { KIND_LABEL } from '../lib/kinds.ts';
 import { COVERAGE_TONE } from './coverageTone.ts';
 
@@ -34,14 +35,18 @@ export function CoverageView({
   const [open, setOpen] = useState<Set<string>>(() => new Set(focus ? [focus] : []));
   const snaps = useMemo(() => sources.map((s) => snapshots[s.id]).filter((s): s is CanonicalSnapshot => !!s), [sources, snapshots]);
   const inventory = useMemo(() => summarizeInventory(snaps), [snaps]);
-  const counts = countByStatus();
+  // PLAN §22 ships behind the console's `posthog-source` flag: off, its area is not in the matrix shown.
+  const posthogOn = useFlag('posthogSource');
+  const areas = useMemo(() => AREAS.filter((a) => posthogOn || !isPostHogArea(a.area)), [posthogOn]);
+  const matrix = useMemo(() => COVERAGE.filter((e) => posthogOn || !isPostHogArea(e.area)), [posthogOn]);
+  const counts = countByStatus(matrix);
 
   const rows = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    return COVERAGE.filter((e) => (status === 'all' || e.status === status) && (area === 'all' || e.area === area)).filter(
+    return matrix.filter((e) => (status === 'all' || e.status === status) && (area === 'all' || e.area === area)).filter(
       (e) => !needle || [e.statsig, e.ld, e.how, e.detail ?? '', ...(e.decisions ?? [])].some((s) => s.toLowerCase().includes(needle)),
     );
-  }, [q, status, area]);
+  }, [q, status, area, matrix]);
 
   const toggle = (id: string) =>
     setOpen((prev) => {
@@ -122,7 +127,7 @@ export function CoverageView({
         <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search constructs, decisions…" aria-label="Search coverage" className="w-72 py-1" />
         <Select value={area} onChange={(e) => setArea(e.target.value as CoverageArea | 'all')} aria-label="Area" className="py-1">
           <option value="all">All areas</option>
-          {AREAS.map((a) => (
+          {areas.map((a) => (
             <option key={a.area} value={a.area}>
               {a.title}
             </option>
@@ -142,13 +147,13 @@ export function CoverageView({
           </Button>
         )}
         <span className="ml-auto text-xs text-fg-muted tabular-nums">
-          {rows.length} of {COVERAGE.length} rows
+          {rows.length} of {matrix.length} rows
         </span>
       </div>
 
       {rows.length === 0 && <Callout tone="blue">No rows match these filters.</Callout>}
 
-      {AREAS.map((a) => {
+      {areas.map((a) => {
         const inArea = rows.filter((e) => e.area === a.area);
         if (!inArea.length) return null;
         return (

@@ -13,7 +13,7 @@ export function MappingExplainer({ resource, onOpenCoverage, className }: { reso
   const [open, setOpen] = useState(false);
   const { headline, caveats, clean } = explainMapping(resource);
   const count = caveats.reduce((n, c) => n + c.rows.length, 0);
-  const sourceLabel = resource.startsWith('ld_') ? 'Source' : 'StatSig';
+  const sourceLabel = resource.startsWith('ld_') || resource.startsWith('ph_') ? 'Source' : 'StatSig';
   return (
     <div className={cx('rounded-md border border-line bg-surface text-sm', className)} data-testid="mapping-explainer">
       <button

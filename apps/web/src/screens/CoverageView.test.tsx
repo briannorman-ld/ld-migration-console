@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CanonicalSnapshot, Experiment, Holdout, Metric } from '@sslm/canonical';
 import { AREAS, COVERAGE } from '@sslm/coverage';
 import type { SourceRecord } from '@sslm/store';
+import { setFlagOverride } from '../lib/flags.ts';
 import { CoverageView } from './CoverageView.tsx';
 import { EntityList } from './EntityList.tsx';
 
@@ -55,9 +56,21 @@ const snapshot = {
 } as unknown as CanonicalSnapshot;
 
 describe('CoverageView', () => {
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    setFlagOverride('posthogSource', undefined);
+  });
+
+  it('keeps the PostHog area out of the matrix while the posthog-source flag is off', () => {
+    render(<CoverageView sources={[]} snapshots={{}} onOpenResource={vi.fn()} />);
+    const posthog = AREAS.find((a) => a.area === 'posthog')!;
+    expect(screen.queryByRole('heading', { name: posthog.title })).toBeNull();
+    const shown = COVERAGE.filter((e) => e.area !== 'posthog').length;
+    expect(screen.getByText(`${shown} of ${shown} rows`)).toBeTruthy();
+  });
 
   it('lists every area of the matrix and filters by status', () => {
+    setFlagOverride('posthogSource', true);
     render(<CoverageView sources={[]} snapshots={{}} onOpenResource={vi.fn()} />);
     for (const a of AREAS) expect(screen.getByRole('heading', { name: a.title })).toBeTruthy();
     expect(screen.getByText(`${COVERAGE.length} of ${COVERAGE.length} rows`)).toBeTruthy();

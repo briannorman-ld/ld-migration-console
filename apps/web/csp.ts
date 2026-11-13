@@ -1,6 +1,7 @@
 /**
  * Content-Security-Policy (PLAN §3.4, CLAUDE.md): connect-src is limited to this origin (the
- * static app and the in-browser demo mock under /__demo) plus the StatSig and LD API hosts.
+ * static app and the in-browser demo mock under /__demo) plus the StatSig, LD and PostHog API hosts
+ * and the LaunchDarkly client SDK hosts the console's own flags come from.
  * No third-party scripts, no analytics. One source of truth for the build-time <meta> tag and
  * the hosting headers (vercel.json, checked by csp.test.ts).
  */
@@ -10,6 +11,15 @@ export const CONNECT_HOSTS = [
   'https://app.launchdarkly.com',
   'https://app.eu.launchdarkly.com',
   'https://app.launchdarkly.us',
+  // PostHog Cloud (PLAN §22.1): a PostHog project read as a source. Both regions answer CORS
+  // themselves, so no relay. Self-hosted PostHog goes through the payload upload instead.
+  'https://us.posthog.com',
+  'https://eu.posthog.com',
+  // The console's own feature flags (apps/web/src/lib/flags.ts): the LaunchDarkly client SDK's
+  // flag, stream and event hosts. Anonymous context, no attributes.
+  'https://clientsdk.launchdarkly.com',
+  'https://clientstream.launchdarkly.com',
+  'https://events.launchdarkly.com',
 ] as const;
 
 // TODO(M0 spike #1): if StatSig's 200 responses lack CORS headers, add the stateless relay's

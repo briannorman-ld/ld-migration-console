@@ -25,6 +25,7 @@
     "@sslm/store": "workspace:*",
     "dexie": "^4.4.6",
     "dexie-react-hooks": "^4.4.0",
+    "launchdarkly-js-client-sdk": "3.9.6",
     "msw": "^3.0.2",
     "react": "^19.3.0",
     "react-dom": "^19.3.0"

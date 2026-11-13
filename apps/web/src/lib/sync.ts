@@ -7,7 +7,11 @@ import {
   crawlConsoleProject,
   normalizeConsoleSnapshot,
   normalizeLdSnapshot,
+  normalizePostHogSnapshot,
+  parsePostHogPayload,
+  PostHogClient,
   readLdProject,
+  readPostHogProject,
   type CrawlProgress,
 } from "@sslm/adapters";
 import { LD_INSTANCES, LdClient } from "@sslm/ld-client";
@@ -15,7 +19,8 @@ import type { TransportEvent } from "@sslm/http";
 import { WorkspaceStore } from "@sslm/store";
 import { StatsigConsoleClient, type SchemaIssue } from "@sslm/statsig-client";
 import { pipeline } from "../pipeline/client.ts";
-import { demoKey, demoLdSourceToken, startDemoMock } from "./demo.ts";
+import { demoKey, demoLdSourceToken, demoPostHogKey, startDemoMock } from "./demo.ts";
+import { flagEnabled } from "./flags.ts";
 import { secrets } from "./secrets.ts";
 import { store } from "./store.ts";
 
@@ -39,10 +44,65 @@ export interface SyncHandlers {
   onTransport?: (e: TransportEvent) => void;
 }
 
-/** Re-read any live source (Console API or LaunchDarkly project) into a new immutable snapshot. */
+/** Re-read any live source (Console API, LaunchDarkly or PostHog project) into a new immutable snapshot. */
 export async function syncSource(workspaceId: string, source: SourceDescriptor, h: SyncHandlers = {}): Promise<CanonicalSnapshot> {
   if (source.kind === "launchdarkly") return syncLdSource(workspaceId, source, h);
+  if (source.kind === "posthog") return syncPostHogSource(workspaceId, source, h);
   return syncConsoleSource(workspaceId, source, h);
+}
+
+/**
+ * Read a PostHog project attached as a source (PLAN §22.2) with its personal API key, through
+ * the real PostHog client and adapter, on the main thread (a project is about a dozen requests).
+ * Read-only: the adapter has no write path. PostHog Cloud answers CORS itself, so no relay.
+ */
+/** PLAN §22 ships behind the console's `posthog-source` flag; the UI never reaches these while it is off. */
+const POSTHOG_OFF = "PostHog sources are not enabled in this console.";
+
+export async function syncPostHogSource(workspaceId: string, source: SourceDescriptor, h: SyncHandlers = {}): Promise<CanonicalSnapshot> {
+  if (source.kind !== "posthog" || !source.posthog) throw new Error("Not a PostHog source.");
+  if (!flagEnabled("posthogSource")) throw new Error(POSTHOG_OFF);
+  let key: string | undefined;
+  if (source.isDemo) {
+    await startDemoMock();
+    key = await demoPostHogKey();
+  } else key = secrets.get("ph_source", source.id);
+  if (!key) throw new Error("Enter the PostHog personal API key for this source again.");
+  const client = new PostHogClient({
+    region: source.posthog.baseUrl ? { origin: source.posthog.baseUrl } : source.posthog.region,
+    key,
+    transport: { onEvent: (e) => h.onTransport?.(e) },
+  });
+  const raw = await readPostHogProject(client, source.posthog.projectId, { onProgress: h.onProgress });
+  const snapshot = normalizePostHogSnapshot(raw, { source: { sourceId: source.id, sourceKind: "posthog", alias: source.alias } });
+  await store.saveSnapshot(workspaceId, snapshot);
+  await pruneAfterSync(workspaceId, source.id);
+  return snapshot;
+}
+
+/** Largest local-evaluation payload we read; a 450-flag project's is well under 5 MB. */
+const MAX_POSTHOG_PAYLOAD_BYTES = 50 * 1024 * 1024;
+
+/**
+ * Upload a PostHog local-evaluation payload (`GET /flags/definitions?send_cohorts`, PLAN §22.2
+ * "Payload upload") for a `posthog_payload` source. Parsed on the main thread: the file is one
+ * JSON document of a few megabytes at most, and it never leaves the browser.
+ */
+export async function uploadPostHogPayload(workspaceId: string, source: SourceDescriptor, file: File): Promise<CanonicalSnapshot> {
+  if (source.kind !== "posthog_payload") throw new Error("Not a PostHog payload source.");
+  if (!flagEnabled("posthogSource")) throw new Error(POSTHOG_OFF);
+  if (file.size > MAX_POSTHOG_PAYLOAD_BYTES)
+    throw new Error(`“${file.name}” is ${(file.size / 1024 / 1024).toFixed(0)} MB; a flags definitions payload is far smaller than ${MAX_POSTHOG_PAYLOAD_BYTES / 1024 / 1024} MB. Check that this is the /flags/definitions download.`);
+  let json: unknown;
+  try {
+    json = JSON.parse(await file.text());
+  } catch {
+    throw new Error(`“${file.name}” is not a JSON file. Download the payload with curl as described and upload that file unchanged.`);
+  }
+  const snapshot = parsePostHogPayload(json, { source: { sourceId: source.id, sourceKind: "posthog_payload", alias: source.alias } });
+  await store.saveSnapshot(workspaceId, snapshot);
+  await pruneAfterSync(workspaceId, source.id);
+  return snapshot;
 }
 
 /**

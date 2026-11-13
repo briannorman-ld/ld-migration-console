@@ -28,13 +28,15 @@ export type CoverageArea =
   | 'operations'
   | 'sdk'
   /** Another LaunchDarkly project as the source (PLAN §20). */
-  | 'ld_source';
+  | 'ld_source'
+  /** A PostHog project as the source (PLAN §22): flags, condition sets, cohorts and group types. */
+  | 'posthog';
 
 export interface CoverageEntry {
   /** Stable id, used as an anchor in the doc and the page: `<area>.<slug>`. */
   id: string;
   area: CoverageArea;
-  /** The source construct, in the source's words (StatSig for every area but `ld_source`; the field name predates the second source). */
+  /** The source construct, in the source's words (StatSig for every area but `ld_source` and `posthog`; the field name predates the other sources). */
   statsig: string;
   /** The LaunchDarkly target, in LD's words; `—` when there is none. */
   ld: string;

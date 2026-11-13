@@ -12,10 +12,26 @@ vi.mock('../lib/secrets.ts', () => ({ secrets: { set: (...a: unknown[]) => setSe
 
 const syncConsoleSource = vi.fn(async (..._a: unknown[]) => ({}));
 const syncLdSource = vi.fn(async (..._a: unknown[]) => ({}));
+const syncPostHogSource = vi.fn(async (..._a: unknown[]) => ({}));
+const uploadPostHogPayload = vi.fn(async (..._a: unknown[]) => ({}));
 vi.mock('../lib/sync.ts', () => ({
   syncConsoleSource: (...a: unknown[]) => syncConsoleSource(...a),
   syncLdSource: (...a: unknown[]) => syncLdSource(...a),
+  syncPostHogSource: (...a: unknown[]) => syncPostHogSource(...a),
+  uploadPostHogPayload: (...a: unknown[]) => uploadPostHogPayload(...a),
   uploadSpec: vi.fn(async () => ({})),
+}));
+
+const phProjects = [
+  { id: '4242', name: 'Acme Hog', organizationId: 'org-1', organizationName: 'Acme' },
+  { id: '7', name: 'Sandbox', organizationId: 'org-2', organizationName: 'Acme Labs' },
+];
+const listReadableProjects = vi.fn(async () => phProjects);
+vi.mock('@sslm/adapters', async (orig) => ({
+  ...(await orig<typeof import('@sslm/adapters')>()),
+  PostHogClient: class {
+    listReadableProjects = () => listReadableProjects();
+  },
 }));
 
 const projects = [
@@ -42,11 +58,19 @@ vi.mock('@sslm/statsig-client', async (orig) => ({
 }));
 
 const { AddSource } = await import('./AddSource.tsx');
+const { setFlagOverride } = await import('../lib/flags.ts');
 
 describe('AddSource', () => {
   afterEach(() => {
     cleanup();
     vi.clearAllMocks();
+    setFlagOverride('posthogSource', undefined);
+  });
+
+  it('offers no PostHog source while the posthog-source flag is off', () => {
+    render(<AddSource workspaceId="w1" onDone={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: 'PostHog project' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'LaunchDarkly project' })).toBeTruthy();
   });
 
   it('asks for nothing the source can say itself', () => {
@@ -149,6 +173,59 @@ describe('AddSource', () => {
     expect(picker.disabled).toBe(true);
     expect(listProjects).toHaveBeenCalledTimes(1);
     expect(screen.getByText(/EU instance/)).toBeTruthy();
+  });
+
+  it('lists the projects a PostHog key can read and names the source after the chosen one', async () => {
+    setFlagOverride('posthogSource', true);
+    const onDone = vi.fn();
+    render(<AddSource workspaceId="w1" onDone={onDone} />);
+    fireEvent.click(screen.getByRole('button', { name: 'PostHog project' }));
+    const picker = screen.getByLabelText('Project to read') as HTMLInputElement;
+    expect(picker.disabled).toBe(true);
+    expect(screen.getByRole('button', { name: 'Add source' })).toHaveProperty('disabled', true);
+
+    fireEvent.change(screen.getByLabelText(/Personal API key/), { target: { value: 'phx_read_only_key' } });
+    // Typing sends nothing; the key goes to the API only when the projects are listed.
+    expect(listReadableProjects).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'List projects' }));
+    await waitFor(() => expect(listReadableProjects).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(picker.disabled).toBe(false));
+    expect(picker.placeholder).toBe('Search 2 projects…');
+
+    fireEvent.focus(picker);
+    fireEvent.click(screen.getByRole('option', { name: /Acme Hog \(Acme\)/ }));
+    expect(picker.value).toContain('Acme Hog');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add source' }));
+    await waitFor(() => expect(onDone).toHaveBeenCalled());
+    const source = addSource.mock.calls[0]![1];
+    expect(source.kind).toBe('posthog');
+    expect(source.label).toBe('Acme Hog (PostHog)');
+    expect(source.alias).toBe('acme-hog');
+    expect(source.posthog).toEqual({ region: 'us', projectId: '4242', projectName: 'Acme Hog' });
+    expect(setSecret).toHaveBeenCalledWith('ph_source', source.id, 'phx_read_only_key', 'w1');
+    expect(syncPostHogSource).toHaveBeenCalledTimes(1);
+    expect(uploadPostHogPayload).not.toHaveBeenCalled();
+  });
+
+  it('adds a PostHog payload source from an uploaded flags definitions file', async () => {
+    setFlagOverride('posthogSource', true);
+    const onDone = vi.fn();
+    render(<AddSource workspaceId="w1" onDone={onDone} />);
+    fireEvent.click(screen.getByRole('button', { name: 'PostHog project' }));
+    fireEvent.click(screen.getByLabelText('Upload a local-evaluation payload instead'));
+    expect(screen.queryByLabelText('Project to read')).toBeNull();
+    const file = new File(['{"flags":[]}'], 'posthog-flags.json', { type: 'application/json' });
+    fireEvent.change(screen.getByLabelText(/Flags definitions payload/), { target: { files: [file] } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add source' }));
+    await waitFor(() => expect(onDone).toHaveBeenCalled());
+    const source = addSource.mock.calls[0]![1];
+    expect(source.kind).toBe('posthog_payload');
+    expect(source.label).toBe('posthog-flags (PostHog payload)');
+    expect(source.alias).toBe('posthog');
+    expect(setSecret).not.toHaveBeenCalled();
+    expect(uploadPostHogPayload).toHaveBeenCalledWith('w1', source, file);
+    expect(syncPostHogSource).not.toHaveBeenCalled();
   });
 
   it('shows why a token could not list projects', async () => {

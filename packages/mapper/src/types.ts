@@ -260,7 +260,34 @@ export type DecisionType =
   /** LD source: the target plan or token has no prerequisites. */
   | 'prerequisite_unsupported'
   /** The owner's email is not an LD member (PLAN §8.3): leave unassigned, assign the team, or pick a member (`member:<id>`). */
-  | 'maintainer_unknown';
+  | 'maintainer_unknown'
+  // --- Neutral-model sources beyond LD (PLAN §21.3, §22.3) ---
+  /** A rule covers a share of matched contexts and sends the rest to the next rule, which an LD rollout cannot express. */
+  | 'rollout_coverage'
+  /** The rule is a running experiment's allocation: freeze the weights, serve control, or skip until it ends. */
+  | 'experiment_rule'
+  /** Variations carry payloads next to their values: string flag of keys, JSON flag of payloads, or both in one object. */
+  | 'variant_payloads'
+  /** A multivariate flag returns "nothing" when no rule matches: add a "Not served" variation or serve a variant. */
+  | 'multivariate_no_match'
+  /** A date clause uses a relative value (`-30d`): freeze it to an instant, or skip. */
+  | 'relative_date'
+  /** Rollouts bucket by a device id rather than the user key. */
+  | 'device_bucketing'
+  /** The source persists the pre-login assignment across identification, LD evaluates the context it is given. */
+  | 'experience_continuity'
+  /** Early-access opt-in rules migrate, the opt-in UI and the enrollment attribute are the application's. */
+  | 'early_access_enrollment'
+  /** A rule-level prerequisite: hoist to the flag (lossless when every rule carries it), or drop the rule, or skip. */
+  | 'rule_prerequisite'
+  /** A computed cohort's current members are frozen into a list segment, or the flag is skipped. */
+  | 'cohort_snapshot'
+  /** Members of a list segment had several ids each, all are included. */
+  | 'cohort_person_ids'
+  /** The payload is stored encrypted in the source. */
+  | 'encrypted_payload'
+  /** Pending scheduled changes in the source are not carried, the current state migrates. */
+  | 'scheduled_rule';
 
 /**
  * - blocking: no safe default; the item can't migrate until resolved.

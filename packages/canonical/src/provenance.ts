@@ -15,14 +15,16 @@
 
 import type { SourceKind } from './model.ts';
 
-/** Kinds of source a migration can read from: StatSig (Console API or config spec) and another LaunchDarkly project (PLAN §20). */
-export type MigrationSourceKind = 'statsig' | 'launchdarkly';
-export const SOURCE_KIND_LABEL: Record<MigrationSourceKind, string> = { statsig: 'StatSig', launchdarkly: 'LaunchDarkly' };
-export const MIGRATION_SOURCE_KINDS: readonly MigrationSourceKind[] = ['statsig', 'launchdarkly'];
+/** Kinds of source a migration can read from: StatSig (Console API or config spec), another LaunchDarkly project (PLAN §20) and PostHog (API or payload, PLAN §22). */
+export type MigrationSourceKind = 'statsig' | 'launchdarkly' | 'posthog';
+export const SOURCE_KIND_LABEL: Record<MigrationSourceKind, string> = { statsig: 'StatSig', launchdarkly: 'LaunchDarkly', posthog: 'PostHog' };
+export const MIGRATION_SOURCE_KINDS: readonly MigrationSourceKind[] = ['statsig', 'launchdarkly', 'posthog'];
 
-/** The provenance kind written for resources read from a source of this kind (both StatSig source kinds are `statsig`). */
+/** The provenance kind written for resources read from a source of this kind (both StatSig source kinds are `statsig`, both PostHog kinds `posthog`). */
 export function migrationKindOf(sourceKind: SourceKind): MigrationSourceKind {
-  return sourceKind === 'launchdarkly' ? 'launchdarkly' : 'statsig';
+  if (sourceKind === 'launchdarkly') return 'launchdarkly';
+  if (sourceKind === 'posthog' || sourceKind === 'posthog_payload') return 'posthog';
+  return 'statsig';
 }
 
 /** LD tags: letters, digits, `.`, `_`, `-`; at most 64 characters. */

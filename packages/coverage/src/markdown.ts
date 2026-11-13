@@ -35,19 +35,19 @@ export const STATUS_DESCRIPTION: Record<CoverageStatus, string> = {
 
 const cell = (s: string) => s.replace(/\|/g, '\\|').replace(/\n/g, ' ');
 
-function docLinks(e: CoverageEntry): string {
+function docLinks(e: CoverageEntry, sourceLabel = 'StatSig'): string {
   const links: string[] = [];
-  if (e.docs?.statsig) links.push(`[StatSig](${e.docs.statsig})`);
+  if (e.docs?.statsig) links.push(`[${sourceLabel}](${e.docs.statsig})`);
   if (e.docs?.ld) links.push(`[LaunchDarkly](${e.docs.ld})`);
   return links.join(' · ');
 }
 
-function details(e: CoverageEntry): string {
+function details(e: CoverageEntry, sourceLabel?: string): string {
   const parts: string[] = [];
   if (e.detail) parts.push(e.detail);
   if (e.decisions?.length) parts.push(`Decisions: ${e.decisions.map((d) => `\`${d}\``).join(', ')}.`);
   if (e.edgeCases?.length) parts.push(`Edge cases: ${e.edgeCases.join(', ')}.`);
-  const links = docLinks(e);
+  const links = docLinks(e, sourceLabel);
   if (links) parts.push(links);
   return parts.join(' ');
 }
@@ -67,7 +67,7 @@ export function renderCoverageMarkdown(entries: readonly CoverageEntry[] = COVER
     out.push(`### ${a.title}`, '', a.summary, '');
     out.push(`| | ${a.sourceLabel ?? 'StatSig'} | LaunchDarkly | How the console handles it | Notes |`, '|---|---|---|---|---|');
     for (const e of rows) {
-      out.push(`| ${STATUS_MARK[e.status]} | ${cell(e.statsig)} | ${cell(e.ld)} | ${cell(e.how)} | ${cell(details(e))} |`);
+      out.push(`| ${STATUS_MARK[e.status]} | ${cell(e.statsig)} | ${cell(e.ld)} | ${cell(e.how)} | ${cell(details(e, a.sourceLabel))} |`);
     }
     out.push('');
   }

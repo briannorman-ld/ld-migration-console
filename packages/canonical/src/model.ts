@@ -11,11 +11,13 @@
 
 /**
  * Where a source's data comes from. The two StatSig kinds fill the StatSig-vocabulary collections
- * below; `launchdarkly` (another LD project, PLAN §20) fills the neutral block (`neutral`).
+ * below; `launchdarkly` (another LD project, PLAN §20), `posthog` (a PostHog project read through
+ * its API, PLAN §22) and `posthog_payload` (an uploaded PostHog local-evaluation payload) fill the
+ * neutral block (`neutral`).
  */
 import type { NeutralProject } from './neutral.ts';
 
-export type SourceKind = 'console_api' | 'config_spec' | 'launchdarkly';
+export type SourceKind = 'console_api' | 'config_spec' | 'launchdarkly' | 'posthog' | 'posthog_payload';
 
 export interface SourceRef {
   sourceId: string;
@@ -38,6 +40,13 @@ export interface SourceDescriptor {
    * instance origin (the demo's in-browser mock). The token is never stored here.
    */
   ld?: { instance: 'us' | 'eu' | 'federal'; projectKey: string; baseUrl?: string };
+  /**
+   * PostHog sources (PLAN §22.2): which Cloud region and project (`team_id`) to read. `baseUrl`
+   * overrides the region origin (the demo's in-browser mock, or a self-hosted instance in a
+   * build that allows it). The key is never stored here. A `posthog_payload` source has no
+   * region; `projectId` is the `team_id` the payload names, when it does.
+   */
+  posthog?: { region: 'us' | 'eu'; projectId: string; projectName?: string; baseUrl?: string };
   isDemo?: boolean;
   /**
    * Console API sources: the entity kinds to read. Undefined means everything. Gates reference

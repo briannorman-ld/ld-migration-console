@@ -683,12 +683,12 @@ function escapeClass(s: string): string {
   return s.replace(/[\]\\^-]/g, '\\$&');
 }
 
-function mixedCase(v: string): string {
+export function mixedCase(v: string): string {
   return [...v].map((ch, i) => (i % 2 ? ch.toLowerCase() : ch.toUpperCase())).join('');
 }
 
 /** Constructs that behave differently (or fail) across SDK regex engines, e.g. RE2 in Go. */
-const NON_PORTABLE_REGEX: { re: RegExp; what: string }[] = [
+export const NON_PORTABLE_REGEX: { re: RegExp; what: string }[] = [
   { re: /\(\?<[=!]/, what: 'lookbehind' },
   { re: /\(\?[=!]/, what: 'lookahead' },
   { re: /\\[1-9]/, what: 'backreference' },

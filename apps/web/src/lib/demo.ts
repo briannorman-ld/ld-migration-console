@@ -5,6 +5,7 @@
  * the dataset or the mock.
  */
 import type { SourceDescriptor } from '@sslm/canonical';
+import { flagEnabled, whenFlagsReady } from './flags.ts';
 import { isSharedOrigin } from './origin.ts';
 import { store } from './store.ts';
 
@@ -20,8 +21,10 @@ export const DEMO_LD_PROJECT = { instance: 'us' as const, projectKey: 'statsig-m
 /**
  * The demo LD project has only `test` and `production`, so StatSig `staging` is pre-mapped to
  * `test` (editable under Mapping). `development` and `qa` stay unmapped, to show that state.
+ * A PostHog project has no environments (PLAN §22.1): the demo's "Acme Hog" source has the one
+ * source environment named after the project, pre-mapped to `production`.
  */
-export const DEMO_ENV_HINTS: Record<string, string> = { staging: 'test' };
+export const DEMO_ENV_HINTS: Record<string, string> = { staging: 'test', 'Acme Hog': 'production' };
 
 /** Where the app is served from, e.g. `https://x.github.io/ld-migration-console` (no trailing slash). */
 export function appRoot(): string {
@@ -101,9 +104,17 @@ export async function demoLdSourceToken(): Promise<string> {
   return (await import('@sslm/demo-fixtures')).DEMO_LD_SOURCE_TOKEN;
 }
 
-/** Create (or reuse) the "Acme Retail (Demo)" workspace with the two StatSig demo sources and the "Acme Legacy" LD source preconnected. */
+/** The dummy personal API key of the demo's PostHog *source* project (checked by the mock). */
+export async function demoPostHogKey(): Promise<string> {
+  return (await import('@sslm/demo-fixtures')).DEMO_POSTHOG_KEY;
+}
+
+/**
+ * Create (or reuse) the "Acme Retail (Demo)" workspace with the two StatSig demo sources, the
+ * "Acme Legacy" LD source and the "Acme Hog" PostHog source preconnected.
+ */
 export async function ensureDemoWorkspace(): Promise<string> {
-  const { demoStatsigBaseUrl, demoLdBaseUrl, ACME_LEGACY_PROJECT_KEY } = await import('@sslm/demo-fixtures');
+  const { demoStatsigBaseUrl, demoLdBaseUrl, demoPostHogBaseUrl, ACME_LEGACY_PROJECT_KEY, ACME_HOG_PROJECT_ID } = await import('@sslm/demo-fixtures');
   const existing = await store.getWorkspace(DEMO_WORKSPACE_ID);
   // The demo writes with a real LaunchDarkly token, so it follows the same origin rule as any workspace.
   if (!existing) await store.createWorkspace({ id: DEMO_WORKSPACE_ID, name: 'Acme Retail (Demo)', isDemo: true, ld: DEMO_LD_PROJECT, ...(isSharedOrigin() ? { tokenStorage: 'memory' as const } : {}) });
@@ -127,6 +138,19 @@ export async function ensureDemoWorkspace(): Promise<string> {
     ld: { instance: 'us', projectKey: ACME_LEGACY_PROJECT_KEY, baseUrl: demoLdBaseUrl(appRoot()) },
     isDemo: true,
     createdAt: new Date(Date.UTC(2026, 0, 1, 0, 0, 2)).toISOString(),
+  });
+  // PLAN §22: a PostHog project, read as a source through the simulated PostHog API. One source
+  // environment, named after the project (PostHog has no environments inside a project). Only
+  // while the console's `posthog-source` flag is on (the workspace screen hides it when off).
+  await whenFlagsReady();
+  if (flagEnabled('posthogSource')) sources.push({
+    id: `${DEMO_WORKSPACE_ID}-hog`,
+    alias: 'hog',
+    label: 'acme-hog (PostHog)',
+    kind: 'posthog',
+    posthog: { region: 'us', projectId: ACME_HOG_PROJECT_ID, projectName: 'Acme Hog', baseUrl: demoPostHogBaseUrl(appRoot()) },
+    isDemo: true,
+    createdAt: new Date(Date.UTC(2026, 0, 1, 0, 0, 3)).toISOString(),
   });
   for (const s of sources) if (!have.has(s.id)) await store.addSource(DEMO_WORKSPACE_ID, s);
   return DEMO_WORKSPACE_ID;
