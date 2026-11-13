@@ -120,6 +120,30 @@ describe('AddSource', () => {
     expect(setSecret).not.toHaveBeenCalled();
   });
 
+  it('forgets a key pasted for one provider when another tile is chosen', async () => {
+    setFlagOverride('posthogSource', true);
+    render(<AddSource workspaceId="w1" onDone={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'PostHog project' }));
+    fireEvent.change(screen.getByLabelText(/Personal API key/), { target: { value: 'phx_read_only_key' } });
+    fireEvent.click(screen.getByRole('button', { name: 'List projects' }));
+    await waitFor(() => expect(listReadableProjects).toHaveBeenCalledTimes(1));
+
+    // The LaunchDarkly tile starts empty: the PostHog key is gone, nothing is listed, and the
+    // list button is disabled, so the key cannot reach LaunchDarkly's API.
+    fireEvent.click(screen.getByRole('button', { name: 'LaunchDarkly project' }));
+    expect((screen.getByLabelText(/Access token/) as HTMLInputElement).value).toBe('');
+    expect(screen.getByRole('button', { name: 'List projects' })).toHaveProperty('disabled', true);
+    expect((screen.getByLabelText('Project to read') as HTMLInputElement).disabled).toBe(true);
+    expect(listProjects).not.toHaveBeenCalled();
+
+    // Switching between the two PostHog inputs keeps the key: same provider.
+    fireEvent.click(screen.getByRole('button', { name: 'PostHog project' }));
+    fireEvent.change(screen.getByLabelText(/Personal API key/), { target: { value: 'phx_read_only_key' } });
+    fireEvent.click(screen.getByLabelText('Upload a local-evaluation payload instead'));
+    fireEvent.click(screen.getByLabelText('Read the project with a personal API key'));
+    expect((screen.getByLabelText(/Personal API key/) as HTMLInputElement).value).toBe('phx_read_only_key');
+  });
+
   it('lists the projects a LaunchDarkly token can read and names the source after the chosen one', async () => {
     const onDone = vi.fn();
     render(<AddSource workspaceId="w1" onDone={onDone} />);

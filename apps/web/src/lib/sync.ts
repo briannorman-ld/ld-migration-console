@@ -17,11 +17,12 @@ import {
 import { LD_INSTANCES, LdClient } from "@sslm/ld-client";
 import type { TransportEvent } from "@sslm/http";
 import { WorkspaceStore } from "@sslm/store";
-import { StatsigConsoleClient, type SchemaIssue } from "@sslm/statsig-client";
+import { STATSIG_CONSOLE_BASE_URL, StatsigConsoleClient, type SchemaIssue } from "@sslm/statsig-client";
 import { pipeline } from "../pipeline/client.ts";
 import { demoKey, demoLdSourceToken, demoPostHogKey, startDemoMock } from "./demo.ts";
 import { flagEnabled } from "./flags.ts";
 import { secrets } from "./secrets.ts";
+import { demoBaseUrl } from "./sourceOrigin.ts";
 import { store } from "./store.ts";
 
 /** Keep the workspace's retention count of snapshots for this source (plus any a run used). */
@@ -68,8 +69,10 @@ export async function syncPostHogSource(workspaceId: string, source: SourceDescr
     key = await demoPostHogKey();
   } else key = secrets.get("ph_source", source.id);
   if (!key) throw new Error("Enter the PostHog personal API key for this source again.");
+  // The stored baseUrl is honoured only for the demo's same-origin mock (sourceOrigin.ts).
+  const mock = demoBaseUrl(source, source.posthog.baseUrl);
   const client = new PostHogClient({
-    region: source.posthog.baseUrl ? { origin: source.posthog.baseUrl } : source.posthog.region,
+    region: mock ? { origin: mock } : source.posthog.region,
     key,
     transport: { onEvent: (e) => h.onTransport?.(e) },
   });
@@ -118,7 +121,9 @@ export async function syncLdSource(workspaceId: string, source: SourceDescriptor
     token = await demoLdSourceToken();
   } else token = secrets.get("ld_source", source.id);
   if (!token) throw new Error("Enter the LaunchDarkly read token for this source again.");
-  const instance = source.ld.baseUrl ? { ...LD_INSTANCES[source.ld.instance], origin: source.ld.baseUrl } : source.ld.instance;
+  // The stored baseUrl is honoured only for the demo's same-origin mock (sourceOrigin.ts).
+  const mock = demoBaseUrl(source, source.ld.baseUrl);
+  const instance = mock ? { ...LD_INSTANCES[source.ld.instance], origin: mock } : source.ld.instance;
   const client = new LdClient({ instance, token, transport: { onEvent: (e) => h.onTransport?.(e) } });
   const raw = await readLdProject(client, source.ld.projectKey, { onProgress: h.onProgress });
   const snapshot = normalizeLdSnapshot(raw, { source: { sourceId: source.id, sourceKind: "launchdarkly", alias: source.alias } });
@@ -154,13 +159,16 @@ export async function syncConsoleSource(
     h.onTransport?.(e);
     if (e.type === "retry") onRetry(e.url, e.delayMs, e.reason);
   };
+  // A real source always reads the production Console API; the stored baseUrl is honoured only
+  // for the demo's same-origin mock (sourceOrigin.ts).
+  const baseUrl = demoBaseUrl(source, source.baseUrl) ?? STATSIG_CONSOLE_BASE_URL;
   if (source.isDemo) {
     // The demo's MSW mock reliably intercepts only this page's own requests: after a reload, the
     // service worker doesn't serve requests from the pipeline worker. So demo sources crawl on the
     // main thread, through the same adapters; the dataset is small.
     const issues: SchemaIssue[] = [];
     const client = new StatsigConsoleClient({
-      baseUrl: source.baseUrl,
+      baseUrl,
       apiKey,
       onSchemaIssue: (i) => issues.push(i),
       transport: { onEvent: onTransport },
@@ -183,7 +191,7 @@ export async function syncConsoleSource(
   const job = pipeline().crawlConsole(
     {
       source: { sourceId: source.id, alias: source.alias },
-      baseUrl: source.baseUrl,
+      baseUrl,
       apiKey,
       kinds: source.resources,
     },

@@ -9,7 +9,7 @@
  * the safe behaviour when the SDK cannot connect; the defaults are also what tests see, unless a
  * test sets an override.
  */
-import { initialize, type LDClient, type LDFlagSet } from 'launchdarkly-js-client-sdk';
+import { initialize, type LDClient, type LDFlagSet, type LDOptions } from 'launchdarkly-js-client-sdk';
 import { useSyncExternalStore } from 'react';
 
 export const CONSOLE_FLAGS = {
@@ -44,8 +44,7 @@ function start(): void {
     ready = Promise.resolve();
     return;
   }
-  const bootstrap = cachedFlags();
-  const c = initialize(id, { kind: 'user', anonymous: true }, { diagnosticOptOut: true, ...(bootstrap ? { bootstrap } : {}) });
+  const c = initialize(id, { kind: 'user', anonymous: true }, sdkOptions(cachedFlags()));
   client = c;
   const notify = () => listeners.forEach((l) => l());
   c.on('change', () => {
@@ -57,6 +56,16 @@ function start(): void {
     .then(() => cacheFlags(c.allFlags()))
     .catch(() => undefined)
     .finally(notify);
+}
+
+/**
+ * What the SDK may do (SECURITY-REVIEW-2026-11-12 L2): no diagnostics, and no request for
+ * Experimentation goals. The console runs no experiments on itself, and with goals the SDK would
+ * send the page URL (workspace id, route) to the events host on every click or pageview. Flag
+ * evaluation events still go out, with the anonymous context only.
+ */
+export function sdkOptions(bootstrap?: LDFlagSet): LDOptions {
+  return { diagnosticOptOut: true, fetchGoals: false, ...(bootstrap ? { bootstrap } : {}) };
 }
 
 /** Last known values, so a reload does not flash the default while the SDK connects. */

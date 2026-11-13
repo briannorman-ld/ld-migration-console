@@ -23,3 +23,12 @@ describe('console flags', () => {
     expect(isPostHogKind('console_api')).toBe(false);
   });
 });
+
+describe('console flags SDK options', () => {
+  it('opts out of diagnostics and never fetches Experimentation goals', async () => {
+    const { sdkOptions } = await import('./flags.ts');
+    expect(sdkOptions()).toMatchObject({ diagnosticOptOut: true, fetchGoals: false });
+    expect(sdkOptions()).not.toHaveProperty('bootstrap');
+    expect(sdkOptions({ 'posthog-source': true }).bootstrap).toEqual({ 'posthog-source': true });
+  });
+});

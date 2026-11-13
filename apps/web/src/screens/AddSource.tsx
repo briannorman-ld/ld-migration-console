@@ -21,6 +21,9 @@ const MIN_PH_KEY_LENGTH = 8;
 /** The read scopes a PostHog personal API key needs (PLAN §22.1); the console never writes. */
 const POSTHOG_READ_SCOPES = ['feature_flag:read', 'cohort:read', 'group:read', 'person:read', 'project:read', 'property_definition:read', 'user:read', 'organization_member:read'];
 
+/** Which service a tile's key goes to; switching between services forgets the key (see `pick`). */
+const provider = (k: SourceKind): 'statsig' | 'launchdarkly' | 'posthog' => (k === 'launchdarkly' ? 'launchdarkly' : k === 'posthog' || k === 'posthog_payload' ? 'posthog' : 'statsig');
+
 /** A PostHog project the key can read, as `PostHogClient.listReadableProjects` returns it. */
 interface PostHogProjectOption {
   id: string;
@@ -118,6 +121,21 @@ export function AddSource({ workspaceId, onDone }: { workspaceId: string; onDone
   };
   // The PostHog tile covers both PostHog inputs: the API read and the payload upload.
   const isPostHog = kind === 'posthog' || kind === 'posthog_payload';
+  /**
+   * Switch tiles. The key field is shared by the three API tiles, so a key pasted for one
+   * provider is forgotten when another tile is chosen: it is never offered to the other
+   * provider's API by the next "List projects" click (SECURITY-REVIEW-2026-11-12 L3).
+   */
+  const pick = (next: SourceKind) => {
+    if (provider(next) !== provider(kind)) {
+      setKey('');
+      setFile(undefined);
+      setError(undefined);
+      resetLdListing();
+      resetPhListing();
+    }
+    setKind(next);
+  };
   // Live sources sync on add and show the activity log; uploads just parse the file.
   const isLive = kind !== 'config_spec' && kind !== 'posthog_payload';
 
@@ -203,17 +221,17 @@ export function AddSource({ workspaceId, onDone }: { workspaceId: string; onDone
     <div className="max-w-2xl space-y-4">
       <h2 className="font-display text-xl font-semibold tracking-tight">Add a source</h2>
       <div className="flex flex-wrap gap-2">
-        <Button variant={kind === 'console_api' ? 'primary' : 'secondary'} onClick={() => setKind('console_api')}>
+        <Button variant={kind === 'console_api' ? 'primary' : 'secondary'} onClick={() => pick('console_api')}>
           StatSig Console API key
         </Button>
-        <Button variant={kind === 'config_spec' ? 'primary' : 'secondary'} onClick={() => setKind('config_spec')}>
+        <Button variant={kind === 'config_spec' ? 'primary' : 'secondary'} onClick={() => pick('config_spec')}>
           StatSig config spec
         </Button>
-        <Button variant={kind === 'launchdarkly' ? 'primary' : 'secondary'} onClick={() => setKind('launchdarkly')}>
+        <Button variant={kind === 'launchdarkly' ? 'primary' : 'secondary'} onClick={() => pick('launchdarkly')}>
           LaunchDarkly project
         </Button>
         {posthogOn && (
-          <Button variant={isPostHog ? 'primary' : 'secondary'} onClick={() => setKind('posthog')}>
+          <Button variant={isPostHog ? 'primary' : 'secondary'} onClick={() => pick('posthog')}>
             PostHog project
           </Button>
         )}

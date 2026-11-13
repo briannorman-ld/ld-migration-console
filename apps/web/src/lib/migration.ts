@@ -49,6 +49,7 @@ import { readsHold, trackReads, type ProfileRead } from "./profileReads.ts";
 import { learnCapability, ldClient, ldSessionSnapshot, mergeLdFlags, mergeLdSegments, refreshLdLists, type LdSession } from "./ld.ts";
 import { latestChanges, listsTouchedByRun, staleAfterRun } from "./reconcile.ts";
 import { secrets } from "./secrets.ts";
+import { demoBaseUrl } from "./sourceOrigin.ts";
 import { store } from "./store.ts";
 
 // ---------------------------------------------------------------------------------------------
@@ -491,7 +492,7 @@ export async function consoleAccessFor(source: SourceRecord, sources: SourceReco
   const open = async (s: SourceRecord, own: boolean): Promise<ConsoleAccess | undefined> => {
     const apiKey = await keyFor(s);
     if (!apiKey) return undefined;
-    return { client: new StatsigConsoleClient({ baseUrl: s.baseUrl ?? STATSIG_CONSOLE_BASE_URL, apiKey }), via: { sourceId: s.id, label: s.label, own } };
+    return { client: new StatsigConsoleClient({ baseUrl: demoBaseUrl(s, s.baseUrl) ?? STATSIG_CONSOLE_BASE_URL, apiKey }), via: { sourceId: s.id, label: s.label, own } };
   };
   if (source.kind === "console_api") {
     return (await open(source, true)) ?? { blocked: `No Console API key for ${source.label} in memory. Enter it under Connections (or unlock the vault), then retry.`, needsKey: false };
