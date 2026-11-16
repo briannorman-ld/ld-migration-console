@@ -162,6 +162,8 @@ export function WorkspaceScreen({
   const pointerPick = useRef(false);
   const [sync, setSync] = useState<Record<string, SyncState>>({});
   const [hidden, setHidden] = useState<Set<string>>(new Set());
+  // Interrupted-run ids the user dismissed the banner for; a newly interrupted run brings it back.
+  const [dismissedInterrupted, setDismissedInterrupted] = useState<Set<string>>(new Set());
   const ld = useLdSession(workspaceId);
   const autoSynced = useRef(new Set<string>());
   const [migrate, setMigrate] = useState<{
@@ -825,16 +827,28 @@ export function WorkspaceScreen({
               }
             />
           )}
-          {interrupted.length > 0 && view.kind !== "runs" && (
+          {interrupted.some((r) => !dismissedInterrupted.has(r.id)) && view.kind !== "runs" && (
             <div className="mb-3">
               <Callout>
-                A migration run was interrupted (the tab closed while it ran).{" "}
-                <button
-                  className="font-medium underline"
-                  onClick={() => setView({ kind: "runs" })}
-                >
-                  Review and resume
-                </button>
+                <div className="flex items-center gap-3">
+                  <span className="min-w-0 flex-1">
+                    A migration run was interrupted (the tab closed while it ran).{" "}
+                    <button
+                      className="font-medium underline"
+                      onClick={() => setView({ kind: "runs" })}
+                    >
+                      Review and resume
+                    </button>
+                  </span>
+                  <Button
+                    variant="secondary"
+                    className="shrink-0 py-1 text-xs"
+                    title="Hide this banner; the Runs page keeps its interrupted badge until the run is resumed or undone"
+                    onClick={() => setDismissedInterrupted(new Set(interrupted.map((r) => r.id)))}
+                  >
+                    Dismiss
+                  </Button>
+                </div>
               </Callout>
             </div>
           )}

@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/rea
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { monitorRows, alertsSince, type LdFlagInfo, type MonitoredItem } from '@sslm/monitoring';
 import type { LdSession } from '../lib/ld.ts';
-import { MonitoringPanel, type MonitoringPanelProps } from './MonitoringView.tsx';
+import { MonitoringPanel, selectionFor, type MonitoringPanelProps } from './MonitoringView.tsx';
 
 const SYNCED = '2026-10-15T09:00:00.000Z';
 const NOW = '2026-10-23T12:00:00.000Z';
@@ -44,7 +44,7 @@ const rows = monitorRows({ items, ldFlags, statuses: { test: { dark_mode: { name
 const ld: LdSession = { status: 'connected', instance: 'us', projectKey: 'statsig-migration', matrix: { environments: [] } as unknown as LdSession['matrix'] };
 
 function setup(over: Partial<MonitoringPanelProps> = {}) {
-  const h = { onRefresh: vi.fn(), onResyncStatsig: vi.fn(), onDismissAlerts: vi.fn(), onToggleNotify: vi.fn(), onToggleAuthoritative: vi.fn(), onSync: vi.fn() };
+  const h = { onRefresh: vi.fn(), onResyncStatsig: vi.fn(), onDismissAlerts: vi.fn(), onToggleNotify: vi.fn(), onToggleAuthoritative: vi.fn(), onSync: vi.fn(), onSyncAll: vi.fn() };
   render(
     <MonitoringPanel
       workspaceName="Acme"
@@ -98,6 +98,29 @@ describe('MonitoringPanel', () => {
     expect(retire.getAttribute('href')).toContain('/projects/statsig-migration/flags/legacy_browser_banner/settings');
     fireEvent.click(screen.getByLabelText('LaunchDarkly authoritative for new_checkout_flow in test'));
     expect(h.onToggleAuthoritative).toHaveBeenCalledWith(expect.objectContaining({ id: 'new_checkout_flow' }), true);
+  });
+
+  it('syncs every StatSig-changed item at once, and only those', () => {
+    const h = setup();
+    fireEvent.click(screen.getByRole('button', { name: 'Sync all drifted (1)' }));
+    expect(h.onSyncAll).toHaveBeenCalledTimes(1);
+    expect(h.onSyncAll.mock.calls[0]![0]).toEqual([expect.objectContaining({ id: 'new_checkout_flow', ldEnv: 'test', status: 'statsig_changed' })]);
+    cleanup();
+    // An LD edit on the drifted item makes it a conflict: that stays a per-row decision, so nothing is left for the bulk button.
+    const conflicted = rows.map((r) => (r.id === 'new_checkout_flow' ? { ...r, status: 'conflict' as const } : r));
+    setup({ rows: conflicted });
+    expect((screen.getByRole('button', { name: 'Sync all drifted (0)' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('builds one migrate selection for mixed rows: uids by kind, every environment once', () => {
+    const r = (over: Partial<MonitoredItem>) => item(over) as unknown as Parameters<typeof selectionFor>[0][number];
+    const s = selectionFor([
+      r({ kind: 'gate', uid: 'src-web/gate/a', ldEnv: 'test' }),
+      r({ kind: 'gate', uid: 'src-web/gate/a', ldEnv: 'production' }),
+      r({ kind: 'config', uid: 'src-web/config/c', ldEnv: 'production' }),
+      r({ kind: 'flag', uid: 'src-ld/flag/f', ldEnv: 'test' }),
+    ]);
+    expect(s).toEqual({ selection: { gates: ['src-web/gate/a'], autotunes: [], configs: ['src-web/config/c'], flags: ['src-ld/flag/f'] }, ldEnvs: ['production', 'test'] });
   });
 
   it('counts the cutover funnel per environment and runs the checks on demand', () => {

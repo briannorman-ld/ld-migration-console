@@ -32,6 +32,27 @@ const STAGES: Lifecycle[] = ['migrated', 'dual_running', 'cut_over', 'ld_authori
 const TILES: MonitorStatus[] = ['in_sync', 'statsig_changed', 'decisions_changed', 'ld_changed', 'conflict', 'archived_in_statsig', 'missing_in_statsig', 'ld_authoritative'];
 
 /**
+ * Rows the bulk "Sync all drifted" acts on: StatSig (or its decisions) moved and LaunchDarkly did not.
+ * Rows where LaunchDarkly was edited (`ld_changed`, `conflict`) overwrite someone's edit, and
+ * LaunchDarkly-authoritative rows need an explicit confirmation (PLAN §14), so both stay per row.
+ */
+export const BULK_SYNCABLE: ReadonlySet<MonitorStatus> = new Set<MonitorStatus>(['statsig_changed', 'decisions_changed']);
+
+/**
+ * The migrate selection for a set of monitor rows: uids by kind, plus every LD environment they are
+ * in. The plan then covers item × environment; the migrate dialog leaves the in-sync pairs out by default.
+ */
+export function selectionFor(rows: readonly MonitorRow[]): { selection: MigrationSelection; ldEnvs: string[] } {
+  const by = (k: MonitorRow['kind']) => [...new Set(rows.filter((r) => r.kind === k).map((r) => r.uid))];
+  const configs = by('config');
+  const flags = by('flag');
+  return {
+    selection: { gates: by('gate'), autotunes: by('autotune'), ...(configs.length ? { configs } : {}), ...(flags.length ? { flags } : {}) },
+    ldEnvs: [...new Set(rows.map((r) => r.ldEnv))].sort(),
+  };
+}
+
+/**
  * Monitoring (PLAN §14): drift per (item, LD environment) read from LD provenance, LD traffic from
  * flag statuses, the cutover funnel, in-app alerts and the reports. Read-only: every "Sync" goes
  * through the normal plan → confirm → run flow.
@@ -92,7 +113,14 @@ export function MonitoringView({
         await setMonitorNotify(workspaceId, on);
       }}
       onToggleAuthoritative={(row, on) => void setLdAuthoritative(workspaceId, row.flagKey, row.ldEnv, on)}
-      onSync={(row) => onMigrate(row.kind === 'config' ? { gates: [], configs: [row.uid], autotunes: [] } : row.kind === 'autotune' ? { gates: [], autotunes: [row.uid] } : row.kind === 'flag' ? { gates: [], autotunes: [], flags: [row.uid] } : { gates: [row.uid], autotunes: [] }, [row.ldEnv])}
+      onSync={(row) => {
+        const s = selectionFor([row]);
+        onMigrate(s.selection, s.ldEnvs);
+      }}
+      onSyncAll={(rows) => {
+        const s = selectionFor(rows);
+        onMigrate(s.selection, s.ldEnvs);
+      }}
       exportDecisionLog={{ markdown: () => decisionLogMarkdown(workspace.name, decisionLog(), m.resolutions, m.profile), csv: () => decisionLogCsv(decisionLog()) }}
       demo={demo}
     />
@@ -117,6 +145,8 @@ export interface MonitoringPanelProps {
   onToggleNotify: (on: boolean) => void;
   onToggleAuthoritative: (row: MonitorRow, on: boolean) => void;
   onSync: (row: MonitorRow) => void;
+  /** Plan one re-sync of every row StatSig has changed (`BULK_SYNCABLE`), across their environments. */
+  onSyncAll: (rows: MonitorRow[]) => void;
   exportDecisionLog: { markdown: () => string; csv: () => string };
   demo?: { step: number; steps: number; onAdvance: () => void };
 }
@@ -131,6 +161,8 @@ export function MonitoringPanel(p: MonitoringPanelProps) {
   const counts = useMemo(() => countByStatus(monitored), [monitored]);
   const envs = useMemo(() => [...new Set(p.rows.map((r) => r.ldEnv))].sort(), [p.rows]);
   const attention = monitored.filter((r) => DRIFTED.has(r.status));
+  // The bulk sync follows the environment filter, not the status or text filters: what it plans is what the button says.
+  const syncable = useMemo(() => monitored.filter((r) => BULK_SYNCABLE.has(r.status) && (env === 'all' || r.ldEnv === env)), [monitored, env]);
   const visible = useMemo(() => {
     const needle = q.trim().toLowerCase();
     return monitored.filter((r) => (env === 'all' || r.ldEnv === env) && (status === 'all' || (status === 'attention' ? DRIFTED.has(r.status) : r.status === status)) && (!needle || r.id.toLowerCase().includes(needle) || r.flagKey.toLowerCase().includes(needle)));
@@ -276,9 +308,20 @@ export function MonitoringPanel(p: MonitoringPanelProps) {
             </option>
           ))}
         </Select>
-        <span className="ml-auto text-xs text-fg-muted">
-          {visible.length} of {monitored.length}
-        </span>
+        <div className="ml-auto flex items-center gap-3">
+          <span className="text-xs text-fg-muted">
+            {visible.length} of {monitored.length}
+          </span>
+          <Button
+            variant="secondary"
+            className="py-1 text-xs"
+            disabled={syncable.length === 0}
+            onClick={() => p.onSyncAll(syncable)}
+            title={`Plan one re-sync of every item StatSig has changed${env === 'all' ? ', in every environment' : ` in ${env}`}. Items edited in LaunchDarkly and LaunchDarkly-authoritative items stay per row.`}
+          >
+            Sync all drifted ({syncable.length})
+          </Button>
+        </div>
       </div>
 
       <Card className="overflow-x-auto p-0">
