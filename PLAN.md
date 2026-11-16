@@ -513,6 +513,7 @@ map(canonicalEntity, mappingProfile, resolutions, ldCapabilities, targetEnv)
 5. **Confirm.** Production needs a typed confirmation.
 6. **Execute in the tab**, with live progress, per-item logs, bounded retries and an automatic stop on systemic errors.
    - Every operation is journaled to IndexedDB before and after it runs, so if the tab closes mid-run, the run **resumes when the tab is reopened**. Writes are idempotent, so repeating the last operation is safe.
+   - A resume runs only what no later run has done since (added 2026-11-16, `packages/executor/src/superseded.ts`): a pending step whose resource and environment a later, non-dry run of the workspace finished is skipped as *superseded*, because replaying it would write that day's plan over the newer result and, for a flag the newer run created, claim ownership of it (the create answers 409 after this run started). The Runs screen shows a run with nothing left as **superseded** with a Close action instead of Resume, and labels a partly covered one "Resume N left".
    - A `beforeunload` warning and a Web Locks guard (one running tab per workspace) protect the run, with an optional Screen Wake Lock.
 7. **Results**, with **Undo this run**.
 

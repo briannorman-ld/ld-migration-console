@@ -1,6 +1,6 @@
 import { useLiveQuery } from "dexie-react-hooks";
 import { useRef, useState } from "react";
-import type { RunRecord } from "@sslm/executor";
+import { resumeOutlook, type RunRecord } from "@sslm/executor";
 import type { RunJournalRecord } from "@sslm/store";
 import { LD_INSTANCES } from "@sslm/ld-client";
 import { Badge, Button, Callout, Card, cx } from "../components/ui.tsx";
@@ -88,6 +88,11 @@ export function RunsView({
           interrupted ||
           (run.status === "stopped" &&
             run.steps.some((s) => s.status === "pending"));
+        // What a resume would do now: steps a later run has finished for the same resource and
+        // environment are skipped as superseded, not replayed (see resumeRun). A run with nothing
+        // left is shown as superseded instead of offering to resume it.
+        const outlook = resumable ? resumeOutlook(run, runs) : undefined;
+        const superseded = !!outlook && outlook.outstanding === 0 && outlook.superseded > 0;
         const createdFlags = new Set(
           run.steps
             .filter((s) => s.created && s.step.op === "upsert_flag_shell")
@@ -113,8 +118,11 @@ export function RunsView({
               >
                 {run.label}
               </button>
-              <Badge tone={RUN_TONE[run.status]}>
-                {interrupted ? "interrupted" : run.status}
+              <Badge
+                tone={superseded ? "slate" : RUN_TONE[run.status]}
+                title={superseded ? `Later runs (${outlook.by.map((b) => `#${b.runId.slice(0, 8)}`).join(", ")}) migrated everything this run had left; nothing to resume.` : undefined}
+              >
+                {superseded ? "superseded" : interrupted ? "interrupted" : run.status}
               </Badge>
               {run.dryRun && <Badge tone="violet">dry run</Badge>}
               {awaiting > 0 && (
@@ -141,7 +149,7 @@ export function RunsView({
                     Check approvals
                   </Button>
                 )}
-                {resumable && (
+                {resumable && !superseded && (
                   <Button
                     variant="secondary"
                     className="py-1.5"
@@ -149,8 +157,26 @@ export function RunsView({
                     onClick={() =>
                       void act(() => resumeRun(workspaceId, m.ld, run))
                     }
+                    title={
+                      outlook && outlook.superseded > 0
+                        ? `${outlook.outstanding} step${outlook.outstanding === 1 ? "" : "s"} left to run; ${outlook.superseded} already done by later runs will be skipped`
+                        : undefined
+                    }
                   >
-                    Resume
+                    Resume{outlook && outlook.superseded > 0 ? ` ${outlook.outstanding.toLocaleString()} left` : ""}
+                  </Button>
+                )}
+                {superseded && (
+                  <Button
+                    variant="ghost"
+                    className="py-1.5"
+                    disabled={!m.connected || !!active}
+                    onClick={() =>
+                      void act(() => resumeRun(workspaceId, m.ld, run))
+                    }
+                    title="Mark every remaining step as superseded; nothing is written to LaunchDarkly"
+                  >
+                    Close
                   </Button>
                 )}
                 {!run.dryRun &&
@@ -170,9 +196,21 @@ export function RunsView({
                   )}
               </div>
             </div>
+            {outlook && outlook.superseded > 0 && (
+              <p className="mt-2 text-xs text-fg-muted">
+                {superseded
+                  ? `Later run${outlook.by.length === 1 ? "" : "s"} ${outlook.by.map((b) => `“${b.runLabel}” (#${b.runId.slice(0, 8)})`).join(", ")} migrated everything this run had left (${outlook.superseded.toLocaleString()} step${outlook.superseded === 1 ? "" : "s"}); there is nothing to resume.`
+                  : `${outlook.superseded.toLocaleString()} of the ${(outlook.outstanding + outlook.superseded).toLocaleString()} remaining step${outlook.outstanding + outlook.superseded === 1 ? "" : "s"} ${outlook.superseded === 1 ? "was" : "were"} done by later run${outlook.by.length === 1 ? "" : "s"} (${outlook.by.map((b) => `#${b.runId.slice(0, 8)}`).join(", ")}) and will be skipped; resuming runs the other ${outlook.outstanding.toLocaleString()}.`}
+              </p>
+            )}
             {confirmUndo === run.id && (
               <div className="mt-3">
                 <Callout tone="red">
+                  {outlook && outlook.superseded > 0 && (
+                    <p className="mb-2">
+                      Later runs have written the same flags since; undoing this run restores states from before it, over their work.
+                    </p>
+                  )}
                   Undo deletes the {created} resource{created === 1 ? "" : "s"}{" "}
                   this run created (context kinds are archived, since LaunchDarkly can't
                   delete them)

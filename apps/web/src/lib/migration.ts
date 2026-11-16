@@ -5,7 +5,7 @@
  */
 import { useSyncExternalStore } from "react";
 import { ownValue, type Autotune, type CanonicalSnapshot, type Config, type Gate, type NeutralFlag, type NeutralSegment, type Prompt, type Segment } from "@sslm/canonical";
-import { Executor, newRun, type ResourceChange, type RunRecord } from "@sslm/executor";
+import { applySupersession, Executor, newRun, supersededSteps, type ResourceChange, type RunRecord } from "@sslm/executor";
 import type { CapabilityMatrix, LdFlagSummary } from "@sslm/ld-client";
 import {
   mapAutotune,
@@ -774,6 +774,12 @@ export async function executePlan(
   );
 }
 
+/**
+ * Resume a stopped or interrupted run. Steps a later run of this workspace has since finished
+ * for the same resource and environment are skipped as superseded first (`@sslm/executor`
+ * `supersededSteps`): replaying them would write that day's plan over the newer run's result
+ * and could claim a flag the newer run created. Only what no later run did is executed.
+ */
 export async function resumeRun(
   workspaceId: string,
   ld: LdSession,
@@ -782,11 +788,11 @@ export async function resumeRun(
   const changes: ResourceChange[] = [];
   return finishRun(
     workspaceId,
-    async (signal) =>
-      executor(workspaceId, ld, (run as RunJournalRecord).snapshots, changes).run(
-        await journaled(run),
-        signal,
-      ),
+    async (signal) => {
+      const [fresh, all] = await Promise.all([journaled(run), store.listRuns(workspaceId)]);
+      applySupersession(fresh, supersededSteps(fresh, all), new Date());
+      return executor(workspaceId, ld, (run as RunJournalRecord).snapshots, changes).run(fresh, signal);
+    },
     true,
     changes,
   );
