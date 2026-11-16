@@ -5,7 +5,7 @@
  */
 import { useSyncExternalStore } from "react";
 import { ownValue, type Autotune, type CanonicalSnapshot, type Config, type Gate, type NeutralFlag, type NeutralSegment, type Prompt, type Segment } from "@sslm/canonical";
-import { applySupersession, Executor, newRun, supersededSteps, type ResourceChange, type RunRecord } from "@sslm/executor";
+import { applySupersession, Executor, newRun, supersededSteps, undoHoldMessage, undoHolds, type ResourceChange, type RunRecord } from "@sslm/executor";
 import type { CapabilityMatrix, LdFlagSummary } from "@sslm/ld-client";
 import {
   mapAutotune,
@@ -806,11 +806,13 @@ export async function undoRun(
   const changes: ResourceChange[] = [];
   return finishRun(
     workspaceId,
-    async (signal) =>
-      executor(workspaceId, ld, (run as RunJournalRecord).snapshots, changes).undo(
-        await journaled(run),
-        signal,
-      ),
+    async (signal) => {
+      // Steps a later run has written over since are held (left as they are) until that run is
+      // undone: runs are undone newest first (PLAN §15).
+      const [fresh, all] = await Promise.all([journaled(run), store.listRuns(workspaceId)]);
+      const held = new Map([...undoHolds(fresh, all)].map(([id, h]) => [id, undoHoldMessage(h)]));
+      return executor(workspaceId, ld, (run as RunJournalRecord).snapshots, changes).undo(fresh, signal, held);
+    },
     true,
     changes,
   );

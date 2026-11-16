@@ -461,15 +461,22 @@ export class Executor {
    * Undo a run: restore pre-images and delete what it created, newest first (PLAN §15).
    * Aborting `signal` leaves the remaining steps as they were; the run ends `undo_failed` with a
    * `stopReason` saying it was cancelled, so "Undo…" can be tried again.
+   *
+   * `held` names steps (by id) a later run has written over since (`undoHolds`), with the reason:
+   * they are left as they are, with that reason as their error, and the run ends `undo_failed`
+   * so "Undo…" can be used again once the later run is undone. A flag this run created is never
+   * deleted while any of its steps is held, whatever the other steps do.
    */
-  async undo(run: RunRecord, signal?: AbortSignal): Promise<RunRecord> {
+  async undo(run: RunRecord, signal?: AbortSignal, held: ReadonlyMap<string, string> = new Map()): Promise<RunRecord> {
     if (run.dryRun) throw new Error('A dry run wrote nothing; there is nothing to undo.');
     this.signal = signal;
     run.status = 'undoing';
     delete run.stopReason;
     await this.save(run);
-    const createdFlags = new Set(run.steps.filter((s) => s.step.op === 'upsert_flag_shell' && s.created).map((s) => s.step.key));
+    const heldFlags = new Set(run.steps.filter((s) => held.has(s.id)).map((s) => resourceLane(s.step)));
+    const createdFlags = new Set(run.steps.filter((s) => s.step.op === 'upsert_flag_shell' && s.created && !heldFlags.has(resourceLane(s.step))).map((s) => s.step.key));
     let ok = true;
+    let heldCount = 0;
     for (const rec of [...run.steps].reverse()) {
       if (rec.status !== 'done' && rec.status !== 'pending_approval' && !(rec.status === 'failed' && rec.created)) continue;
       if (signal?.aborted) {
@@ -477,10 +484,19 @@ export class Executor {
         run.stopReason = `Undo cancelled before “${rec.label}”. Steps not yet undone keep their LaunchDarkly changes; use Undo… again to finish.`;
         break;
       }
+      const why = held.get(rec.id);
+      if (why !== undefined) {
+        ok = false;
+        heldCount++;
+        rec.error = why;
+        await this.save(run);
+        continue;
+      }
       try {
         await this.revert(run, rec, createdFlags);
         rec.status = rec.approvals?.some((a) => a.status === 'pending' && a.purpose === 'undo') ? 'pending_approval' : 'undone';
         rec.message = `${rec.status === 'undone' ? 'Undone' : 'Undo requested (approval pending)'}: ${rec.message ?? ''}`.trim();
+        delete rec.error;
       } catch (e) {
         ok = false;
         if (signal?.aborted) {
@@ -493,6 +509,7 @@ export class Executor {
       await this.save(run);
     }
     run.status = ok ? 'undone' : 'undo_failed';
+    if (heldCount > 0 && !run.stopReason) run.stopReason = `${heldCount} step${heldCount === 1 ? ' was' : 's were'} not undone: later runs have written to the same resources since. Undo those runs first, then Undo… again.`;
     run.undoneAt = this.now().toISOString();
     await this.save(run);
     return run;

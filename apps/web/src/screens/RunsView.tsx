@@ -1,6 +1,6 @@
 import { useLiveQuery } from "dexie-react-hooks";
 import { useRef, useState } from "react";
-import { resumeOutlook, type RunRecord } from "@sslm/executor";
+import { resumeOutlook, undoOutlook, type RunRecord } from "@sslm/executor";
 import type { RunJournalRecord } from "@sslm/store";
 import { LD_INSTANCES } from "@sslm/ld-client";
 import { Badge, Button, Callout, Card, cx } from "../components/ui.tsx";
@@ -93,6 +93,17 @@ export function RunsView({
         // left is shown as superseded instead of offering to resume it.
         const outlook = resumable ? resumeOutlook(run, runs) : undefined;
         const superseded = !!outlook && outlook.outstanding === 0 && outlook.superseded > 0;
+        const undoable =
+          !run.dryRun &&
+          (run.status === "done" ||
+            run.status === "failed" ||
+            run.status === "stopped" ||
+            run.status === "undo_failed") &&
+          !interrupted;
+        // What an undo would do now: steps a later run has written over since are held until
+        // that run is undone (runs are undone newest first; see undoRun).
+        const holds = undoable ? undoOutlook(run, runs) : undefined;
+        const allHeld = !!holds && holds.held > 0 && holds.held === holds.undoable;
         const createdFlags = new Set(
           run.steps
             .filter((s) => s.created && s.step.op === "upsert_flag_shell")
@@ -179,21 +190,21 @@ export function RunsView({
                     Close
                   </Button>
                 )}
-                {!run.dryRun &&
-                  (run.status === "done" ||
-                    run.status === "failed" ||
-                    run.status === "stopped" ||
-                    run.status === "undo_failed") &&
-                  !interrupted && (
-                    <Button
-                      variant="danger"
-                      className="py-1.5"
-                      disabled={!m.connected || !!active}
-                      onClick={() => setConfirmUndo(run.id)}
-                    >
-                      Undo…
-                    </Button>
-                  )}
+                {undoable && (
+                  <Button
+                    variant="danger"
+                    className="py-1.5"
+                    disabled={!m.connected || !!active || allHeld}
+                    title={
+                      allHeld
+                        ? `Nothing in this run can be undone until later run${holds.by.length === 1 ? "" : "s"} ${holds.by.map((b) => `#${b.runId.slice(0, 8)}`).join(", ")} ${holds.by.length === 1 ? "is" : "are"} undone: ${holds.by.length === 1 ? "it has" : "they have"} written to everything this run touched.`
+                        : undefined
+                    }
+                    onClick={() => setConfirmUndo(run.id)}
+                  >
+                    Undo…
+                  </Button>
+                )}
               </div>
             </div>
             {outlook && outlook.superseded > 0 && (
@@ -206,9 +217,9 @@ export function RunsView({
             {confirmUndo === run.id && (
               <div className="mt-3">
                 <Callout tone="red">
-                  {outlook && outlook.superseded > 0 && (
+                  {holds && holds.held > 0 && (
                     <p className="mb-2">
-                      Later runs have written the same flags since; undoing this run restores states from before it, over their work.
+                      {`${holds.held.toLocaleString()} of the ${holds.undoable.toLocaleString()} step${holds.undoable === 1 ? "" : "s"} will not be undone: later run${holds.by.length === 1 ? "" : "s"} ${holds.by.map((b) => `“${b.runLabel}” (#${b.runId.slice(0, 8)})`).join(", ")} ${holds.by.length === 1 ? "has" : "have"} written to the same resources since. Undo ${holds.by.length === 1 ? "that run" : "those runs"} first to undo everything; the other ${(holds.undoable - holds.held).toLocaleString()} ${holds.undoable - holds.held === 1 ? "is" : "are"} undone now.`}
                     </p>
                   )}
                   Undo deletes the {created} resource{created === 1 ? "" : "s"}{" "}
