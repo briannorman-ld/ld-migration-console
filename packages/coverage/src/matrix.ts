@@ -7,11 +7,23 @@
  * partial-fidelity note; anything that asks the user something is `decisions`. When a row moves
  * (a `planned` item ships), also update docs/KNOWN-EDGE-CASES.md, which holds the row-level detail.
  */
-import type { CoverageAreaInfo, CoverageEntry } from './types.ts';
+import type { MigrationSourceKind } from '@sslm/canonical';
+import type { CoverageArea, CoverageAreaInfo, CoverageEntry } from './types.ts';
 
 const SS = 'https://docs.statsig.com';
 const LD = 'https://launchdarkly.com/docs';
 const PH = 'https://posthog.com/docs';
+
+/**
+ * The source a coverage area describes. Every area but the two neutral-source ones is written in
+ * StatSig's words (structure, operations and SDK rows included), so the page shows an area only
+ * when a source of its kind is connected.
+ */
+export function areaSource(area: CoverageArea): MigrationSourceKind {
+  if (area === 'ld_source') return 'launchdarkly';
+  if (area === 'posthog') return 'posthog';
+  return 'statsig';
+}
 
 export const AREAS: CoverageAreaInfo[] = [
   {
@@ -800,7 +812,7 @@ export const COVERAGE: CoverageEntry[] = [
     statsig: 'Changes after migration: edited, archived or deleted gates and configs; traffic still hitting StatSig',
     ld: 'Monitoring page: drift from LaunchDarkly provenance, LaunchDarkly flag statuses, cutover funnel, reports',
     status: 'guided',
-    how: 'Read-only. Compares the StatSig fingerprint recorded at sync with the current snapshot and the flag’s LaunchDarkly modification time with the sync; reads LaunchDarkly flag statuses (new / inactive / active / launched) per environment; re-syncs stay manual.',
+    how: 'Read-only. Compares the StatSig fingerprint recorded at sync with the current snapshot and the flag’s LaunchDarkly modification time with the sync; reads LaunchDarkly flag statuses (new / inactive / active / launched) per environment; re-syncs stay manual, one item at a time or every StatSig-changed item in one plan (“Sync all drifted”; items edited in LaunchDarkly and LaunchDarkly-authoritative items stay per item).',
     detail:
       'Statuses: in sync, StatSig changed, decisions changed, LaunchDarkly changed, conflict (both), archived in StatSig (retire the LaunchDarkly flag), gone from StatSig, LaunchDarkly authoritative (a per-item switch that mutes StatSig changes after cutover). Lifecycle per environment: migrated → dual-running (LaunchDarkly traffic seen) → cut over (LaunchDarkly traffic and zero StatSig checks for 7 days, from samples taken while the tab is open) → safe to archive in StatSig. StatSig check counts come from the Console API and cover all environments; per-environment StatSig exposure sampling (the StatSig side of PLAN §14) is not built yet, and spec-only sources show StatSig traffic as unknown. Checks run on connect and every 15 minutes while the tab is open, against the LaunchDarkly flag listing the session holds (a cache the user refreshes with “Refresh now” or the guide’s “Re-read”; a migration re-reads it before writing), reading only the per-environment flag statuses; there is no background polling or email/Slack alerting without a server.',
     edgeCases: ['4.7', '15.20', '15.21'],

@@ -2,12 +2,20 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { ENTITY_KINDS, type NeutralFlag, type NeutralSegment } from '@sslm/canonical';
-import { AREAS, BLOCK_END, BLOCK_START, COVERAGE, coverageFor, guidanceFor, neutralFlagStatus, neutralSegmentStatus, renderCoverageMarkdown, spliceCoverageBlock, summarizeInventory } from '../src/index.ts';
+import { ENTITY_KINDS, MIGRATION_SOURCE_KINDS, type NeutralFlag, type NeutralSegment } from '@sslm/canonical';
+import { AREAS, areaSource, BLOCK_END, BLOCK_START, COVERAGE, coverageFor, guidanceFor, neutralFlagStatus, neutralSegmentStatus, renderCoverageMarkdown, spliceCoverageBlock, summarizeInventory } from '../src/index.ts';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
 describe('coverage matrix', () => {
+  it('assigns every area to one source kind, and every source kind has areas', () => {
+    const bySource = new Map(MIGRATION_SOURCE_KINDS.map((k) => [k, AREAS.filter((a) => areaSource(a.area) === k).length]));
+    expect([...bySource.values()].every((n) => n > 0)).toBe(true);
+    expect([...bySource.values()].reduce((a, b) => a + b, 0)).toBe(AREAS.length);
+    // The neutral-source areas say so in their column header; the StatSig ones use the default.
+    for (const a of AREAS) expect(!!a.sourceLabel).toBe(areaSource(a.area) !== 'statsig');
+  });
+
   it('has unique ids in the <area>.<slug> form, each in a known area', () => {
     const ids = new Set<string>();
     const areas = new Set(AREAS.map((a) => a.area));

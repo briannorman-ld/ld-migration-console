@@ -69,6 +69,34 @@ describe('CoverageView', () => {
     expect(screen.getByText(`${shown} of ${shown} rows`)).toBeTruthy();
   });
 
+  it('shows only the connected source’s areas, and every source on request', () => {
+    setFlagOverride('posthogSource', true);
+    const statsigRows = COVERAGE.filter((e) => e.area !== 'ld_source' && e.area !== 'posthog').length;
+    const { unmount } = render(<CoverageView sources={[source]} snapshots={{}} onOpenResource={vi.fn()} />);
+    expect(screen.getByText(/Every construct of StatSig,/)).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Feature gates' })).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: AREAS.find((a) => a.area === 'ld_source')!.title })).toBeNull();
+    expect(screen.queryByRole('heading', { name: AREAS.find((a) => a.area === 'posthog')!.title })).toBeNull();
+    expect(screen.getByText(`${statsigRows} of ${statsigRows} rows`)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: `Show all sources (${COVERAGE.length - statsigRows} more rows)` }));
+    expect(screen.getByText(`${COVERAGE.length} of ${COVERAGE.length} rows`)).toBeTruthy();
+    expect(screen.getByText(/Every construct of every supported source,/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Only connected sources' }));
+    expect(screen.getByText(`${statsigRows} of ${statsigRows} rows`)).toBeTruthy();
+    unmount();
+
+    // A PostHog source shows its area even while the flag is off for new sources: it is already connected.
+    setFlagOverride('posthogSource', false);
+    const hogSource: SourceRecord = { ...source, id: 's2', alias: 'hog', label: 'acme-hog (PostHog)', kind: 'posthog' };
+    render(<CoverageView sources={[hogSource]} snapshots={{}} onOpenResource={vi.fn()} />);
+    const posthogRows = COVERAGE.filter((e) => e.area === 'posthog').length;
+    expect(screen.getByText(/Every construct of PostHog,/)).toBeTruthy();
+    expect(screen.getByRole('heading', { name: AREAS.find((a) => a.area === 'posthog')!.title })).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'Feature gates' })).toBeNull();
+    expect(screen.getByText(`${posthogRows} of ${posthogRows} rows`)).toBeTruthy();
+    expect(screen.getByRole('columnheader', { name: 'PostHog' })).toBeTruthy();
+  });
+
   it('lists every area of the matrix and filters by status', () => {
     setFlagOverride('posthogSource', true);
     render(<CoverageView sources={[]} snapshots={{}} onOpenResource={vi.fn()} />);

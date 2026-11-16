@@ -1,6 +1,6 @@
 import { Fragment, useMemo, useState } from 'react';
-import type { CanonicalSnapshot, EntityKind } from '@sslm/canonical';
-import { AREAS, COVERAGE, countByStatus, STATUS_DESCRIPTION, STATUS_LABEL, summarizeInventory, type CoverageArea, type CoverageEntry, type CoverageStatus } from '@sslm/coverage';
+import { migrationKindOf, SOURCE_KIND_LABEL, type CanonicalSnapshot, type EntityKind, type MigrationSourceKind } from '@sslm/canonical';
+import { AREAS, areaSource, COVERAGE, countByStatus, STATUS_DESCRIPTION, STATUS_LABEL, summarizeInventory, type CoverageArea, type CoverageEntry, type CoverageStatus } from '@sslm/coverage';
 import type { SourceRecord } from '@sslm/store';
 import { TYPE_LABEL } from '../components/DecisionCard.tsx';
 import { Badge, Button, Callout, Card, cx, Input, PageTitle, Select } from '../components/ui.tsx';
@@ -13,9 +13,11 @@ export { COVERAGE_TONE };
 const ORDER: CoverageStatus[] = ['migrates', 'decisions', 'guided', 'planned', 'none'];
 
 /**
- * "What migrates": the full StatSig → LaunchDarkly coverage matrix (packages/coverage), filtered by
- * status and area, with the workspace's own inventory counted against it. The same matrix
- * generates docs/LIMITATIONS.md, so what a customer reads here is what the doc says.
+ * "What migrates": the coverage matrix (packages/coverage) for the sources this workspace has
+ * connected, filtered by status and area, with the workspace's own inventory counted against it.
+ * A workspace with no source yet sees the whole matrix, and "Show all sources" brings the other
+ * sources' areas back. The same matrix generates docs/LIMITATIONS.md, so what a customer reads
+ * here is what the doc says.
  */
 export function CoverageView({
   sources,
@@ -36,20 +38,34 @@ export function CoverageView({
   const [status, setStatus] = useState<CoverageStatus | 'all'>('all');
   const [area, setArea] = useState<CoverageArea | 'all'>('all');
   const [open, setOpen] = useState<Set<string>>(() => new Set(focus ? [focus] : []));
+  const [allSources, setAllSources] = useState(false);
   const snaps = useMemo(() => sources.map((s) => snapshots[s.id]).filter((s): s is CanonicalSnapshot => !!s), [sources, snapshots]);
   const inventory = useMemo(() => summarizeInventory(snaps), [snaps]);
-  // PLAN §22 ships behind the console's `posthog-source` flag: off, its area is not in the matrix shown.
-  const posthogOn = useFlag('posthogSource');
-  const areas = useMemo(() => AREAS.filter((a) => posthogOn || !isPostHogArea(a.area)), [posthogOn]);
-  const matrix = useMemo(() => COVERAGE.filter((e) => posthogOn || !isPostHogArea(e.area)), [posthogOn]);
+  // The source kinds this workspace reads from (both StatSig kinds are one, both PostHog kinds are one).
+  const connected = useMemo(() => new Set<MigrationSourceKind>(sources.map((s) => migrationKindOf(s.kind))), [sources]);
+  // PLAN §22 ships behind the console's `posthog-source` flag: off, its area is not in the matrix shown,
+  // unless a PostHog source is already connected (it was added while the flag was on).
+  const posthogOn = useFlag('posthogSource') || connected.has('posthog');
+  // Only the connected sources' areas, unless none is connected yet or the user asked for every source.
+  const showArea = useMemo(
+    () => (a: CoverageArea) => (posthogOn || !isPostHogArea(a)) && (allSources || connected.size === 0 || connected.has(areaSource(a))),
+    [posthogOn, allSources, connected],
+  );
+  const areas = useMemo(() => AREAS.filter((a) => showArea(a.area)), [showArea]);
+  const matrix = useMemo(() => COVERAGE.filter((e) => showArea(e.area)), [showArea]);
+  const hiddenRows = COVERAGE.filter((e) => (posthogOn || !isPostHogArea(e.area)) && !matrix.includes(e)).length;
   const counts = countByStatus(matrix);
+  // The area filter follows the areas shown: a source removed from the workspace takes its area filter with it.
+  const areaShown = area !== 'all' && areas.some((a) => a.area === area) ? area : 'all';
+  const sourceNames = [...connected].map((k) => SOURCE_KIND_LABEL[k]).sort();
+  const subject = connected.size === 0 || allSources ? 'every supported source' : sourceNames.join(' and ');
 
   const rows = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    return matrix.filter((e) => (status === 'all' || e.status === status) && (area === 'all' || e.area === area)).filter(
+    return matrix.filter((e) => (status === 'all' || e.status === status) && (areaShown === 'all' || e.area === areaShown)).filter(
       (e) => !needle || [e.statsig, e.ld, e.how, e.detail ?? '', ...(e.decisions ?? [])].some((s) => s.toLowerCase().includes(needle)),
     );
-  }, [q, status, area, matrix]);
+  }, [q, status, areaShown, matrix]);
 
   const toggle = (id: string) =>
     setOpen((prev) => {
@@ -63,7 +79,7 @@ export function CoverageView({
     <div className="max-w-6xl space-y-5">
       <PageTitle eyebrow="Coverage">What migrates</PageTitle>
       <p className="max-w-3xl text-sm text-fg-muted">
-        Every StatSig construct, what it becomes in LaunchDarkly, and how completely this console gets it there. Rows that say <b>Migrates with decisions</b>{' '}
+        Every construct of {subject}, what it becomes in LaunchDarkly, and how completely this console gets it there. Rows that say <b>Migrates with decisions</b>{' '}
         are written automatically once you answer the Decision; rows marked <b>No LaunchDarkly equivalent</b> are the real limitations. The same list is published as{' '}
         <code>docs/LIMITATIONS.md</code>.
       </p>
@@ -150,7 +166,7 @@ export function CoverageView({
 
       <div className="flex flex-wrap items-center gap-2">
         <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search constructs, decisions…" aria-label="Search coverage" className="w-72 py-1" />
-        <Select value={area} onChange={(e) => setArea(e.target.value as CoverageArea | 'all')} aria-label="Area" className="py-1">
+        <Select value={areaShown} onChange={(e) => setArea(e.target.value as CoverageArea | 'all')} aria-label="Area" className="py-1">
           <option value="all">All areas</option>
           {areas.map((a) => (
             <option key={a.area} value={a.area}>
@@ -158,7 +174,17 @@ export function CoverageView({
             </option>
           ))}
         </Select>
-        {(status !== 'all' || area !== 'all' || q) && (
+        {connected.size > 0 && (allSources || hiddenRows > 0) && (
+          <Button
+            variant="ghost"
+            className="py-1 text-xs"
+            onClick={() => setAllSources((v) => !v)}
+            title={allSources ? `Back to the ${sourceNames.join(' and ')} rows this workspace reads from` : `Also show the ${hiddenRows} rows of the sources this workspace does not use`}
+          >
+            {allSources ? 'Only connected sources' : `Show all sources (${hiddenRows} more rows)`}
+          </Button>
+        )}
+        {(status !== 'all' || areaShown !== 'all' || q) && (
           <Button
             variant="ghost"
             className="py-1 text-xs"
