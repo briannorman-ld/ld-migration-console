@@ -26,9 +26,21 @@ import {
 const SOURCE = { sourceId: 'src-hog', sourceKind: 'posthog' as const, alias: 'hog' };
 const TAKEN = '2026-11-12T00:00:00.000Z';
 
+/**
+ * The fixture parsed once: with a thousand cohort members it takes most of a second, and a test
+ * that built it three times timed out on CI. Each call shallow-copies, so a test may replace
+ * top-level fields; nothing here mutates the nested records.
+ */
+let parsed: RawPostHogSnapshot | undefined;
 function rawFixture(over: Partial<RawPostHogSnapshot> = {}): RawPostHogSnapshot {
+  parsed ??= parseFixture();
+  return { ...parsed, ...over };
+}
+
+function parseFixture(): RawPostHogSnapshot {
   const p = acmeHogProject();
-  const person = (id: string) => PhPersonSchema.parse(p.persons.find((x) => String(x.id) === id));
+  const byId = new Map(p.persons.map((x) => [String(x.id), x]));
+  const person = (id: string) => PhPersonSchema.parse(byId.get(id));
   return {
     kind: 'posthog',
     fetchedAt: TAKEN,
@@ -46,7 +58,6 @@ function rawFixture(over: Partial<RawPostHogSnapshot> = {}): RawPostHogSnapshot 
     members: p.members.map((m) => PhMemberSchema.parse(m)),
     schemaIssues: [],
     skipped: [],
-    ...over,
   };
 }
 
