@@ -82,12 +82,26 @@ export interface PostHogClientOptions {
   onSchemaIssue?: (i: PostHogSchemaIssue) => void;
 }
 
+/**
+ * PostHog answered 401 or 403. Checked against us.posthog.com on 2026-11-16: an unknown key of
+ * any shape (a typo, a `phc_` project token, a key from the other region) is a 401 with
+ * "Personal API key found in request Authorization header is invalid."; a known key that lacks
+ * a scope, or is limited to other organizations or projects, is a 403. So only the 403 is about
+ * scopes, and the two messages must not be confused.
+ */
 export class PostHogAuthError extends Error {
   constructor(
     readonly status: number,
     readonly path: string,
+    /** API origin the key was sent to, e.g. `https://us.posthog.com`; named so a wrong-region key is easy to spot. */
+    readonly origin?: string,
   ) {
-    super(status === 401 ? 'PostHog rejected the key (401).' : `PostHog denied access to ${path} (${status}): the key lacks a read scope, or is limited to other projects.`);
+    const host = origin ? origin.replace(/^https?:\/\//, '') : 'PostHog';
+    super(
+      status === 401
+        ? `${host} does not recognise this key (401). It must be a personal API key (phx_…, created under your account settings) made in this region; the project API key (phc_…) does not work here.`
+        : `PostHog denied access to ${path} (${status}): the key lacks a read scope, or is limited to other organizations or projects.`,
+    );
     this.name = 'PostHogAuthError';
   }
 }
@@ -290,7 +304,7 @@ export class PostHogClient {
       const res = await this.transport.request({ method: 'GET', url: `${this.origin}${path}${qs}`, headers: { Authorization: `Bearer ${this.#key}` }, signal });
       return res.body;
     } catch (e) {
-      if (e instanceof HttpError && (e.status === 401 || e.status === 403)) throw new PostHogAuthError(e.status, path);
+      if (e instanceof HttpError && (e.status === 401 || e.status === 403)) throw new PostHogAuthError(e.status, path, this.origin);
       throw e;
     }
   }

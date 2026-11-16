@@ -323,7 +323,7 @@ function abortError(signal: AbortSignal): unknown {
 }
 
 function reason(e: unknown): string {
-  if (e instanceof PostHogAuthError) return `HTTP ${e.status} (missing scope)`;
+  if (e instanceof PostHogAuthError) return e.status === 401 ? 'HTTP 401 (key not recognised)' : `HTTP ${e.status} (missing scope)`;
   if (e instanceof HttpError) return `HTTP ${e.status}`;
   return (e as Error).message;
 }

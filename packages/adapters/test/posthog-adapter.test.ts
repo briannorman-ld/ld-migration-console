@@ -60,6 +60,18 @@ describe('PostHog source adapter (PLAN §22.2)', () => {
     await expect(readPostHogProject(c, ACME_HOG_PROJECT_ID)).rejects.toBeInstanceOf(PostHogReadAuthError);
   });
 
+  it('a 401 says the key is unknown at that host (phx_ vs phc_, region), only a 403 talks about scopes', async () => {
+    // PostHog Cloud (checked 2026-11-16): an unknown key of any shape is a 401; a known key short of a scope is a 403.
+    const { client: c } = client('phc_project-token-pasted-by-mistake');
+    await expect(c.listReadableProjects()).rejects.toThrow(/^demo-posthog\.test does not recognise this key \(401\)\. It must be a personal API key \(phx_…/);
+    await expect(c.listReadableProjects()).rejects.toThrow(/project API key \(phc_…\) does not work here/);
+    await expect(c.listReadableProjects()).rejects.not.toThrow(/scope/);
+    const { client: ok } = client();
+    // Registered after the fixture handlers so it takes precedence.
+    server.use(http.get(`${ORIGIN}/api/projects/${ACME_HOG_PROJECT_ID}/`, () => HttpResponse.json({ type: 'authentication_error', code: 'permission_denied', detail: 'API key missing required scope', attr: null }, { status: 403 })));
+    await expect(ok.getProject(ACME_HOG_PROJECT_ID)).rejects.toThrow(/\(403\): the key lacks a read scope, or is limited to other organizations or projects/);
+  });
+
   it('normalizes into the neutral block with one environment named after the project', async () => {
     const { client: c } = client();
     const snap = normalizePostHogSnapshot(await readPostHogProject(c, ACME_HOG_PROJECT_ID), { source: SOURCE, takenAt: '2026-11-12T00:00:00.000Z' });
