@@ -91,6 +91,11 @@ export function ConnectionsView({
                       </div>
                       <div className="mt-1 flex items-center gap-2 text-xs text-fg-muted">
                         <Badge tone={SOURCE_BADGE[s.kind].tone}>{SOURCE_BADGE[s.kind].label}</Badge>
+                        {(s.kind === 'posthog' || s.kind === 'posthog_payload') && (
+                          <Badge tone="amber" title="The PostHog source was built from PostHog’s API schema and has not been run against a real PostHog project; PostHog work is paused">
+                            Preview, untested live
+                          </Badge>
+                        )}
                         {sn ? <span title={new Date(sn.takenAt).toLocaleString()}>synced {timeAgo(sn.takenAt)}</span> : <span>not synced yet</span>}
                       </div>
                     </div>

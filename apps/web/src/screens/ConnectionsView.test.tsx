@@ -74,6 +74,8 @@ describe('ConnectionsView', () => {
     const onReuploadSource = vi.fn();
     setup({ sources: [source, payload, spec], onReuploadSource });
     expect(screen.queryByLabelText('Upload a new file for acme-web')).toBeNull();
+    // A PostHog source is marked as a preview that has not run against a real project.
+    expect(screen.getByText('Preview, untested live')).toBeTruthy();
     const input = screen.getByLabelText('Upload a new file for posthog-flags (PostHog payload)') as HTMLInputElement;
     expect(screen.getByLabelText('Upload a new file for acme-mobile (spec)')).toBeTruthy();
     const file = new File(['{"flags":[]}'], 'posthog-flags-2.json', { type: 'application/json' });

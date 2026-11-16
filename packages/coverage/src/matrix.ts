@@ -58,7 +58,7 @@ export const AREAS: CoverageAreaInfo[] = [
     title: 'PostHog as the source',
     sourceLabel: 'PostHog',
     summary:
-      'A PostHog project attached as a source (PLAN §22), read through the REST API with a read-only personal key or from an uploaded local-evaluation payload. Condition sets become rules in order, variants become variations, cohorts become segments and group types become context kinds; the rows below are where the PostHog evaluator does something LaunchDarkly has no word for, and what the console asks.',
+      'A PostHog project attached as a source (PLAN §22), read through the REST API with a read-only personal key or from an uploaded local-evaluation payload. Condition sets become rules in order, variants become variations, cohorts become segments and group types become context kinds; the rows below are where the PostHog evaluator does something LaunchDarkly has no word for, and what the console asks. Preview: built from PostHog’s schema and evaluator source and run only against the console’s fixture, never against a real PostHog project; PostHog work is paused (2026-11-16).',
   },
 ];
 

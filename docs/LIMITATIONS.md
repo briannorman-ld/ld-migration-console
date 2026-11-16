@@ -306,7 +306,7 @@ A LaunchDarkly project (same or another account or instance) attached as a sourc
 
 ### PostHog as the source
 
-A PostHog project attached as a source (PLAN §22), read through the REST API with a read-only personal key or from an uploaded local-evaluation payload. Condition sets become rules in order, variants become variations, cohorts become segments and group types become context kinds; the rows below are where the PostHog evaluator does something LaunchDarkly has no word for, and what the console asks.
+A PostHog project attached as a source (PLAN §22), read through the REST API with a read-only personal key or from an uploaded local-evaluation payload. Condition sets become rules in order, variants become variations, cohorts become segments and group types become context kinds; the rows below are where the PostHog evaluator does something LaunchDarkly has no word for, and what the console asks. Preview: built from PostHog’s schema and evaluator source and run only against the console’s fixture, never against a real PostHog project; PostHog work is paused (2026-11-16).
 
 | | PostHog | LaunchDarkly | How the console handles it | Notes |
 |---|---|---|---|---|

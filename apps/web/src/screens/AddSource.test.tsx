@@ -124,6 +124,8 @@ describe('AddSource', () => {
     setFlagOverride('posthogSource', true);
     render(<AddSource workspaceId="w1" onDone={vi.fn()} />);
     fireEvent.click(screen.getByRole('button', { name: 'PostHog project' }));
+    // The tile says the source is untested live; the other tiles do not.
+    expect(screen.getByText(/not yet tested against a real PostHog project/)).toBeTruthy();
     fireEvent.change(screen.getByLabelText(/Personal API key/), { target: { value: 'phx_read_only_key' } });
     fireEvent.click(screen.getByRole('button', { name: 'List projects' }));
     await waitFor(() => expect(listReadableProjects).toHaveBeenCalledTimes(1));
@@ -131,6 +133,7 @@ describe('AddSource', () => {
     // The LaunchDarkly tile starts empty: the PostHog key is gone, nothing is listed, and the
     // list button is disabled, so the key cannot reach LaunchDarkly's API.
     fireEvent.click(screen.getByRole('button', { name: 'LaunchDarkly project' }));
+    expect(screen.queryByText(/not yet tested against a real PostHog project/)).toBeNull();
     expect((screen.getByLabelText(/Access token/) as HTMLInputElement).value).toBe('');
     expect(screen.getByRole('button', { name: 'List projects' })).toHaveProperty('disabled', true);
     expect((screen.getByLabelText('Project to read') as HTMLInputElement).disabled).toBe(true);

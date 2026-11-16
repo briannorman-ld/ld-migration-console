@@ -239,6 +239,10 @@ export function AddSource({ workspaceId, onDone }: { workspaceId: string; onDone
       <Card className="space-y-4 p-5">
         {isPostHog ? (
           <>
+            <Callout tone="amber">
+              <b>Preview, not yet tested against a real PostHog project.</b> This source was built from PostHog’s API schema and evaluator source (PLAN §22) and has only been run against
+              the console’s own fixture. Expect schema mismatches to show up in the Source warnings view, and read every plan before running it. PostHog work is paused for now.
+            </Callout>
             <fieldset className="flex flex-wrap gap-x-4 gap-y-1 text-sm">
               <legend className="sr-only">How to read the PostHog project</legend>
               <label className="flex items-center gap-1.5">
