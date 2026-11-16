@@ -332,7 +332,8 @@ export function AddSource({ workspaceId, onDone }: { workspaceId: string; onDone
                   {phListError && <p className="mt-1.5 text-xs text-error">{phListError}</p>}
                   <p className="mt-1.5 text-xs text-fg-muted">
                     A <b>personal</b> API key (<code>phx_…</code>, created under your account settings, in this region) with only the read scopes{' '}
-                    <code>{POSTHOG_READ_SCOPES.join(', ')}</code>; the project API key (<code>phc_…</code>) is not accepted. It is kept encrypted on this device and sent only to that region’s API; the
+                    <code>{POSTHOG_READ_SCOPES.join(', ')}</code>. The project API key (<code>phc_…</code>) and the project secret key (<code>phs_…</code>) are not accepted here; a
+                    secret key can download the payload for the upload option instead. It is kept encrypted on this device and sent only to that region’s API; the
                     project is only ever read (flags, cohorts, group types and property definitions) and nothing is written to PostHog. A PostHog project has no environments, so
                     this source maps to <b>one LaunchDarkly environment</b>; add one source per PostHog project (dev, staging, prod) and they consolidate here.
                   </p>

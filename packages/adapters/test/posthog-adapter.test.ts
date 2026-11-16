@@ -64,7 +64,7 @@ describe('PostHog source adapter (PLAN §22.2)', () => {
     // PostHog Cloud (checked 2026-11-16): an unknown key of any shape is a 401; a known key short of a scope is a 403.
     const { client: c } = client('phc_project-token-pasted-by-mistake');
     await expect(c.listReadableProjects()).rejects.toThrow(/^demo-posthog\.test does not recognise this key \(401\)\. It must be a personal API key \(phx_…/);
-    await expect(c.listReadableProjects()).rejects.toThrow(/project API key \(phc_…\) does not work here/);
+    await expect(c.listReadableProjects()).rejects.toThrow(/project API key \(phc_…\) and the project secret key \(phs_…\) do not work here/);
     await expect(c.listReadableProjects()).rejects.not.toThrow(/scope/);
     const { client: ok } = client();
     // Registered after the fixture handlers so it takes precedence.

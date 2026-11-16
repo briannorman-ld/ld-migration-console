@@ -1,6 +1,8 @@
 /**
  * PostHog private-API client, read side only (PLAN §22.2). Routes are those of
- * reference/posthog/openapi.yaml.gz; auth is `Authorization: Bearer <personal or project secret key>`.
+ * reference/posthog/openapi.yaml.gz; auth is `Authorization: Bearer <personal API key>`. A project secret key
+ * (`phs_…`) authenticates only remote config and the local-evaluation payload routes (PostHog master,
+ * 2026-11-16), so the REST read needs a personal key; the secret key serves the payload upload path.
  * Reads are lenient-validated (schemas.ts); nothing here ever writes, and the demo mock answers
  * every write method with 405 so a bug that tried would show up in tests.
  *
@@ -76,7 +78,7 @@ export interface PostHogSchemaIssue {
 
 export interface PostHogClientOptions {
   region: PostHogRegionId | { origin: string };
-  /** Personal API key (`phx_…`) or project secret key. Held in memory by this instance only; never logged or persisted. */
+  /** Personal API key (`phx_…`). Held in memory by this instance only; never logged or persisted. */
   key: string;
   transport?: Transport | TransportOptions;
   onSchemaIssue?: (i: PostHogSchemaIssue) => void;
@@ -99,7 +101,7 @@ export class PostHogAuthError extends Error {
     const host = origin ? origin.replace(/^https?:\/\//, '') : 'PostHog';
     super(
       status === 401
-        ? `${host} does not recognise this key (401). It must be a personal API key (phx_…, created under your account settings) made in this region; the project API key (phc_…) does not work here.`
+        ? `${host} does not recognise this key (401). It must be a personal API key (phx_…, created under your account settings) made in this region. The project API key (phc_…) and the project secret key (phs_…) do not work here; a secret key can only download the local-evaluation payload for the upload option.`
         : `PostHog denied access to ${path} (${status}): the key lacks a read scope, or is limited to other organizations or projects.`,
     );
     this.name = 'PostHogAuthError';
