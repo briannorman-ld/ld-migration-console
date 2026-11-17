@@ -21,9 +21,11 @@ import {
   Select,
   Spinner,
 } from "../components/ui.tsx";
+import { formatBytes } from "../lib/bytes.ts";
 import { SOURCE_BADGE, KIND_LABEL } from "../lib/kinds.ts";
 import { store } from "../lib/store.ts";
 import { timeAgo } from "../lib/time.ts";
+import { ExportWorkspaceModal, ImportWorkspaceModal } from "./WorkspaceFile.tsx";
 
 type SnapshotRow = Omit<SnapshotRecord, "canonical">;
 const RETENTION_CHOICES = [3, 5, 10, 25, 50, 100];
@@ -112,15 +114,38 @@ export function SnapshotsView({
     await store.updateWorkspace(workspace.id, { snapshotRetention: n });
     for (const s of sources) await store.pruneSnapshots(workspace.id, s.id, n);
   };
+  const [fileModal, setFileModal] = useState<"export" | "import">();
 
   return (
     <div className="max-w-5xl space-y-4">
-      <PageTitle eyebrow="Workspace">Snapshots</PageTitle>
+      <PageTitle eyebrow="Workspace">Snapshots and backup</PageTitle>
       <p className="max-w-3xl text-sm text-fg-muted">
         Every sync saves an immutable snapshot of the source. Decisions, mapping
         and migration always use the latest one; older snapshots are kept here
         to look back at or compare. Everything is stored in this browser only.
       </p>
+
+      <Card className="flex flex-wrap items-center gap-x-6 gap-y-2 p-3 text-sm">
+        <span className="min-w-0 flex-1">
+          <b>Workspace file</b>{" "}
+          <span className="text-fg-muted">
+            Everything this browser holds for the workspace (sources, snapshots, decisions, mapping, runs), encrypted with a passphrase, never the tokens. Share it with a teammate, move it to another machine, or keep it as a backup; importing merges by timestamp.
+          </span>{" "}
+          <span className="text-fg-subtle">
+            {workspace.lastExportAt ? `Last exported ${timeAgo(workspace.lastExportAt)}.` : "Never exported."}
+          </span>
+        </span>
+        <span className="flex shrink-0 gap-2">
+          <Button variant="secondary" className="py-1 text-xs" onClick={() => setFileModal("import")}>
+            Import into this workspace…
+          </Button>
+          <Button variant="secondary" className="py-1 text-xs" onClick={() => setFileModal("export")}>
+            Export workspace file…
+          </Button>
+        </span>
+      </Card>
+      {fileModal === "export" && <ExportWorkspaceModal workspace={workspace} onClose={() => setFileModal(undefined)} />}
+      {fileModal === "import" && <ImportWorkspaceModal into={workspace} onClose={() => setFileModal(undefined)} onImported={() => setFileModal(undefined)} />}
 
       <Card className="flex flex-wrap items-center gap-x-6 gap-y-2 p-3 text-sm">
         <span>
@@ -501,9 +526,4 @@ function useStorageEstimate(
   return est;
 }
 
-export function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 ** 2) return `${(n / 1024).toFixed(0)} kB`;
-  if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(1)} MB`;
-  return `${(n / 1024 ** 3).toFixed(2)} GB`;
-}
+export { formatBytes };

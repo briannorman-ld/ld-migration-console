@@ -959,8 +959,8 @@ export function decisionLogCsv(items: DecisionInstance[]): string {
   return [header.join(","), ...lines].join("\n") + "\n";
 }
 
-export function download(filename: string, text: string, type: string) {
-  const url = URL.createObjectURL(new Blob([text], { type }));
+export function download(filename: string, data: string | Uint8Array<ArrayBuffer>, type: string) {
+  const url = URL.createObjectURL(new Blob([data], { type }));
   const a = Object.assign(document.createElement("a"), {
     href: url,
     download: filename,

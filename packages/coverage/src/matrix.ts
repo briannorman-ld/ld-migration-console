@@ -807,6 +807,16 @@ export const COVERAGE: CoverageEntry[] = [
     edgeCases: ['1.8'],
   },
   {
+    id: 'operations.workspace_file',
+    area: 'operations',
+    statsig: '(the console’s own state: decisions, mapping profile, snapshots, runs)',
+    ld: 'Workspace file (.sslm): export and import, encrypted with a passphrase',
+    status: 'guided',
+    how: 'Everything the browser holds for a workspace, tokens excepted, exported as one file (Snapshots & backup page, and the “Back up this workspace” prompt after a run). Importing merges: records the file has and the browser lacks are added, a decision or setting both have keeps whichever is newer, snapshots and run history are only ever added; the result is shown before anything is written.',
+    detail:
+      'Encrypted by default (AES-GCM, PBKDF2 key from a passphrase chosen for the file) because snapshots carry override and ID lists; plain JSON is an explicit opt-out. A file opened from the start screen becomes a new workspace here, or merges into the one it was exported from. Removals do not travel: an item set aside and then un-set here comes back from a teammate’s older file. The StatSig project itself is not in the file beyond its snapshots.',
+  },
+  {
     id: 'operations.monitoring',
     area: 'operations',
     statsig: 'Changes after migration: edited, archived or deleted gates and configs; traffic still hitting StatSig',

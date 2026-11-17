@@ -52,6 +52,7 @@ import { loadSelection, saveSelection, toSelection } from "../lib/selection.ts";
 import { loadEnv, saveEnv } from "../lib/envChoice.ts";
 import type { GuideInput } from "../lib/guide.ts";
 import { lazyNamed, ModalFallback, ScreenFallback } from "./lazy.tsx";
+import { ExportWorkspaceModal } from "./WorkspaceFile.tsx";
 
 // Everything below the shell loads on first use (see lazy.tsx). The guide is the landing view,
 // so its fetch starts with the shell instead of on first render.
@@ -164,6 +165,10 @@ export function WorkspaceScreen({
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   // Interrupted-run ids the user dismissed the banner for; a newly interrupted run brings it back.
   const [dismissedInterrupted, setDismissedInterrupted] = useState<Set<string>>(new Set());
+  // "Back up this workspace" (PLAN §3.3): shown once a run has written to LaunchDarkly since the
+  // last export; dismissing it hides it until the next run finishes.
+  const [backupDismissedFor, setBackupDismissedFor] = useState<string>();
+  const [exporting, setExporting] = useState(false);
   const ld = useLdSession(workspaceId);
   const autoSynced = useRef(new Set<string>());
   const [migrate, setMigrate] = useState<{
@@ -343,6 +348,8 @@ export function WorkspaceScreen({
     (d) => d.decision.severity === "blocking",
   ).length;
   const interrupted = (runs ?? []).filter((r) => isInterrupted(r, workspaceId));
+  const lastWrite = (runs ?? []).reduce<string | undefined>((max, r) => (!r.dryRun && r.finishedAt && (!max || r.finishedAt > max) ? r.finishedAt : max), undefined);
+  const backupDue = !!lastWrite && lastWrite > (workspace?.lastExportAt ?? "") && backupDismissedFor !== lastWrite && !activeRun && !migrate;
 
   // Monitoring (PLAN §14): a read-only LD check on connect and every 15 minutes while the tab is
   // open; drift rows come from the same memoized mapping results the explorers use.
@@ -773,7 +780,7 @@ export function WorkspaceScreen({
             active={view.kind === "snapshots"}
             onClick={() => setView({ kind: "snapshots" })}
           >
-            <span>Snapshots</span>
+            <span>Snapshots &amp; backup</span>
             {viewingPast && <Badge tone="amber">past</Badge>}
           </NavItem>
           <p className="mt-6 px-2 text-xs text-fg-subtle">
@@ -852,6 +859,24 @@ export function WorkspaceScreen({
               </Callout>
             </div>
           )}
+          {backupDue && view.kind !== "snapshots" && (
+            <div className="mb-3">
+              <Callout tone="blue">
+                <div className="flex items-center gap-3">
+                  <span className="min-w-0 flex-1">
+                    <b>Back up this workspace.</b> A run has written to LaunchDarkly since the last export. The decisions and run history behind it live only in this browser until you export a workspace file.
+                  </span>
+                  <Button variant="secondary" className="shrink-0 py-1 text-xs" onClick={() => setExporting(true)}>
+                    Export workspace file…
+                  </Button>
+                  <Button variant="ghost" className="shrink-0 py-1 text-xs" title="Hide until the next run finishes" onClick={() => setBackupDismissedFor(lastWrite)}>
+                    Not now
+                  </Button>
+                </div>
+              </Callout>
+            </div>
+          )}
+          {exporting && <ExportWorkspaceModal workspace={workspace} onClose={() => setExporting(false)} />}
           {visible.length === 0 &&
             (view.kind === "resource" ||
               view.kind === "ld-source" ||

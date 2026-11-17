@@ -42,6 +42,8 @@ export interface WorkspaceRecord {
   tokenStorage?: "device" | "memory";
   /** See AccountAccess. Account-level, so once per workspace. */
   accountAccess?: AccountAccess;
+  /** When a workspace file was last exported from this browser (PLAN §3.3); the "Back up this workspace" prompt after a run compares against it. */
+  lastExportAt?: string;
 }
 
 export interface SourceRecord extends SourceDescriptor {

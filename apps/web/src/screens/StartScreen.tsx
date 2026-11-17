@@ -7,6 +7,7 @@ import { isSharedOrigin, SHARED_ORIGIN_NOTE } from '../lib/origin.ts';
 import { ensureDemoWorkspace, startDemoMock } from '../lib/demo.ts';
 import { store } from '../lib/store.ts';
 import { normalizeWorkspaceName, type WorkspaceRecord } from '@sslm/store';
+import { ImportWorkspaceModal } from './WorkspaceFile.tsx';
 
 export function StartScreen({ onOpen }: { onOpen: (workspaceId: string) => void }) {
   const workspaces = useLiveQuery(() => store.listWorkspaces(), []);
@@ -38,6 +39,7 @@ export function StartScreen({ onOpen }: { onOpen: (workspaceId: string) => void 
   const trimmed = name.trim();
   const duplicate = useMemo(() => (workspaces ?? []).find((w) => normalizeWorkspaceName(w.name) === normalizeWorkspaceName(trimmed || 'Untitled workspace')), [workspaces, trimmed]);
   const [createError, setCreateError] = useState<string>();
+  const [importing, setImporting] = useState(false);
   const create = async () => {
     if (duplicate) return;
     setCreateError(undefined);
@@ -123,11 +125,17 @@ export function StartScreen({ onOpen }: { onOpen: (workspaceId: string) => void 
               )}
               {createError && !duplicate && <p className="mt-1.5 text-xs text-error">{createError}</p>}
             </div>
-            <Button className="mt-4" variant="secondary" onClick={create} disabled={!!duplicate}>
-              Create workspace
-            </Button>
+            <div className="mt-4 flex flex-wrap items-center gap-3">
+              <Button variant="secondary" onClick={create} disabled={!!duplicate}>
+                Create workspace
+              </Button>
+              <Button variant="ghost" onClick={() => setImporting(true)} title="Open a workspace file (.sslm) exported from this console, here or on another machine">
+                Import a workspace file…
+              </Button>
+            </div>
           </Card>
         </div>
+        {importing && <ImportWorkspaceModal onClose={() => setImporting(false)} onImported={(id) => { setImporting(false); onOpen(id); }} />}
 
 
         {workspaces && workspaces.length > 0 && (
