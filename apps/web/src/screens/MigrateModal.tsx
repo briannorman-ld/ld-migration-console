@@ -5,6 +5,7 @@ import { LD_INSTANCES } from "@sslm/ld-client";
 import type { DecisionPoint } from "@sslm/mapper";
 import { recommendedResolutions, type ItemStatus, type PlanFlag, type PlanItem } from "@sslm/planner";
 import type { SourceRecord } from "@sslm/store";
+import { BulkProgress } from "../components/BulkProgress.tsx";
 import { DecisionCard, FIDELITY_TONE } from "../components/DecisionCard.tsx";
 import {
   Badge,
@@ -425,10 +426,11 @@ export function MigrateModal({
                       {plan.decisions.length === 1 ? "" : "s"} needed before
                       these items can migrate
                     </h3>
+                    {m.bulk && <BulkProgress bulk={m.bulk} className="ml-auto min-w-56" />}
                     <Button
                       variant="secondary"
-                      className="ml-auto py-1.5"
-                      disabled={!choiceCount}
+                      className={cx("py-1.5", !m.bulk && "ml-auto")}
+                      disabled={!choiceCount || !!m.bulk}
                       onClick={() =>
                         void m.saveResolutions(
                           recommendedResolutions(

@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { emptySnapshot, type CanonicalSnapshot } from '@sslm/canonical';
 import { expectReconnect, reconnectSkipped } from './ld.ts';
 import { store } from './store.ts';
-import { useMigration } from './useMigration.ts';
+import { BULK_SAVE_CHUNK, useMigration } from './useMigration.ts';
 
 const SRC = { sourceId: 's-web', sourceKind: 'console_api' as const, alias: 'web' };
 
@@ -58,5 +58,42 @@ describe('useMigration', () => {
     expect(result.current!.inputs).not.toBe(m1.inputs);
     expect(result.current!.profile.maintainers).toEqual({});
     expect(result.current!.profile.teams).toEqual({});
+  });
+
+  /**
+   * A big save goes in chunks, each its own transaction, with progress in the context: one
+   * transaction looked done at once (live queries show a write before it commits) while a reload
+   * meanwhile lost everything.
+   */
+  it('saves many resolutions in chunks and reports progress until they are all on disk', async () => {
+    const W = `w-${crypto.randomUUID()}`;
+    await store.createWorkspace({ name: W });
+    const snaps = [snapshot()];
+    const { result } = renderHook(() => useMigration(W, snaps));
+    await waitFor(() => expect(result.current).not.toBeNull());
+    expect(result.current!.bulk).toBeUndefined();
+
+    const total = BULK_SAVE_CHUNK * 2 + 200;
+    const rs = Array.from({ length: total }, (_, i) => ({ id: `d${i}`, type: 'case_insensitive_match' as const, optionKey: 'x', scope: 'resource' as const, decidedAt: '2026-11-17T00:00:00Z' }));
+    const seen: number[] = [];
+    const done = result.current!.saveResolutions(rs);
+    await waitFor(() => {
+      const b = result.current!.bulk;
+      if (b) seen.push(b.done);
+      expect(b?.phase).toBe('saved');
+    });
+    await done;
+    expect(result.current!.bulk).toEqual({ phase: 'saved', done: total, total });
+    // Progress moved a chunk at a time, not in one jump.
+    expect(seen.some((n) => n > 0 && n < total)).toBe(true);
+    expect((await store.listResolutions(W)).length).toBe(total);
+    await waitFor(() => expect(result.current!.resolutions.size).toBe(total));
+    // The notice clears on its own.
+    await waitFor(() => expect(result.current!.bulk).toBeUndefined(), { timeout: 5000 });
+
+    // A small save is one write, with no progress state.
+    await result.current!.saveResolutions([{ id: 'small', type: 'case_insensitive_match', optionKey: 'x', scope: 'resource', decidedAt: '2026-11-17T00:00:00Z' }]);
+    expect(result.current!.bulk).toBeUndefined();
+    await waitFor(() => expect(result.current!.resolutions.has('small')).toBe(true));
   });
 });

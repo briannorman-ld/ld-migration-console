@@ -7,6 +7,7 @@ import {
 } from "@sslm/canonical";
 import type { DecisionType, Severity } from "@sslm/mapper";
 import { recommendedResolutions } from "@sslm/planner";
+import { BulkProgress } from "../components/BulkProgress.tsx";
 import {
   DecisionCard,
   SEVERITY_TONE,
@@ -210,11 +211,12 @@ export function DecisionsView({
             </button>
           ))}
         </div>
-        <div className="ml-auto flex gap-2">
+        <div className="ml-auto flex items-center gap-2">
+          {m.bulk && <BulkProgress bulk={m.bulk} />}
           {tab === "open" && (
             <Button
               variant="secondary"
-              disabled={!choiceCount}
+              disabled={!choiceCount || !!m.bulk}
               onClick={() =>
                 void m.saveResolutions(
                   recommendedResolutions(
@@ -273,6 +275,7 @@ export function DecisionsView({
           setTab("open");
         }}
         onPolicy={(t, key) => void m.setPolicy(t, key)}
+        busy={!!m.bulk}
         onRecommended={(t) =>
           void m.saveResolutions(
             recommendedResolutions(
@@ -601,12 +604,15 @@ function SummaryTable({
   selected,
   onSelect,
   onPolicy,
+  busy,
   onRecommended,
 }: {
   rows: TypeSummary[];
   selected: DecisionType | "all";
   onSelect: (type: DecisionType) => void;
   onPolicy: (type: DecisionType, optionKey: string | null) => void;
+  /** A bulk save is in flight: the per-type "Use recommended" buttons wait for it. */
+  busy?: boolean;
   onRecommended: (type: DecisionType) => void;
 }) {
   if (rows.length === 0) return null;
@@ -699,6 +705,7 @@ function SummaryTable({
                       <Button
                         variant="ghost"
                         className="py-1 text-xs"
+                        disabled={busy}
                         onClick={() => onRecommended(r.type)}
                         title="Resolve these with their recommended option, one by one (no policy)"
                       >

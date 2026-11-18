@@ -1,5 +1,5 @@
 import { useLiveQuery } from 'dexie-react-hooks';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CanonicalSnapshot } from '@sslm/canonical';
 import type { ExclusionRecord, IdListRecord } from '@sslm/store';
 import { type DecisionPoint, type DecisionType, type IdLists, type MappingProfile, type Resolution, acceptsOption } from '@sslm/mapper';
@@ -20,6 +20,12 @@ export interface MigrationContext extends MappingInputs {
   connected: boolean;
   ldEnvs: { key: string; name: string; critical: boolean }[];
   resolutionList: Resolution[];
+  /**
+   * The decision save in flight, when it is big enough to take a while (`BULK_SAVE_CHUNK` or
+   * more resolutions): what the views draw a progress bar from and disable their bulk buttons
+   * on. Held as `saved` for a moment after the last chunk lands, then cleared.
+   */
+  bulk?: BulkSave;
   resolve: (decisions: DecisionPoint[], optionKey: string) => Promise<void>;
   saveResolutions: (rs: Resolution[]) => Promise<void>;
   setPolicy: (type: DecisionType, optionKey: string | null) => Promise<void>;
@@ -30,6 +36,25 @@ export interface MigrationContext extends MappingInputs {
   exclude: (uids: string[], reason?: string) => Promise<void>;
   include: (uids: string[]) => Promise<void>;
 }
+
+/** A decision save in progress (or just finished), as the views show it. */
+export interface BulkSave {
+  phase: 'saving' | 'saved';
+  /** Resolutions written so far. */
+  done: number;
+  total: number;
+}
+
+/**
+ * Resolutions per IndexedDB transaction when saving many at once. One transaction for the lot
+ * looked instant (Dexie's live queries show a write before it commits) while the write itself
+ * took seconds on a large project, and a reload meanwhile lost all of it. Written in chunks, each
+ * chunk is durable on its own and the progress bar has something to show; the mapping memo keeps
+ * the per-chunk re-map to the entities whose decisions changed.
+ */
+export const BULK_SAVE_CHUNK = 500;
+/** How long the finished bar stays before it clears. */
+export const BULK_SAVED_NOTICE_MS = 2500;
 
 /** Everything the mapper needs, live from IndexedDB and the LD session. `null` until loaded. */
 export function useMigration(workspaceId: string, snapshots: CanonicalSnapshot[]): MigrationContext | null {
@@ -48,6 +73,46 @@ export function useMigration(workspaceId: string, snapshots: CanonicalSnapshot[]
   const exclusionRecs = useLiveQuery(() => store.listExclusions(workspaceId), [workspaceId]);
   // Time conditions are evaluated against the time the workspace was opened (deterministic per session).
   const [now] = useState(() => new Date().toISOString());
+  const [bulk, setBulk] = useState<BulkSave>();
+  const saveQueue = useRef<Promise<void>>(Promise.resolve());
+  const noticeTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(noticeTimer.current), []);
+  // A reload mid-save aborts the open transaction: warn while one is in flight.
+  useEffect(() => {
+    if (bulk?.phase !== 'saving') return;
+    const warn = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [bulk?.phase]);
+  const saveResolutions = useCallback(
+    (rs: Resolution[]): Promise<void> => {
+      // Saves run one after another: two bulk saves at once would fight over the progress state.
+      const run = saveQueue.current.then(async () => {
+        if (rs.length < BULK_SAVE_CHUNK) {
+          await store.saveResolutions(workspaceId, rs);
+          return;
+        }
+        clearTimeout(noticeTimer.current);
+        setBulk({ phase: 'saving', done: 0, total: rs.length });
+        try {
+          for (let i = 0; i < rs.length; i += BULK_SAVE_CHUNK) {
+            await store.saveResolutions(workspaceId, rs.slice(i, i + BULK_SAVE_CHUNK));
+            setBulk({ phase: 'saving', done: Math.min(rs.length, i + BULK_SAVE_CHUNK), total: rs.length });
+          }
+          setBulk({ phase: 'saved', done: rs.length, total: rs.length });
+          noticeTimer.current = setTimeout(() => setBulk(undefined), BULK_SAVED_NOTICE_MS);
+        } catch (e) {
+          setBulk(undefined);
+          throw e;
+        }
+      });
+      saveQueue.current = run.catch(() => undefined);
+      return run;
+    },
+    [workspaceId],
+  );
 
   // Each mapping input keeps its identity until what it is made of changes: the mapping memo
   // (lib/migration.ts) keys on them, and a new identity with the same content re-maps the whole
@@ -76,8 +141,9 @@ export function useMigration(workspaceId: string, snapshots: CanonicalSnapshot[]
       connected: ld.status === 'connected' && !!ld.matrix,
       ldEnvs,
       resolutionList,
-      resolve: (decisions, optionKey) => store.saveResolutions(workspaceId, resolutionsFor(decisions, optionKey, new Date().toISOString())),
-      saveResolutions: (rs) => store.saveResolutions(workspaceId, rs),
+      ...(bulk ? { bulk } : {}),
+      resolve: (decisions, optionKey) => saveResolutions(resolutionsFor(decisions, optionKey, new Date().toISOString())),
+      saveResolutions,
       setPolicy: async (type, optionKey) => {
         const policies = { ...profile.policies };
         if (optionKey) policies[type] = optionKey;
@@ -90,7 +156,7 @@ export function useMigration(workspaceId: string, snapshots: CanonicalSnapshot[]
       exclude: (uids, reason) => store.setExclusions(workspaceId, uids.map((uid) => (reason ? { uid, reason } : { uid }))),
       include: (uids) => store.deleteExclusions(workspaceId, uids),
     };
-  }, [profile, resolutionList, resolutions, exclusions, idLists, coverage, inputs, ld, ldEnvs, workspaceId]);
+  }, [profile, resolutionList, resolutions, exclusions, idLists, coverage, inputs, ld, ldEnvs, workspaceId, bulk, saveResolutions]);
 }
 
 /**
