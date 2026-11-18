@@ -9,7 +9,9 @@
  * Reads are recorded as paths from the profile root. A primitive read keeps the value seen; a read
  * that found an object keeps that fact (the object's own fields are recorded as they are read in
  * turn); an enumeration (`Object.keys`, `Object.values`, spread) keeps the subtree as JSON, since
- * any key added or removed there changes what the mapper saw.
+ * any key added or removed there changes what the mapper saw. A key probe (`in`, `Object.hasOwn`,
+ * which `ownValue` makes before every data-keyed lookup) is a read of that entry too: an absent
+ * policy that is added later must invalidate the mapping that asked for it.
  */
 
 export type ProfileRead = { path: string[]; kind: 'value'; value: unknown } | { path: string[]; kind: 'object' } | { path: string[]; kind: 'json'; json: string };
@@ -44,6 +46,10 @@ export function trackReads<T extends object>(root: T): { value: T; reads: () => 
       has(t, prop) {
         if (typeof prop === 'string') note([...path, prop], (t as Record<string, unknown>)[prop]);
         return Reflect.has(t, prop);
+      },
+      getOwnPropertyDescriptor(t, prop) {
+        if (typeof prop === 'string') note([...path, prop], (t as Record<string, unknown>)[prop]);
+        return Reflect.getOwnPropertyDescriptor(t, prop);
       },
       ownKeys(t) {
         record({ path, kind: 'json', json: JSON.stringify(t) });

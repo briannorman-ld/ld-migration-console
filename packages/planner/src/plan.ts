@@ -4,7 +4,7 @@
  * metrics, randomization units), collision checks against what's already in LD, and an ordered
  * list of idempotent steps. Pure: LD state is an input.
  */
-import { hasMigratedTag, hasSourceTag, migrationKindOf, PROP, readFlagProvenance, readSync, stableStringify, syncedEnvsOf, syncPropertyKey, type Autotune, type CanonicalSnapshot, type Config, type Gate, type MigrationSourceKind, type NeutralFlag, type Prompt } from '@sslm/canonical';
+import { hasMigratedTag, hasSourceTag, migrationKindOf, ownValue, PROP, readFlagProvenance, readSync, stableStringify, syncedEnvsOf, syncPropertyKey, type Autotune, type CanonicalSnapshot, type Config, type Gate, type MigrationSourceKind, type NeutralFlag, type Prompt } from '@sslm/canonical';
 import { gateById, neutralFlagByKey, neutralSegmentByKey, segmentById } from '@sslm/mapper';
 import { ldChange, type LdFlagEnvInfo } from './drift.ts';
 import {
@@ -314,7 +314,7 @@ export function planMigration(req: PlanRequest): Plan {
    * none of the plan's environments still reports an error on its items, as before.
    */
   const plannedElsewhere = (snapshot: CanonicalSnapshot, ldEnv: string): boolean => {
-    const mapping = req.profile.sources[snapshot.source.sourceId]?.envMapping ?? {};
+    const mapping = ownValue(req.profile.sources, snapshot.source.sourceId)?.envMapping ?? {};
     const to = new Set(Object.values(mapping).filter((v): v is string => !!v));
     return !to.has(ldEnv) && req.ldEnvs.some((e) => e !== ldEnv && to.has(e));
   };
@@ -441,7 +441,7 @@ export function planMigration(req: PlanRequest): Plan {
   };
 
   const envFor = (sourceId: string, ldEnv: string): string | null => {
-    const mapping = req.profile.sources[sourceId]?.envMapping ?? {};
+    const mapping = ownValue(req.profile.sources, sourceId)?.envMapping ?? {};
     const matches = Object.entries(mapping).filter(([, v]) => v === ldEnv).map(([k]) => k);
     if (matches.length > 1) {
       errors.push(`StatSig environments ${matches.join(' and ')} of one source both map to LaunchDarkly “${ldEnv}”. Map at most one per source.`);

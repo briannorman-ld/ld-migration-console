@@ -1,4 +1,4 @@
-import { readSync, syncedEnvsOf } from '@sslm/canonical';
+import { ownValue, readSync, syncedEnvsOf } from '@sslm/canonical';
 import { flagOwner, ldChange, migrationStatus } from '@sslm/planner';
 
 // The detector moved to the planner (which asks before writing over an LD edit); re-exported for monitoring's callers.
@@ -72,7 +72,7 @@ export function monitorRows(input: MonitorInput): MonitorRow[] {
     let evidence: string | undefined;
     const statsigChanged = base.status === 'statsig_changed' || base.status === 'decisions_changed';
     if (MONITORED.has(base.status) && flag) {
-      const change = ldChange(flag.environments?.[item.ldEnv], base.syncedAt, input.ldVersionsAtSync?.[k]);
+      const change = ldChange(ownValue(flag.environments, item.ldEnv), base.syncedAt, ownValue(input.ldVersionsAtSync, k));
       ldChanged = change.changed;
       evidence = change.evidence;
       if (item.archived) status = 'archived_in_statsig';
@@ -80,10 +80,11 @@ export function monitorRows(input: MonitorInput): MonitorRow[] {
       else if (ldChanged && statsigChanged) status = 'conflict';
       else if (ldChanged) status = 'ld_changed';
     }
-    const traffic = trafficOf(input.statuses[item.ldEnv]?.[item.flagKey]);
-    const lastRequested = input.statuses[item.ldEnv]?.[item.flagKey]?.lastRequested ?? undefined;
+    const ldStatus = ownValue(ownValue(input.statuses, item.ldEnv), item.flagKey);
+    const traffic = trafficOf(ldStatus);
+    const lastRequested = ldStatus?.lastRequested ?? undefined;
     const zeroSince = statsigZeroSince(samplesByKey.get(k) ?? []);
-    const ldOn = flag?.environments?.[item.ldEnv]?.on ?? undefined;
+    const ldOn = ownValue(flag?.environments, item.ldEnv)?.on ?? undefined;
     rows.push({
       ...item,
       status,
@@ -110,7 +111,7 @@ export function monitorRows(input: MonitorInput): MonitorRow[] {
       const sync = readSync(flag.customProperties, ldEnv)!;
       const k = itemKey(flag.key, ldEnv);
       const authoritative = settings.get(k)?.ldAuthoritative ?? false;
-      const traffic = trafficOf(input.statuses[ldEnv]?.[flag.key]);
+      const traffic = trafficOf(ownValue(ownValue(input.statuses, ldEnv), flag.key));
       const syncedAt = sync[2] ?? undefined;
       rows.push({
         kind,

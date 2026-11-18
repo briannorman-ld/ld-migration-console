@@ -117,7 +117,7 @@ export function kindFromChoice(choice: string, proposed: string): string {
  * (customIDs lookup), so an exact match wins and a case-insensitive one is accepted.
  */
 export function configuredValue(profile: MappingProfile, sourceId: string, unitType: string): string | undefined {
-  const sp = profile.sources[sourceId];
+  const sp = ownValue(profile.sources, sourceId);
   const exact = ownValue(sp?.unitTypeKinds, unitType);
   if (exact) return exact;
   const ci = sp && Object.entries(sp.unitTypeKinds).find(([k]) => k.toLowerCase() === unitType.toLowerCase());

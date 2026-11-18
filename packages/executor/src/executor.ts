@@ -13,7 +13,7 @@
  * scheduled changes carrying the full targeting of that moment; ID lists above 15,000 become big
  * segments filled by a CSV import. The first write a plan refuses updates the capability matrix.
  */
-import { footer as provenanceFooter, parseFooter as parseProvenanceFooter, PROP, readSync, SOURCE_KIND_LABEL, stableStringify, withFooter as withProvenanceFooter, type FooterInput, CONSOLE_CREATED_MARKER } from '@sslm/canonical';
+import { footer as provenanceFooter, ownValue, parseFooter as parseProvenanceFooter, PROP, readSync, SOURCE_KIND_LABEL, stableStringify, withFooter as withProvenanceFooter, type FooterInput, CONSOLE_CREATED_MARKER } from '@sslm/canonical';
 import { LdAuthError, LdSchemaError, LdWriteError, type JsonPatchOp, type LdAiConfig, type LdClient, type LdExperiment, type LdExperimentationSettings, type LdFlag, type LdFlagConfig, type LdMetric, type LdSegment, type SemanticPatch } from '@sslm/ld-client';
 import { flagOwner, ownsSegment, syncPropertyKey, type PlanStep, ldChange } from '@sslm/planner';
 import { FLAG_SIZE_BUDGET, FLAG_SIZE_LIMIT, SOURCE_KIND, type DesiredBandit, type DesiredFlagEnv, type DesiredRule, type DesiredSegment, type VariationOrRollout } from '@sslm/mapper';
@@ -766,7 +766,7 @@ export class Executor {
       if (run.dryRun) return `Would create bandit “${s.key}” in ${s.ldEnv}: ${banditSummary(d)}.`;
       throw new Error(`Flag “${s.flagKey}” doesn't exist (its settings step didn't run).`);
     }
-    const env = flag.environments?.[s.ldEnv];
+    const env = ownValue(flag.environments, s.ldEnv);
     const iteration = banditIteration(d, flag, env?.version ?? 0);
     let current = this.mustRead(rec, s) ? await this.c.getExperiment(this.p, s.ldEnv, s.key, this.signal) : null;
     if (current && !rec.created && rec.preImage === undefined) {
@@ -1071,7 +1071,7 @@ export class Executor {
     // written again: a plan of hundreds of migrated flags would otherwise spend two writes per
     // flag and environment on LaunchDarkly's rate limit for nothing. The provenance is still
     // recorded when it lags (the decisions changed to the same result, or it was never written).
-    const current = flag.environments?.[s.ldEnv];
+    const current = ownValue(flag.environments, s.ldEnv);
     if (current && !scheduled.length && !previous.length && this.targetingMatches(flag, current, instructions)) {
       const recorded = !!sync && sync[0] === s.provenance.statsigFingerprint && sync[3] === s.provenance.decisionSetHash;
       if (recorded) return `Targeting in ${s.ldEnv} already in sync; nothing written.`;
@@ -1214,7 +1214,7 @@ export class Executor {
       { kind: 'replaceRules', rules: state.rules.map((r) => rule(r, ids)) },
       { kind: 'replaceTargets', targets: state.targets.map((t) => ({ contextKind: t.contextKind, variationId: ids(t.variation), values: t.values })) },
     ];
-    const prev = flag.environments?.[ldEnv]?.prerequisites ?? [];
+    const prev = ownValue(flag.environments, ldEnv)?.prerequisites ?? [];
     if (state.prerequisites.length || prev.length) {
       const prerequisites = [];
       for (const p of state.prerequisites) {
@@ -1338,7 +1338,7 @@ export class Executor {
         // and flags before the segments they use (LD refuses both the other way round).
         if (createdFlags.has(s.key)) return this.deleteCreatedFlag(s.key, createdFlags);
         const pre = rec.preImage as LdFlag | undefined;
-        const env = pre?.environments?.[s.ldEnv];
+        const env = ownValue(pre?.environments, s.ldEnv);
         if (!pre || !env) return;
         // Targeting that never got applied (approval still pending) has nothing to restore.
         if (rec.status === 'pending_approval') return;

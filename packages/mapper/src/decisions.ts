@@ -1,4 +1,4 @@
-import { fingerprint } from '@sslm/canonical';
+import { fingerprint, ownValue } from '@sslm/canonical';
 import { attributeTarget, isValidContextKindKey, unitFromChoice } from './profile.ts';
 import type { AppliedDecision, DecisionOption, DecisionPoint, DecisionSubject, DecisionType, MappingProfile, Resolution, Severity, StaleDecision } from './types.ts';
 
@@ -55,7 +55,7 @@ export function lookupResolution(dp: DecisionPoint, resolutions: ReadonlyMap<str
     if (r.fingerprint === dp.fingerprint && acceptsOption(dp, r.optionKey)) return { status: 'resolved', optionKey: r.optionKey, via: 'resource' };
     stale = r;
   }
-  const policy = profile.policies[dp.type];
+  const policy = ownValue(profile.policies, dp.type);
   if (policy && acceptsOption(dp, policy)) return { status: 'resolved', optionKey: policy, via: 'policy' };
   return stale ? { status: 'unresolved', stale } : { status: 'unresolved' };
 }

@@ -17,7 +17,7 @@
  * model here is pure: it tallies what each step still needs from the mapping results and LD
  * state, and the view renders it. Nothing is written.
  */
-import { migrationKindOf, parseFooter, SOURCE_KIND_LABEL, type Alert, type CanonicalSnapshot, type EntityKind } from '@sslm/canonical';
+import { migrationKindOf, ownValue, parseFooter, SOURCE_KIND_LABEL, type Alert, type CanonicalSnapshot, type EntityKind } from '@sslm/canonical';
 import { defaultKindFor, kindFor, teamKeyForName, type DecisionPoint } from '@sslm/mapper';
 import { migrationStatus, ownsSegment } from '@sslm/planner';
 import type { AccountAccess, SourceRecord } from '@sslm/store';
@@ -387,7 +387,7 @@ export function computeGuide(input: GuideInput): GuideModel {
       }
       for (const alert of snapshot.alerts ?? []) alerts.push({ alias: snapshot.source.alias, alert });
       const target = { statsig: env, ld: ldEnv };
-      const ldSegments = m.ld.segments?.[ldEnv];
+      const ldSegments = ownValue(m.ld.segments, ldEnv);
       if (!ldSegments) segments.ldUnknown = true;
       for (const seg of snapshot.segments) {
         if (seg.archived) continue;
