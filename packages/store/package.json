@@ -9,11 +9,11 @@
   },
   "dependencies": {
     "@sslm/canonical": "workspace:*",
-    "dexie": "^4.4.6",
+    "dexie": "^4.4.7",
     "@sslm/mapper": "workspace:*",
     "@sslm/executor": "workspace:*"
   },
   "devDependencies": {
-    "fake-indexeddb": "^6.2.5"
+    "fake-indexeddb": "^6.2.8"
   }
 }
