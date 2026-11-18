@@ -12,3 +12,17 @@ export function isSharedOrigin(hostname: string = globalThis.location?.hostname 
 
 export const SHARED_ORIGIN_NOTE =
   'This copy of the app is served from a GitHub Pages origin that other sites share. Tokens are therefore kept in memory only (entered again after a reload) instead of encrypted on this device. For day-to-day use, run the app from an origin of its own.';
+
+/**
+ * Whether the page is inside someone else's frame. Vercel sends `frame-ancestors 'none'` as a
+ * header, but GitHub Pages cannot send headers and browsers ignore frame-ancestors in a <meta>
+ * CSP, so the app checks for itself before rendering (main.tsx). A cross-origin parent makes
+ * `window.top` throw, which is also an answer: framed.
+ */
+export function isFramed(win: { readonly top: unknown; readonly self: unknown } = window): boolean {
+  try {
+    return win.top !== win.self;
+  } catch {
+    return true;
+  }
+}

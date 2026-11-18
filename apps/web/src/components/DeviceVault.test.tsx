@@ -1,16 +1,26 @@
 import 'fake-indexeddb/auto';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WorkspaceRecord } from '@sslm/store';
 import { rememberOnDevice, resetSecretsForTests, secrets } from '../lib/secrets.ts';
 import { store } from '../lib/store.ts';
 import { RememberKeysCard, UnlockKeysBar } from './DeviceVault.tsx';
 
+/** jsdom's hostname is fixed: the origin check is swapped for a switch the tests flip. */
+const origin = vi.hoisted(() => ({ shared: false }));
+vi.mock('../lib/origin.ts', async (orig) => ({
+  ...(await orig<typeof import('../lib/origin.ts')>()),
+  isSharedOrigin: () => origin.shared,
+}));
+
 const workspace = (id: string, over: Partial<WorkspaceRecord> = {}): WorkspaceRecord => ({ id, name: 'Contoso', createdAt: '2026-10-25T10:00:00Z', updatedAt: '2026-10-25T10:00:00Z', isDemo: false, ld: { instance: 'us', projectKey: 'p' }, ...over });
 const flush = () => new Promise((r) => setTimeout(r, 60));
 
 describe('device vault UI', () => {
-  beforeEach(resetSecretsForTests);
+  beforeEach(() => {
+    resetSecretsForTests();
+    origin.shared = false;
+  });
   afterEach(cleanup);
 
   it('restores a device vault on open without asking anything', async () => {
@@ -80,5 +90,18 @@ describe('device vault UI', () => {
     await waitFor(async () => expect((await store.getVault(id))?.device).toBeInstanceOf(CryptoKey));
     rerender(<RememberKeysCard workspaceId={id} workspace={workspace(id, { tokenStorage: 'device' })} />);
     await screen.findByText(/kept on this device and restored/);
+  });
+
+  it('card: on a shared GitHub Pages origin the device vault is not offered; a passphrase still is', async () => {
+    origin.shared = true;
+    const id = `w-${crypto.randomUUID()}`;
+    await store.createWorkspace({ id, name: `Contoso ${id}`, tokenStorage: 'memory' });
+    secrets.set('ld', id, 'api-ld-token');
+    render(<RememberKeysCard workspaceId={id} workspace={workspace(id, { tokenStorage: 'memory' })} />);
+    await screen.findByText(/kept in memory only/);
+    expect(screen.getByText(/GitHub Pages origin that other sites share/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Keep on this device' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Protect with this passphrase' })).toBeTruthy();
+    expect(await store.getVault(id)).toBeUndefined();
   });
 });

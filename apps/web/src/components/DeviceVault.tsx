@@ -213,9 +213,12 @@ export function RememberKeysCard({ workspaceId, workspace }: { workspaceId: stri
             Keys are kept in memory only: closing the tab forgets them.{inMemory.length ? ` Holding ${inMemory.join(' and ')}.` : ''}
             {isSharedOrigin() ? ` ${SHARED_ORIGIN_NOTE}` : ''}
           </Callout>
-          <Button variant="secondary" className="py-1 text-xs" disabled={busy} onClick={() => void run(async () => (await keepOnDevice(workspaceId), 'Keys are kept on this device again.'))}>
-            Keep on this device
-          </Button>
+          {/* On a shared origin any other site published there can open this app's database, device key included: the device vault is not offered there (a passphrase vault still is; its key is not stored). */}
+          {!isSharedOrigin() && (
+            <Button variant="secondary" className="py-1 text-xs" disabled={busy} onClick={() => void run(async () => (await keepOnDevice(workspaceId), 'Keys are kept on this device again.'))}>
+              Keep on this device
+            </Button>
+          )}
           {passphraseForm}
         </>
       )}
