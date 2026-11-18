@@ -128,6 +128,12 @@ export interface ResolutionRecord extends Resolution {
 export interface RunJournalRecord extends RunRecord {
   /** The snapshots the run was planned from. Those snapshots are never pruned while the run exists. */
   snapshots?: { sourceId: string; takenAt: string }[];
+  /**
+   * Set when the record came from a workspace file (workspaceFile.ts). Such a run is history,
+   * not this browser's record of what it wrote: the app lists it but never resumes or undoes it,
+   * since its steps and pre-images are whatever the file said they were.
+   */
+  importedAt?: string;
 }
 
 /**
@@ -142,6 +148,8 @@ export interface RunPreImageRecord {
   runId: string;
   stepId: string;
   preImage: unknown;
+  /** Set when the record came from a workspace file: `getRun` leaves it out, so undo never restores it (see RunJournalRecord.importedAt). */
+  importedAt?: string;
 }
 
 /**

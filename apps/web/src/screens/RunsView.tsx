@@ -7,6 +7,8 @@ import { Badge, Button, Callout, Card, cx } from "../components/ui.tsx";
 import {
   checkRunApprovals,
   cancelRun,
+  IMPORTED_RUN_NOTE,
+  isImportedRun,
   isInterrupted,
   pendingApprovals,
   resumeRun,
@@ -81,19 +83,24 @@ export function RunsView({
       )}
       {runs.map((stored) => {
         const run = active?.id === stored.id ? active : stored;
+        // A run from a workspace file is history only: nothing here resumes, undoes or checks it
+        // (migration.ts refuses too). Its steps are whatever the file said they were.
+        const imported = isImportedRun(stored);
         const interrupted = isInterrupted(run, workspaceId);
         const awaiting = pendingApprovals(run);
         // A stopped run (cancelled, 401, 429, offline) picks up where it left off, like an interrupted one.
         const resumable =
-          interrupted ||
-          (run.status === "stopped" &&
-            run.steps.some((s) => s.status === "pending"));
+          !imported &&
+          (interrupted ||
+            (run.status === "stopped" &&
+              run.steps.some((s) => s.status === "pending")));
         // What a resume would do now: steps a later run has finished for the same resource and
         // environment are skipped as superseded, not replayed (see resumeRun). A run with nothing
         // left is shown as superseded instead of offering to resume it.
         const outlook = resumable ? resumeOutlook(run, runs) : undefined;
         const superseded = !!outlook && outlook.outstanding === 0 && outlook.superseded > 0;
         const undoable =
+          !imported &&
           !run.dryRun &&
           (run.status === "done" ||
             run.status === "failed" ||
@@ -136,6 +143,11 @@ export function RunsView({
                 {superseded ? "superseded" : interrupted ? "interrupted" : run.status}
               </Badge>
               {run.dryRun && <Badge tone="violet">dry run</Badge>}
+              {imported && (
+                <Badge tone="slate" title={IMPORTED_RUN_NOTE}>
+                  imported
+                </Badge>
+              )}
               {awaiting > 0 && (
                 <Badge tone="violet" title="Writes filed as LaunchDarkly approval requests; provenance is recorded once a reviewer applies them">
                   {awaiting} pending approval
@@ -146,7 +158,7 @@ export function RunsView({
                 {run.steps.length} operations
               </span>
               <div className="ml-auto flex gap-2">
-                {awaiting > 0 && !interrupted && (
+                {awaiting > 0 && !interrupted && !imported && (
                   <Button
                     variant="secondary"
                     className="py-1.5"
@@ -207,6 +219,11 @@ export function RunsView({
                 )}
               </div>
             </div>
+            {imported && (
+              <p className="mt-2 text-xs text-fg-muted">
+                Imported from a workspace file {timeAgo(stored.importedAt!)}: shown as history only. Imported runs can’t be resumed or undone here.
+              </p>
+            )}
             {outlook && outlook.superseded > 0 && (
               <p className="mt-2 text-xs text-fg-muted">
                 {superseded
@@ -251,6 +268,7 @@ export function RunsView({
               </div>
             )}
             {!m.connected &&
+              !imported &&
               !run.dryRun &&
               (interrupted || run.status !== "undone") && (
                 <p className="mt-2 text-xs text-fg-muted">

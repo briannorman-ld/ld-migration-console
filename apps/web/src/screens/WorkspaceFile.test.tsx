@@ -2,7 +2,7 @@ import 'fake-indexeddb/auto';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { emptySnapshot } from '@sslm/canonical';
-import { encodeWorkspaceFile, exportWorkspaceBundle } from '@sslm/store';
+import { encodeWorkspaceFile, exportWorkspaceBundle, MIN_FILE_ITERATIONS } from '@sslm/store';
 import { store } from '../lib/store.ts';
 import { ExportWorkspaceModal, ImportWorkspaceModal, workspaceFileName } from './WorkspaceFile.tsx';
 
@@ -72,7 +72,7 @@ describe('workspace file', () => {
     const ws = await seedWorkspace('Teammate’s copy');
     const bundle = await exportWorkspaceBundle(store, ws.id);
     await store.deleteWorkspace(ws.id);
-    const bytes = await encodeWorkspaceFile(bundle, { passphrase: 'open sesame', iterations: 1_000 });
+    const bytes = await encodeWorkspaceFile(bundle, { passphrase: 'open sesame', iterations: MIN_FILE_ITERATIONS });
 
     const onImported = vi.fn();
     render(<ImportWorkspaceModal onClose={vi.fn()} onImported={onImported} />);
@@ -112,6 +112,8 @@ describe('workspace file', () => {
     const decisions = screen.getByText('Decisions').closest('tr')!;
     const cells = [...decisions.querySelectorAll('td')].map((c) => c.textContent);
     expect(cells).toEqual(['Decisions', '1', '1', '—']);
+    // The replaced decision is named, not only counted.
+    expect(screen.getByText('Replaced by the file’s newer copies').parentElement?.textContent).toContain('Decisions (1): d1.');
     const snaps = [...screen.getByText('Snapshots').closest('tr')!.querySelectorAll('td')].map((c) => c.textContent);
     expect(snaps).toEqual(['Snapshots', '—', '—', '1']);
     fireEvent.click(screen.getByRole('button', { name: 'Import 2 records' }));

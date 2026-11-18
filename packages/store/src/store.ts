@@ -506,11 +506,15 @@ export class WorkspaceStore {
     for (const p of parts) this.journaledPreImages.add(p.preImage as object);
   }
 
-  /** The run with its pre-images in place (undo, resume, approval checks). */
+  /**
+   * The run with its pre-images in place (undo, resume, approval checks). Pre-images that came
+   * from a workspace file (`importedAt`) are left out: undo restores LaunchDarkly from them, and
+   * a file is not this browser's record of what LaunchDarkly held.
+   */
   async getRun(id: string): Promise<RunJournalRecord | undefined> {
     const run = await this.db.runs.get(id);
     if (!run) return undefined;
-    const parts = await this.db.runPreImages.where("runId").equals(id).toArray();
+    const parts = (await this.db.runPreImages.where("runId").equals(id).toArray()).filter((p) => p.importedAt === undefined);
     if (!parts.length) return run;
     const byStep = new Map(parts.map((p) => [p.stepId, p.preImage]));
     for (const p of parts) this.journaledPreImages.add(p.preImage as object);

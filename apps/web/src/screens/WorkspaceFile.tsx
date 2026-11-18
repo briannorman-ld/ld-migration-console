@@ -23,6 +23,7 @@ import {
   WorkspaceFilePassphraseRequired,
   WrongPassphraseError,
   type WorkspaceBundle,
+  type WorkspaceBundleTable,
   type WorkspaceFileHeader,
   type WorkspaceImportPlan,
   type WorkspaceRecord,
@@ -271,6 +272,7 @@ function PlanView({ plan, bundle, into, onBack, onApply }: { plan: WorkspaceImpo
   const total = importPlanSize(plan);
   const rows = WORKSPACE_BUNDLE_TABLES.filter((t) => bundle.tables[t].length > 0);
   const conflicts = rows.reduce((n, t) => n + plan.counts[t].conflict, 0);
+  const replaced = rows.filter((t) => plan.counts[t].replace > 0);
   return (
     <>
       <p className="text-fg-muted">
@@ -322,6 +324,16 @@ function PlanView({ plan, bundle, into, onBack, onApply }: { plan: WorkspaceImpo
           })}
         </tbody>
       </table>
+      {replaced.length > 0 && (
+        <Callout tone="amber">
+          <p className="font-medium">Replaced by the file’s newer copies</p>
+          <ul className="mt-1 list-disc space-y-0.5 pl-4">
+            {replaced.map((t) => (
+              <li key={t}>{describeReplaced(t, plan, bundle)}</li>
+            ))}
+          </ul>
+        </Callout>
+      )}
       {conflicts > 0 && (
         <Callout tone="amber">
           {conflicts} records in the file (sources, snapshots or ID lists) already belong to another workspace in this browser, most likely from an earlier import of the same file. They are left where they are.
@@ -338,4 +350,25 @@ function PlanView({ plan, bundle, into, onBack, onApply }: { plan: WorkspaceImpo
       </div>
     </>
   );
+}
+
+/** How many replaced records are named before "and N more". */
+const REPLACED_SHOWN = 8;
+
+/**
+ * One line per table with replacements, so the user sees which of their own records give way
+ * (SECURITY-REVIEW M2): the mapping profile as a sentence with the file's time, lists by their
+ * ids or keys (the plan's `replaced`), the other one-per-workspace records by name.
+ */
+function describeReplaced(t: WorkspaceBundleTable, plan: WorkspaceImportPlan, bundle: WorkspaceBundle): string {
+  const label = WORKSPACE_BUNDLE_TABLE_LABEL[t];
+  if (t === 'profiles') {
+    const at = bundle.tables.profiles[0]?.updatedAt;
+    return `The mapping profile (environment mapping, unit types, attributes, policies) is replaced by the file’s${at ? `, last changed ${new Date(at).toLocaleString()}` : ''}.`;
+  }
+  const names = plan.replaced[t].filter(Boolean);
+  if (names.length === 0) return `${label}: replaced by the file’s copy.`;
+  const shown = names.slice(0, REPLACED_SHOWN).join(', ');
+  const more = names.length - Math.min(names.length, REPLACED_SHOWN);
+  return `${label} (${names.length}): ${shown}${more > 0 ? `, and ${more} more` : ''}.`;
 }

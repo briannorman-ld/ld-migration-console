@@ -703,7 +703,8 @@ function executor(
 export async function checkRunApprovals(workspaceId: string, ld: LdSession, run: RunRecord): Promise<RunRecord> {
   const before = run.steps.filter((s) => s.status === "pending_approval").length;
   const changes: ResourceChange[] = [];
-  const r = await executor(workspaceId, ld, (run as RunJournalRecord).snapshots, changes).checkApprovals(await journaled(run));
+  const fresh = await journaledOwn(run);
+  const r = await executor(workspaceId, ld, (run as RunJournalRecord).snapshots, changes).checkApprovals(fresh);
   const after = r.steps.filter((s) => s.status === "pending_approval").length;
   if (after !== before) await applyRunResults(workspaceId, r, changes);
   return r;
@@ -717,8 +718,27 @@ export const pendingApprovals = (run: RunRecord) => run.steps.filter((s) => s.st
  * not read every flag the runs ever touched); undo restores from them, and resume and the approval
  * check tell an item that existed from one the run created by them.
  */
-async function journaled(run: RunRecord): Promise<RunRecord> {
+async function journaled(run: RunRecord): Promise<RunJournalRecord> {
   return (await store.getRun(run.id)) ?? structuredClone(run);
+}
+
+/** The message the Runs page shows on an imported run, and the error acting on one raises. */
+export const IMPORTED_RUN_NOTE = "Imported from a workspace file and shown as history only: imported runs can't be resumed, undone or checked for approvals here, since their steps and pre-images are whatever the file said they were.";
+
+/** `run` is history from a workspace file (`RunJournalRecord.importedAt`), not a run this browser made. */
+export const isImportedRun = (run: RunRecord): boolean => (run as RunJournalRecord).importedAt !== undefined;
+
+/**
+ * `journaled`, for an action that writes to LaunchDarkly on the run's behalf (resume, undo, the
+ * approval check): refuses a run that came from a workspace file, by the stored record as well as
+ * the one on screen. The Runs page offers no such action on an imported run; this is the check
+ * the UI cannot be trusted alone with, since a resumed run writes the file's payloads with the
+ * user's token.
+ */
+async function journaledOwn(run: RunRecord): Promise<RunJournalRecord> {
+  const fresh = await journaled(run);
+  if (isImportedRun(run) || isImportedRun(fresh)) throw new Error(IMPORTED_RUN_NOTE);
+  return fresh;
 }
 
 /**
@@ -789,7 +809,7 @@ export async function resumeRun(
   return finishRun(
     workspaceId,
     async (signal) => {
-      const [fresh, all] = await Promise.all([journaled(run), store.listRuns(workspaceId)]);
+      const [fresh, all] = await Promise.all([journaledOwn(run), store.listRuns(workspaceId)]);
       applySupersession(fresh, supersededSteps(fresh, all), new Date());
       return executor(workspaceId, ld, (run as RunJournalRecord).snapshots, changes).run(fresh, signal);
     },
@@ -809,7 +829,7 @@ export async function undoRun(
     async (signal) => {
       // Steps a later run has written over since are held (left as they are) until that run is
       // undone: runs are undone newest first (PLAN §15).
-      const [fresh, all] = await Promise.all([journaled(run), store.listRuns(workspaceId)]);
+      const [fresh, all] = await Promise.all([journaledOwn(run), store.listRuns(workspaceId)]);
       const held = new Map([...undoHolds(fresh, all)].map(([id, h]) => [id, undoHoldMessage(h)]));
       return executor(workspaceId, ld, (run as RunJournalRecord).snapshots, changes).undo(fresh, signal, held);
     },
