@@ -1,3 +1,7 @@
 packages:
   - apps/*
   - packages/*
+
+# Only install versions published at least a week ago (minutes). A compromised
+# release is usually pulled within days; this keeps it out of the lockfile.
+minimumReleaseAge: 10080

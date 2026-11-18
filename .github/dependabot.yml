@@ -1,0 +1,20 @@
+# Weekly dependency PRs. The seven-day cooldown means a release has to be a week
+# old before it is proposed, so a compromised version pulled by the registry in
+# its first days never reaches a PR.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
