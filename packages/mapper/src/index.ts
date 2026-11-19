@@ -17,5 +17,6 @@ export { estimateEnvBytes, estimateShellBytes, envBudget, migratedEnvCount, FLAG
 export { mapAutotune, percent as banditPercent, BANDIT_REALLOCATION_MS, type AutotuneMapResult, type AutotuneState } from './autotune.ts';
 export { mapNeutralFlag, mapNeutralSegment, resolveSourceKind, LD_OPERATORS, type NeutralFlagMapResult, type NeutralSegmentMapResult } from './neutral.ts';
 export { mapPrompt, type PromptMapResult } from './prompt.ts';
+export { mapNeutralMetric, mapNeutralMetricGroup, mapNeutralExperiment, mapNeutralHoldout, mapNeutralLayer, type NeutralMetricMapResult, type NeutralMetricGroupMapResult, type NeutralExperimentMapResult, type NeutralHoldoutMapResult, type NeutralLayerMapResult } from './neutral-experiments.ts';
 export { chooseMaintainer, memberIdForEmail, memberOption, teamKeyFor, teamKeyForName, teamOption, type MaintainerAssignment } from './maintainer.ts';
 export { gateById, segmentById, neutralFlagByKey, neutralSegmentByKey, memberByEmail } from './lookup.ts';

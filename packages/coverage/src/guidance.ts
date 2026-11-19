@@ -4,7 +4,7 @@
  * bare list without a verdict (the user asked for "any feature of StatSig", so every item gets
  * an answer, even when the answer is "not yet" or "no equivalent").
  */
-import type { Config, Entity, EntityKind, Experiment, Holdout, Layer, Metric, NeutralFlag, NeutralSegment, ParamStore } from '@sslm/canonical';
+import type { Config, Entity, EntityKind, Experiment, Holdout, Layer, Metric, NeutralExperiment, NeutralFlag, NeutralHoldout, NeutralLayer, NeutralMetric, NeutralMetricGroup, NeutralSegment, ParamStore } from '@sslm/canonical';
 import { COVERAGE } from './matrix.ts';
 import type { CoverageEntry, CoverageStatus } from './types.ts';
 
@@ -108,9 +108,25 @@ export interface InventorySummary {
    * Live flags and segments of neutral-model sources (a LaunchDarkly or PostHog project, PLAN §20,
    * §22), counted apart because they are not StatSig entity kinds. Present only when a source has them.
    */
-  neutral?: { flags: Record<CoverageStatus, number>; segments: Record<CoverageStatus, number> };
+  neutral?: { flags: Record<CoverageStatus, number>; segments: Record<CoverageStatus, number>; metrics: Record<CoverageStatus, number>; experiments: Record<CoverageStatus, number> };
   total: number;
   archived: number;
+}
+
+/** What happens to a neutral-source metric or metric group (PLAN §20.5): a warehouse data source needs a decision; the rest copies. */
+export function neutralMetricStatus(m: Pick<NeutralMetric, 'metricKind' | 'dataSource'> | Pick<NeutralMetricGroup, 'groupKind'>): CoverageStatus {
+  if ('groupKind' in m) return m.groupKind === 'funnel' || m.groupKind === 'standard' ? 'migrates' : 'none';
+  if (!['custom', 'pageview', 'click', 'trace'].includes(m.metricKind)) return 'none';
+  return m.dataSource ? 'decisions' : 'migrates';
+}
+
+/** What happens to a neutral-source experiment, holdout or layer: a running or stopped one raises a decision; a draft copies as it is. */
+export function neutralExperimentStatus(x: Pick<NeutralExperiment, 'environments'> | Pick<NeutralHoldout, 'environments'> | Pick<NeutralLayer, 'kind'>): CoverageStatus {
+  if ('kind' in x) return 'migrates';
+  const envs = x.environments as ({ status?: string; currentIteration?: { status: string }; draftIteration?: unknown; experimentType?: string })[];
+  if (envs.some((e) => e.experimentType !== undefined && e.experimentType !== 'experiment' && e.experimentType !== 'mab')) return 'none';
+  if (envs.some((e) => e.status === 'running' || e.status === 'enabled' || e.currentIteration?.status === 'running' || e.currentIteration?.status === 'stopped')) return 'decisions';
+  return 'migrates';
 }
 
 /** What happens to a neutral-source flag: every caveat and experiment allocation raises a decision; a purpose-marked flag (survey, …) is skipped. */
@@ -139,7 +155,7 @@ type InventorySnapshot = {
   metrics: Entity[];
   paramStores: Entity[];
   prompts?: Entity[];
-  neutral?: { flags: NeutralFlag[]; segments: NeutralSegment[] };
+  neutral?: { flags: NeutralFlag[]; segments: NeutralSegment[]; metrics?: NeutralMetric[]; metricGroups?: NeutralMetricGroup[]; experiments?: NeutralExperiment[]; holdouts?: NeutralHoldout[]; layers?: NeutralLayer[] };
 };
 
 /** Counts a workspace's inventory against the matrix: what migrates now, what waits, what has no equivalent. */
@@ -159,8 +175,29 @@ export function summarizeInventory(snapshots: readonly InventorySnapshot[]): Inv
       const k = (out.byKind[e.kind] ??= zero());
       k[g.status]++;
     }
-    if (s.neutral && (s.neutral.flags.length > 0 || s.neutral.segments.length > 0)) {
-      const n = (out.neutral ??= { flags: zero(), segments: zero() });
+    const experimentation = s.neutral ? [...(s.neutral.metrics ?? []), ...(s.neutral.metricGroups ?? []), ...(s.neutral.experiments ?? []), ...(s.neutral.holdouts ?? []), ...(s.neutral.layers ?? [])] : [];
+    if (s.neutral && (s.neutral.flags.length > 0 || s.neutral.segments.length > 0 || experimentation.length > 0)) {
+      const n = (out.neutral ??= { flags: zero(), segments: zero(), metrics: zero(), experiments: zero() });
+      for (const m of [...(s.neutral.metrics ?? []), ...(s.neutral.metricGroups ?? [])]) {
+        if (m.archived) {
+          out.archived++;
+          continue;
+        }
+        const st = neutralMetricStatus(m);
+        out.total++;
+        out.byStatus[st]++;
+        n.metrics[st]++;
+      }
+      for (const x of [...(s.neutral.experiments ?? []), ...(s.neutral.holdouts ?? []), ...(s.neutral.layers ?? [])]) {
+        if (x.archived) {
+          out.archived++;
+          continue;
+        }
+        const st = neutralExperimentStatus(x);
+        out.total++;
+        out.byStatus[st]++;
+        n.experiments[st]++;
+      }
       for (const f of s.neutral.flags) {
         if (f.archived) {
           out.archived++;

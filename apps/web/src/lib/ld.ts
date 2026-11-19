@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import type { CapabilityUpdate } from '@sslm/executor';
 import { migratedFromTag } from '@sslm/canonical';
-import { LdAuthError, LdClient, LdWriteError, probeCapabilities, type CapabilityMatrix, type LdAiConfig, type LdCallerIdentity, type LdExperiment, type LdFlag, type LdFlagSummary, type LdInstanceId, type LdMember, type LdMetric, type LdProject, type LdSegment, type LdTeam } from '@sslm/ld-client';
+import { LdAuthError, LdClient, LdWriteError, probeCapabilities, type CapabilityMatrix, type LdAiConfig, type LdCallerIdentity, type LdExperiment, type LdFlag, type LdFlagSummary, type LdHoldout, type LdInstanceId, type LdLayer, type LdMember, type LdMetric, type LdMetricGroup, type LdProject, type LdSegment, type LdTeam } from '@sslm/ld-client';
 import { mergeByKey, needsNothing, type LdListNeeds } from './reconcile.ts';
 import { secrets } from './secrets.ts';
 import { store } from './store.ts';
@@ -38,6 +38,10 @@ export interface LdSession {
   teams?: LdTeam[];
   /** AI Configs in the project (StatSig prompts); undefined when not readable or not on the plan. */
   aiConfigs?: LdAiConfig[];
+  /** Metric groups, layers (project-level) and holdouts per environment (PLAN §20.5); undefined when not readable or not on the plan. */
+  metricGroups?: LdMetricGroup[];
+  layers?: LdLayer[];
+  holdouts?: Record<string, LdHoldout[]>;
   /**
    * Set while the listing shown is the one saved on the last read (its time), restored on open so
    * the guide and explorers have LD state at once; cleared when the live refresh has landed.
@@ -51,8 +55,8 @@ export interface LdSession {
 }
 
 /** The listing fields of a session: what a refresh reads, and what is kept for the next open. */
-type LdListing = Pick<LdSession, 'flags' | 'contextKinds' | 'segments' | 'experiments' | 'metrics' | 'randomizationUnits' | 'defaultRandomizationUnit' | 'members' | 'teams' | 'aiConfigs'>;
-const LISTING_KEYS = ['flags', 'contextKinds', 'segments', 'experiments', 'metrics', 'randomizationUnits', 'defaultRandomizationUnit', 'members', 'teams', 'aiConfigs'] as const satisfies readonly (keyof LdListing)[];
+type LdListing = Pick<LdSession, 'flags' | 'contextKinds' | 'segments' | 'experiments' | 'metrics' | 'randomizationUnits' | 'defaultRandomizationUnit' | 'members' | 'teams' | 'aiConfigs' | 'metricGroups' | 'layers' | 'holdouts'>;
+const LISTING_KEYS = ['flags', 'contextKinds', 'segments', 'experiments', 'metrics', 'randomizationUnits', 'defaultRandomizationUnit', 'members', 'teams', 'aiConfigs', 'metricGroups', 'layers', 'holdouts'] as const satisfies readonly (keyof LdListing)[];
 
 const sessions = new Map<string, LdSession>();
 /**
@@ -413,26 +417,35 @@ async function readLdState(workspaceId: string, c: LdClient, p: string, seq: num
           apply({ flags: { items, loadedAt: new Date().toISOString() }, contextKinds: (kinds.items ?? []).filter((k) => !k.archived).map((k) => k.key) }),
         );
     const perEnv = envs.map(async (env) => {
-      const [segments, experiments] = await Promise.all([c.listSegments(p, env), optional(() => c.listExperiments(p, env))]);
+      const [segments, experiments, holdouts] = await Promise.all([c.listSegments(p, env), optional(() => c.listExperiments(p, env)), optional(() => c.listHoldouts(p, env))]);
       const cur = sessions.get(workspaceId);
       apply({
         segments: { ...(cur?.segments ?? {}), [env]: segments },
         ...(experiments ? { experiments: { ...(cur?.experiments ?? {}), [env]: experiments } } : {}),
+        ...(holdouts ? { holdouts: { ...(cur?.holdouts ?? {}), [env]: holdouts } } : {}),
       });
     });
-    const account = Promise.all([optional(() => c.listMetrics(p)), optional(() => c.getExperimentationSettings(p)), optional(() => c.listMembers()), optional(() => c.listTeams()), optional(() => c.listAiConfigs(p))]).then(
-      ([metrics, settings, members, teams, aiConfigs]) => {
-        const defaultUnit = settings?.randomizationUnits?.find((u) => u.default)?.randomizationUnit;
-        apply({
-          ...(metrics ? { metrics } : {}),
-          ...(settings ? { randomizationUnits: (settings.randomizationUnits ?? []).map((u) => u.randomizationUnit) } : {}),
-          ...(defaultUnit ? { defaultRandomizationUnit: defaultUnit } : {}),
-          ...(members ? { members } : {}),
-          ...(teams ? { teams } : {}),
-          ...(aiConfigs ? { aiConfigs } : {}),
-        });
-      },
-    );
+    const account = Promise.all([
+      optional(() => c.listMetrics(p)),
+      optional(() => c.getExperimentationSettings(p)),
+      optional(() => c.listMembers()),
+      optional(() => c.listTeams()),
+      optional(() => c.listAiConfigs(p)),
+      optional(() => c.listMetricGroups(p)),
+      optional(() => c.listLayers(p)),
+    ]).then(([metrics, settings, members, teams, aiConfigs, metricGroups, layers]) => {
+      const defaultUnit = settings?.randomizationUnits?.find((u) => u.default)?.randomizationUnit;
+      apply({
+        ...(metrics ? { metrics } : {}),
+        ...(settings ? { randomizationUnits: (settings.randomizationUnits ?? []).map((u) => u.randomizationUnit) } : {}),
+        ...(defaultUnit ? { defaultRandomizationUnit: defaultUnit } : {}),
+        ...(members ? { members } : {}),
+        ...(teams ? { teams } : {}),
+        ...(aiConfigs ? { aiConfigs } : {}),
+        ...(metricGroups ? { metricGroups } : {}),
+        ...(layers ? { layers } : {}),
+      });
+    });
     await Promise.all([flags, account, ...perEnv]);
     // A kept listing is as old as it was: its `stale` marker (the time it was read) stays.
     if (!apply(kept ? {} : { stale: undefined })) return;
@@ -460,17 +473,25 @@ export async function refreshLdLists(workspaceId: string, needs: LdListNeeds): P
       return undefined;
     }
   };
-  const [kinds, metrics, settings, aiConfigs, ...experimentLists] = await Promise.all([
+  const [kinds, metrics, settings, aiConfigs, metricGroups, layers, experimentLists, holdoutLists] = await Promise.all([
     needs.contextKinds ? optional(() => c.listContextKinds(p)) : undefined,
     needs.metrics ? optional(() => c.listMetrics(p)) : undefined,
     needs.settings ? optional(() => c.getExperimentationSettings(p)) : undefined,
     needs.aiConfigs ? optional(() => c.listAiConfigs(p)) : undefined,
-    ...needs.experimentEnvs.map((env) => optional(() => c.listExperiments(p, env))),
+    needs.metricGroups ? optional(() => c.listMetricGroups(p)) : undefined,
+    needs.layers ? optional(() => c.listLayers(p)) : undefined,
+    Promise.all(needs.experimentEnvs.map((env) => optional(() => c.listExperiments(p, env)))),
+    Promise.all((needs.holdoutEnvs ?? []).map((env) => optional(() => c.listHoldouts(p, env)))),
   ]);
   const experiments = { ...(sessions.get(workspaceId)?.experiments ?? {}) };
   needs.experimentEnvs.forEach((env, i) => {
     const list = experimentLists[i];
     if (list) experiments[env] = list;
+  });
+  const holdouts = { ...(sessions.get(workspaceId)?.holdouts ?? {}) };
+  (needs.holdoutEnvs ?? []).forEach((env, i) => {
+    const list = holdoutLists[i];
+    if (list) holdouts[env] = list;
   });
   const defaultUnit = settings?.randomizationUnits?.find((u) => u.default)?.randomizationUnit;
   appliedSeq = ++refreshSeq;
@@ -480,7 +501,10 @@ export async function refreshLdLists(workspaceId: string, needs: LdListNeeds): P
     ...(settings ? { randomizationUnits: (settings.randomizationUnits ?? []).map((u) => u.randomizationUnit) } : {}),
     ...(defaultUnit ? { defaultRandomizationUnit: defaultUnit } : {}),
     ...(aiConfigs ? { aiConfigs } : {}),
+    ...(metricGroups ? { metricGroups } : {}),
+    ...(layers ? { layers } : {}),
     ...(needs.experimentEnvs.length ? { experiments } : {}),
+    ...(needs.holdoutEnvs?.length ? { holdouts } : {}),
   });
   void persistLdState(workspaceId);
 }

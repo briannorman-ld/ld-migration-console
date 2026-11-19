@@ -881,7 +881,8 @@ The canonical model (§4, `packages/canonical/src/model.ts`) is StatSig's: `COND
 
 - **Input:** instance (US, EU, Federal), project key, an API token with read access to that project. The token lives in memory like the other tokens (`secrets` kind `ld_source`, keyed by source id). The source may be a different account or instance than the target; the CSP already allows the three LD API hosts.
 - **Reads (never writes):** `GET /projects/{p}`, `/projects/{p}/environments`, `/projects/{p}/context-kinds`, `/flags/{p}` (summaries, for the count) then `GET /flags/{p}/{key}` per flag (every environment's targeting in one response), and `GET /segments/{p}/{env}` per environment. Lenient Zod schemas from `packages/ld-client` (field names from `reference/launchdarkly/openapi.json`); mismatches become snapshot warnings.
-- **Not readable, and reported as such:** big-segment membership (LD only answers per-key membership), flag links, approval settings, experiments and metrics (out of scope by §11), member and team identities of another account.
+- **Experimentation reads (§20.5, added 2026-11-19):** `GET /metrics/{p}`, `/projects/{p}/metric-groups` (beta), `/projects/{p}/layers`, and per environment `…/experiments?expand=treatments,draftIteration,previousIterations,secondaryMetrics,analysisConfig&lifecycleState=active,archived` and `…/holdouts` plus one `GET …/holdouts/{key}` each (the listing carries no design). `GET /members/{id}` for every maintainer id those name, so the target can match them by email. Each of these is optional: a 403 (no Experimentation on the plan, or a read-only token without the scope) is recorded as a `fetch_skipped` warning and the collection stays empty; the flags still migrate.
+- **Not readable, and reported as such:** big-segment membership (LD only answers per-key membership), flag links, approval settings, metric data sources (they hold warehouse credentials), experiment results and exposures, member and team identities of another account beyond the email.
 
 ### 20.3 Mapping an LD flag to an LD flag: near-identity, every difference a decision
 
@@ -898,13 +899,40 @@ The mapper is `packages/mapper/src/neutral.ts` (`mapNeutralFlag`, `mapNeutralSeg
 | Custom properties other than `migration.*` | `copy_custom_properties` (choice): copy or leave out. Provenance keys and `migrated-from-*` / `migration-src-*` tags from an earlier migration are never copied |
 | Key already in the target and not created by the console | `key_collision` (blocking), as for every source |
 | Maintainer, maintainer team | Not carried (member IDs belong to the source account); noted |
-| Disabled rules, `trackEvents`, experiments on the flag, migration-purpose flags | Disabled rules are left out (they do not evaluate); event tracking and experiments are noted; migration flags are skipped with a reason |
+| Disabled rules, `trackEvents`, experiments on the flag, migration-purpose flags | Disabled rules are left out (they do not evaluate); event tracking is noted; the experiments running on the flag are noted and migrated as items of their own (§20.5); migration flags are skipped with a reason |
 | Operators the console does not know | `unsupported_condition` (blocking) |
 
 **Provenance** (§3.3) is written with `kind = launchdarkly`: tags `migrated-from-launchdarkly` and `migration-src-<alias>`, custom properties `migration.kind = launchdarkly`, `migration.id` = the source flag key, `migration.type = flag`, `migration.source`, `migration.sync.<env>`; segments get the `[ld-migration: from=launchdarkly; …]` footer. The planner's ownership and drift checks work unchanged.
 
-### 20.4 Out of scope for the first step
-Experiments, metrics, holdouts and release pipelines (they end in the source and start new in the target, §11); flag links; approval settings; copying member and team assignments; reading big-segment membership; consolidation of an LD source with a StatSig source into one key (the data model allows it, the `source_collision` UI is M8).
+### 20.4 Out of scope
+Release pipelines and guarded rollouts (live processes); flag links; approval settings; metric data sources (set up per project in the LD UI); experiment results, exposures and iteration history (no write API); copying member and team assignments; reading big-segment membership; consolidation of an LD source with a StatSig source into one key (the data model allows it, the `source_collision` UI is M8). Experiments, metrics, holdouts and layers were out of scope for the first step and are in since 2026-11-19 (§20.5).
+
+### 20.5 Experimentation: metrics, metric groups, experiments, holdouts, layers (added 2026-11-19)
+
+**Why.** A customer copying an LD project wants everything about an experiment that can cross projects to cross: its design, its metrics, the holdout and layer it belongs to, its owner. §11's rule still holds (nothing is moved mid-flight: assignments and results cannot move, and an experiment is started by a person), so the copy is the *design*, created as a not-started draft on the migrated flag.
+
+**Model.** `NeutralProject` gains `metrics`, `metricGroups`, `experiments`, `holdouts` and `layers` (`packages/canonical/src/neutral.ts`), LD-shaped with the account-specific ids resolved: a treatment names a flag *variation index*, an iteration's flag names the *source rule id* (and its description), a holdout is referenced by *key*, a maintainer by *email*. Experiments and holdouts are per environment (grouped by key like segments, one `environments[]` entry each); metrics, metric groups and layers are project-level. `NeutralKind` gains the five kinds; uids are `<sourceId>/<kind>/<key>`.
+
+**Adapter** (`packages/adapters/src/launchdarkly/experiments.ts`): a holdout's base experiment (`type: holdout`) travels with the holdout, not as an experiment; an experiment's `holdoutId` is resolved to the holdout's key, its layer reservation read from the layer side. Results are not read.
+
+**Mapper** (`packages/mapper/src/neutral-experiments.ts`, pure like the rest): `mapNeutralMetric`, `mapNeutralMetricGroup`, `mapNeutralExperiment`, `mapNeutralHoldout`, `mapNeutralLayer`. The design iteration of an experiment is its draft, else its current iteration, else its last previous one. Decisions:
+
+| Difference | Handling |
+|---|---|
+| Running experiment | `experiment_running` (choice, recommended **copy the design as a draft now**; or wait). Starting it is a deliberate step in LD; the source keeps running |
+| Stopped experiment | `experiment_concluded` (choice, recommended **recreate the design as a draft**; or skip). The outcome (winner, reason) goes into the copy's description; results stay in the source |
+| The rule the experiment runs on is disabled or gone in the source flag | `experiment_rule_missing` (blocking: run on the default rule, or skip) |
+| Its flag is not in the source, archived, or absent from the environment | `missing_reference` (blocking: skip) |
+| Warehouse-native metric | `metric_data_source` (choice, recommended: reference a data source of the same key in the target, fidelity *manual*; or skip) |
+| Running or enabled holdout | `holdout_running` (acknowledge: created unstarted, buckets a new population) |
+| Target plan or token lacks experiments, metrics, metric groups, holdouts or layers | `experimentation_unavailable` (blocking: skip) |
+| Maintainer | by email like a flag's (`maintainer_unknown`); metric groups require a member, so the member behind the token stands in; experiments drop a team maintainer |
+| Randomization and analysis units | resolved like context kinds (`unit_type_kind`), enabled as randomization units (`ensure_randomization_unit`) |
+| Earlier iterations, exposures, results, winning treatment data | noted; no API writes history |
+
+**Planner and executor.** New steps `upsert_metric` (the autotune step, widened to every `MetricPost` field), `upsert_metric_group`, `ensure_layer` (project-level, ordered after metrics and before flag shells), `upsert_holdout` and `create_experiment` (per environment, after the environment's flag targeting). An experiment depends on its flag's `env:` step (planned like a prerequisite), its metrics and metric groups, its holdout and its layer. The executor re-resolves variation ids by position, the rule by description then position, `flagConfigVersion` from the target environment, `holdoutId` by looking the holdout up by key, then writes the layer reservation (`updateExperimentReservation`). An existing experiment with a running or finished iteration is never touched; a draft is replaced. Provenance: tags on metrics, metric groups and experiments, a description footer on all of them (holdouts and layers have no tags). Undo: metrics and metric groups are deleted, experiments archived (and taken out of their layer); holdouts and layers cannot be deleted and are left in place, said so in the step.
+
+**Verification status.** Built against the OpenAPI spec and the mock; no live LD write has created an experiment, holdout or layer from this path yet (the bandit path has). The holdout POST's lower-case field names and the metric-group beta route are the two places most likely to need a fix on first live use.
 
 ## 21. Third source: GrowthBook
 

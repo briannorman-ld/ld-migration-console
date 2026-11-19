@@ -32,7 +32,7 @@ export function CoverageView({
   focus?: string;
   onOpenResource: (kind: EntityKind) => void;
   /** Opens the flags or segments of the neutral-model sources (LaunchDarkly or PostHog projects, PLAN §20, §22). */
-  onOpenNeutral?: (resource: 'flag' | 'segment') => void;
+  onOpenNeutral?: (resource: 'flag' | 'segment' | 'metric' | 'experiment') => void;
 }) {
   const [q, setQ] = useState('');
   const [status, setStatus] = useState<CoverageStatus | 'all'>('all');
@@ -139,8 +139,8 @@ export function CoverageView({
               );
             })}
             {inventory.neutral &&
-              (['flag', 'segment'] as const).map((r) => {
-                const c = inventory.neutral![r === 'flag' ? 'flags' : 'segments'];
+              (['flag', 'segment', 'metric', 'experiment'] as const).map((r) => {
+                const c = inventory.neutral![r === 'flag' ? 'flags' : r === 'segment' ? 'segments' : r === 'metric' ? 'metrics' : 'experiments'];
                 const total = ORDER.reduce((n, s) => n + c[s], 0);
                 if (!total) return null;
                 return (
@@ -150,7 +150,7 @@ export function CoverageView({
                     onClick={() => onOpenNeutral?.(r)}
                     className="flex items-center gap-2 rounded-md border border-line px-2.5 py-1.5 text-xs hover:bg-surface-hover"
                   >
-                    <span className="font-medium">{r === 'flag' ? 'Source flags' : 'Source segments'}</span>
+                    <span className="font-medium">{r === 'flag' ? 'Source flags' : r === 'segment' ? 'Source segments' : r === 'metric' ? 'Source metrics' : 'Source experiments'}</span>
                     <span className="text-fg-muted tabular-nums">{total}</span>
                     {ORDER.filter((s) => c[s] > 0).map((s) => (
                       <Badge key={s} tone={COVERAGE_TONE[s]} title={STATUS_LABEL[s]}>

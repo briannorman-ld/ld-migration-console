@@ -8,6 +8,15 @@ import {
   CallerIdentitySchema,
   MemberSchema,
   MembersSchema,
+  MetricGroupSchema,
+  MetricGroupsSchema,
+  HoldoutSchema,
+  HoldoutsSchema,
+  LayerSchema,
+  LayersSchema,
+  type LdMetricGroup,
+  type LdHoldout,
+  type LdLayer,
   TeamSchema,
   TeamsSchema,
   type LdAiConfig,
@@ -260,22 +269,79 @@ export class LdClient {
     }
   }
 
-  /** Experiments (including bandits) in one environment, active and archived. */
-  listExperiments(projectKey: string, envKey: string, signal?: AbortSignal): Promise<LdExperiment[]> {
+  /**
+   * Experiments (including bandits) in one environment, active and archived. `expand` asks for the
+   * parts the listing leaves out (`treatments`, `previousIterations`, `draftIteration`,
+   * `secondaryMetrics`, `analysisConfig`): the LD source adapter reads everything (PLAN §20.5).
+   */
+  listExperiments(projectKey: string, envKey: string, signal?: AbortSignal, opts: { expand?: string[] } = {}): Promise<LdExperiment[]> {
     return allPages(async (offset) => {
       const page = await this.get(`/projects/${encodeURIComponent(projectKey)}/environments/${encodeURIComponent(envKey)}/experiments`, ExperimentsSchema, {
-        query: { limit: '50', offset: String(offset), lifecycleState: 'active,archived' },
+        query: { limit: '50', offset: String(offset), lifecycleState: 'active,archived', ...(opts.expand?.length ? { expand: opts.expand.join(',') } : {}) },
         signal,
       });
       return { items: page.items, totalCount: page.total_count ?? page.totalCount };
     }, 50);
   }
 
-  async getExperiment(projectKey: string, envKey: string, key: string, signal?: AbortSignal): Promise<LdExperiment | null> {
+  async getExperiment(projectKey: string, envKey: string, key: string, signal?: AbortSignal, opts: { expand?: string[] } = {}): Promise<LdExperiment | null> {
     try {
-      return await this.get(`/projects/${encodeURIComponent(projectKey)}/environments/${encodeURIComponent(envKey)}/experiments/${encodeURIComponent(key)}`, ExperimentSchema, { signal });
+      return await this.get(`/projects/${encodeURIComponent(projectKey)}/environments/${encodeURIComponent(envKey)}/experiments/${encodeURIComponent(key)}`, ExperimentSchema, {
+        signal,
+        ...(opts.expand?.length ? { query: { expand: opts.expand.join(',') } } : {}),
+      });
     } catch (e) {
       if (e instanceof HttpError && e.status === 404) return null;
+      throw e;
+    }
+  }
+
+  /** Metric groups (funnels and standard groups), project-level. A beta route. */
+  listMetricGroups(projectKey: string, signal?: AbortSignal): Promise<LdMetricGroup[]> {
+    return allPages(async (offset) => {
+      const page = await this.get(`/projects/${encodeURIComponent(projectKey)}/metric-groups`, MetricGroupsSchema, { beta: true, query: { limit: '50', offset: String(offset) }, signal });
+      return { items: page.items ?? [], totalCount: page.totalCount };
+    }, 50);
+  }
+
+  async getMetricGroup(projectKey: string, key: string, signal?: AbortSignal): Promise<LdMetricGroup | null> {
+    try {
+      return await this.get(`/projects/${encodeURIComponent(projectKey)}/metric-groups/${encodeURIComponent(key)}`, MetricGroupSchema, { beta: true, signal });
+    } catch (e) {
+      if (e instanceof HttpError && e.status === 404) return null;
+      throw e;
+    }
+  }
+
+  /** Holdouts of one environment (listing items carry key, name and status; `getHoldout` the design). */
+  listHoldouts(projectKey: string, envKey: string, signal?: AbortSignal): Promise<LdHoldout[]> {
+    return allPages(async (offset) => {
+      const page = await this.get(`/projects/${encodeURIComponent(projectKey)}/environments/${encodeURIComponent(envKey)}/holdouts`, HoldoutsSchema, { query: { limit: '50', offset: String(offset) }, signal });
+      return { items: page.items ?? [], totalCount: page.total_count ?? page.totalCount };
+    }, 50);
+  }
+
+  async getHoldout(projectKey: string, envKey: string, key: string, signal?: AbortSignal): Promise<LdHoldout | null> {
+    try {
+      return await this.get(`/projects/${encodeURIComponent(projectKey)}/environments/${encodeURIComponent(envKey)}/holdouts/${encodeURIComponent(key)}`, HoldoutSchema, { signal });
+    } catch (e) {
+      if (e instanceof HttpError && e.status === 404) return null;
+      throw e;
+    }
+  }
+
+  /** Layers of the project, with every environment's reservations. One page: LD's list route has no paging. */
+  async listLayers(projectKey: string, signal?: AbortSignal): Promise<LdLayer[]> {
+    const page = await this.get(`/projects/${encodeURIComponent(projectKey)}/layers`, LayersSchema, { signal });
+    return page.items ?? [];
+  }
+
+  /** One account member by ID (GET /members/{id}); `null` when absent or not readable. The source adapter resolves maintainer IDs to emails with it. */
+  async getMember(id: string, signal?: AbortSignal): Promise<LdMember | null> {
+    try {
+      return await this.get(`/members/${encodeURIComponent(id)}`, MemberSchema, { signal });
+    } catch (e) {
+      if (e instanceof HttpError && (e.status === 404 || e.status === 403)) return null;
       throw e;
     }
   }
@@ -387,6 +453,47 @@ export class LdClient {
   /** PUT replaces the whole list of randomization units. */
   putExperimentationSettings(projectKey: string, body: { randomizationUnits: { randomizationUnit: string; default?: boolean }[] }, signal?: AbortSignal): Promise<LdExperimentationSettings> {
     return this.write('PUT', `/projects/${encodeURIComponent(projectKey)}/experimentation-settings`, body, ExperimentationSettingsSchema, { signal });
+  }
+
+  // --- Experimentation writes for a copied LD project (PLAN §20.5) --------------------------------
+
+  /** POST /projects/{p}/metric-groups (MetricGroupPost: key, name, kind, maintainerId, tags, metrics). Beta route. */
+  createMetricGroup(projectKey: string, body: Record<string, unknown>, signal?: AbortSignal): Promise<LdMetricGroup> {
+    return this.write('POST', `/projects/${encodeURIComponent(projectKey)}/metric-groups`, body, MetricGroupSchema, { beta: true, signal });
+  }
+
+  patchMetricGroupJson(projectKey: string, key: string, patch: JsonPatchOp[], opts: { comment?: string; signal?: AbortSignal } = {}): Promise<LdMetricGroup> {
+    return this.write('PATCH', `/projects/${encodeURIComponent(projectKey)}/metric-groups/${encodeURIComponent(key)}`, { patch, ...(opts.comment ? { comment: opts.comment } : {}) }, MetricGroupSchema, { beta: true, signal: opts.signal });
+  }
+
+  async deleteMetricGroup(projectKey: string, key: string, signal?: AbortSignal): Promise<void> {
+    await this.write('DELETE', `/projects/${encodeURIComponent(projectKey)}/metric-groups/${encodeURIComponent(key)}`, undefined, null, { beta: true, signal });
+  }
+
+  /** POST a holdout (HoldoutPostRequest: lower-case `randomizationunit`, `holdoutamount`, `primarymetrickey`, `prerequisiteflagkey`). Created, not started. */
+  createHoldout(projectKey: string, envKey: string, body: Record<string, unknown>, signal?: AbortSignal): Promise<LdHoldout> {
+    return this.write('POST', `/projects/${encodeURIComponent(projectKey)}/environments/${encodeURIComponent(envKey)}/holdouts`, body, HoldoutSchema, { signal });
+  }
+
+  /** Holdouts take semantic patches (`updateName`, `updateDescription`, `removeExperiment`, `endHoldout`). */
+  patchHoldoutSemantic(projectKey: string, envKey: string, key: string, patch: SemanticPatch, signal?: AbortSignal): Promise<LdHoldout> {
+    return this.write('PATCH', `/projects/${encodeURIComponent(projectKey)}/environments/${encodeURIComponent(envKey)}/holdouts/${encodeURIComponent(key)}`, patch, HoldoutSchema, {
+      contentType: 'application/json; domain-model=launchdarkly.semanticpatch',
+      signal,
+    });
+  }
+
+  /** POST /projects/{p}/layers (LayerPost: key, name, description). */
+  createLayer(projectKey: string, body: { key: string; name: string; description: string }, signal?: AbortSignal): Promise<LdLayer> {
+    return this.write('POST', `/projects/${encodeURIComponent(projectKey)}/layers`, body, LayerSchema, { signal });
+  }
+
+  /** Layers take semantic patches (`updateName`, `updateDescription`, `updateExperimentReservation`, `removeExperiment`); `environmentKey` scopes a reservation change. */
+  patchLayerSemantic(projectKey: string, key: string, patch: SemanticPatch, signal?: AbortSignal): Promise<LdLayer> {
+    return this.write('PATCH', `/projects/${encodeURIComponent(projectKey)}/layers/${encodeURIComponent(key)}`, patch, LayerSchema, {
+      contentType: 'application/json; domain-model=launchdarkly.semanticpatch',
+      signal,
+    });
   }
 
   createFlag(projectKey: string, body: Record<string, unknown>, signal?: AbortSignal): Promise<LdFlag> {
@@ -523,7 +630,7 @@ export class LdClient {
     path: string,
     body: unknown,
     schema: S | null,
-    opts: { contentType?: string; query?: Record<string, string>; signal?: AbortSignal } = {},
+    opts: { contentType?: string; query?: Record<string, string>; signal?: AbortSignal; beta?: boolean } = {},
   ): Promise<z.output<S>> {
     const qs = opts.query ? `?${new URLSearchParams(opts.query)}` : '';
     let res;
@@ -531,7 +638,7 @@ export class LdClient {
       res = await this.transport.request({
         method,
         url: `${this.instance.origin}/api/v2${path}${qs}`,
-        headers: { Authorization: this.#token, 'LD-API-Version': LD_API_VERSION, ...(opts.contentType ? { 'Content-Type': opts.contentType } : {}) },
+        headers: { Authorization: this.#token, 'LD-API-Version': opts.beta ? 'beta' : LD_API_VERSION, ...(opts.contentType ? { 'Content-Type': opts.contentType } : {}) },
         body,
         signal: opts.signal,
       });

@@ -105,7 +105,7 @@
         "partial: 50% / 50% rollout re-buckets contexts (new flag, new salt). [default rule]",
         "full: Event tracking for the default rule is on in the source project; not copied.",
         "full: Deprecated in the source project. Consider retiring it instead of migrating.",
-        "partial: 1 experiment runs on this flag in the source project (legacy-cta-copy-test); experiments are not migrated (PLAN §11)."
+        "full: 1 experiment runs on this flag in the source project (legacy-cta-copy-test); select it under Experiments to copy its design as a draft (the targeting here is copied as it is)."
       ],
       "decisions": [
         "acknowledge partial_rollout_rebucket (default rule) → acknowledge"
@@ -693,6 +693,629 @@
         "excluded": [
           "u-contractor-9"
         ]
+      }
+    }
+  ],
+  "metrics": [
+    {
+      "metric": "legacy-cart-conversion",
+      "fidelity": "full",
+      "notes": [
+        "full: Event “checkout_completed” must be sent to the target project by the SDK (track()) for the metric to have data; events already recorded in the source project do not carry over. [event]"
+      ],
+      "decisions": [],
+      "dependencies": [],
+      "desired": {
+        "key": "legacy-cart-conversion",
+        "name": "Cart conversion rate",
+        "description": "",
+        "kind": "custom",
+        "eventKey": "checkout_completed",
+        "isNumeric": false,
+        "successCriteria": "HigherThanBaseline",
+        "tags": [
+          "migrated-from-launchdarkly",
+          "migration-src-legacy",
+          "checkout"
+        ],
+        "analysisUnits": [
+          "user"
+        ],
+        "unitAggregationType": "count_distinct",
+        "denominator": {
+          "eventName": "cart_viewed",
+          "isNumeric": false,
+          "unitAggregationType": "count_distinct"
+        }
+      }
+    },
+    {
+      "metric": "legacy-checkout-completed",
+      "fidelity": "full",
+      "notes": [
+        "full: Event “checkout_completed” must be sent to the target project by the SDK (track()) for the metric to have data; events already recorded in the source project do not carry over. [event]"
+      ],
+      "decisions": [],
+      "dependencies": [
+        "randomization_unit:organization"
+      ],
+      "desired": {
+        "key": "legacy-checkout-completed",
+        "name": "Checkout completed",
+        "description": "A user completed checkout.",
+        "kind": "custom",
+        "eventKey": "checkout_completed",
+        "isNumeric": false,
+        "successCriteria": "HigherThanBaseline",
+        "tags": [
+          "migrated-from-launchdarkly",
+          "migration-src-legacy",
+          "checkout"
+        ],
+        "analysisUnits": [
+          "user",
+          "organization"
+        ],
+        "maintainerId": "mem-legacy-ops",
+        "unitAggregationType": "average",
+        "analysisType": "mean"
+      }
+    },
+    {
+      "metric": "legacy-cta-click",
+      "fidelity": "full",
+      "notes": [
+        "full: Click and page view metrics need the target environment’s client-side SDK key in the pages they watch. [event]"
+      ],
+      "decisions": [],
+      "dependencies": [],
+      "desired": {
+        "key": "legacy-cta-click",
+        "name": "CTA clicked",
+        "description": "",
+        "kind": "click",
+        "isNumeric": false,
+        "successCriteria": "HigherThanBaseline",
+        "tags": [
+          "migrated-from-launchdarkly",
+          "migration-src-legacy",
+          "checkout"
+        ],
+        "analysisUnits": [
+          "user"
+        ],
+        "selector": "#checkout-cta",
+        "urls": [
+          {
+            "kind": "exact",
+            "url": "https://shop.acme-legacy.example/cart"
+          }
+        ]
+      }
+    },
+    {
+      "metric": "legacy-old-signup",
+      "skipped": "archived in the source project",
+      "fidelity": "skipped",
+      "notes": [
+        "skipped: Not migrated: archived in the source project."
+      ],
+      "decisions": [],
+      "dependencies": [],
+      "desired": null
+    },
+    {
+      "metric": "legacy-order-value",
+      "fidelity": "partial",
+      "notes": [
+        "partial: Owner growth@acme-legacy.example is not a LaunchDarkly member: no maintainer (kept in migration.owner). [flag settings]",
+        "full: Event “order_placed” must be sent to the target project by the SDK (track()) for the metric to have data; events already recorded in the source project do not carry over. [event]"
+      ],
+      "decisions": [
+        "choice maintainer_unknown (flag settings) → unassigned"
+      ],
+      "dependencies": [],
+      "desired": {
+        "key": "legacy-order-value",
+        "name": "Order value",
+        "description": "Order total in USD.",
+        "kind": "custom",
+        "eventKey": "order_placed",
+        "isNumeric": true,
+        "successCriteria": "HigherThanBaseline",
+        "tags": [
+          "migrated-from-launchdarkly",
+          "migration-src-legacy",
+          "checkout",
+          "revenue"
+        ],
+        "analysisUnits": [
+          "user"
+        ],
+        "unit": "USD",
+        "unitAggregationType": "sum",
+        "analysisType": "percentile",
+        "percentileValue": 90,
+        "eventDefault": {
+          "disabled": false,
+          "value": 0
+        },
+        "filters": {
+          "type": "eventProperty",
+          "attribute": "currency",
+          "op": "in",
+          "values": [
+            "USD"
+          ],
+          "negate": false
+        },
+        "winsorLowerPercentile": 1,
+        "winsorUpperPercentile": 99,
+        "winsorIncludeImputed": false
+      }
+    },
+    {
+      "metric": "legacy-pricing-pageview",
+      "fidelity": "full",
+      "notes": [
+        "full: Click and page view metrics need the target environment’s client-side SDK key in the pages they watch. [event]"
+      ],
+      "decisions": [],
+      "dependencies": [],
+      "desired": {
+        "key": "legacy-pricing-pageview",
+        "name": "Pricing page viewed",
+        "description": "",
+        "kind": "pageview",
+        "isNumeric": false,
+        "successCriteria": "HigherThanBaseline",
+        "tags": [
+          "migrated-from-launchdarkly",
+          "migration-src-legacy",
+          "pricing"
+        ],
+        "analysisUnits": [
+          "user"
+        ],
+        "urls": [
+          {
+            "kind": "substring",
+            "substring": "/pricing"
+          }
+        ]
+      }
+    },
+    {
+      "metric": "legacy-wh-revenue",
+      "fidelity": "manual",
+      "notes": [
+        "manual: Warehouse-native: set up the data source “legacy-snowflake” in the target project before the run, with the same key. [data source]",
+        "partial: Owner growth@acme-legacy.example is not a LaunchDarkly member: no maintainer (kept in migration.owner). [flag settings]"
+      ],
+      "decisions": [
+        "choice metric_data_source (data source) → same_key",
+        "choice maintainer_unknown (flag settings) → unassigned"
+      ],
+      "dependencies": [],
+      "desired": {
+        "key": "legacy-wh-revenue",
+        "name": "Revenue (warehouse)",
+        "description": "Daily revenue from the Snowflake orders table.",
+        "kind": "custom",
+        "isNumeric": true,
+        "successCriteria": "HigherThanBaseline",
+        "tags": [
+          "migrated-from-launchdarkly",
+          "migration-src-legacy",
+          "revenue",
+          "warehouse"
+        ],
+        "analysisUnits": [
+          "user"
+        ],
+        "unitAggregationType": "sum",
+        "analysisType": "mean",
+        "dataSource": {
+          "key": "legacy-snowflake",
+          "environmentKey": "production"
+        },
+        "valueColumn": "revenue_usd"
+      }
+    }
+  ],
+  "metricGroups": [
+    {
+      "metricGroup": "legacy-checkout-funnel",
+      "fidelity": "partial",
+      "notes": [
+        "partial: Owner growth@acme-legacy.example is not a LaunchDarkly member: no maintainer (kept in migration.owner). [flag settings]",
+        "partial: LaunchDarkly requires a metric group maintainer: the member behind the API token is assigned. [metric group settings]"
+      ],
+      "decisions": [
+        "choice maintainer_unknown (flag settings) → unassigned"
+      ],
+      "dependencies": [
+        "metric:legacy-checkout-completed",
+        "metric:legacy-cta-click"
+      ],
+      "desired": {
+        "key": "legacy-checkout-funnel",
+        "name": "Checkout funnel",
+        "description": "Cart → CTA → order.",
+        "kind": "funnel",
+        "tags": [
+          "migrated-from-launchdarkly",
+          "migration-src-legacy",
+          "checkout"
+        ],
+        "metrics": [
+          {
+            "key": "legacy-cta-click",
+            "nameInGroup": "Clicked CTA"
+          },
+          {
+            "key": "legacy-checkout-completed",
+            "nameInGroup": "Completed checkout"
+          }
+        ]
+      }
+    }
+  ],
+  "layers": [
+    {
+      "layer": "legacy-checkout-layer",
+      "fidelity": "full",
+      "notes": [
+        "full: Reservations (1) are written by the copied experiments as they are created. [reservations]"
+      ],
+      "decisions": [],
+      "dependencies": [],
+      "desired": {
+        "key": "legacy-checkout-layer",
+        "name": "Checkout layer",
+        "description": "Mutually exclusive checkout experiments."
+      }
+    }
+  ],
+  "experiments": [
+    {
+      "experiment": "legacy-checkout-redesign-test",
+      "fidelity": "partial",
+      "notes": [
+        "partial: Stopped in the source project, winner “Redesign”: the design is recreated as a draft; results and exposures stay in the source.",
+        "partial: 1 earlier iteration stays in the source project: LaunchDarkly has no way to create an experiment with history. [iterations]",
+        "full: Created as a draft on the migrated flag: nothing is served until someone starts it in LaunchDarkly. Treatments map to the same variations by position; the target flag buckets contexts with its own salt."
+      ],
+      "decisions": [
+        "choice experiment_concluded (legacy-checkout-redesign-test) → draft"
+      ],
+      "dependencies": [
+        "flag:legacy-checkout-redesign",
+        "metric:legacy-checkout-completed",
+        "metric:legacy-wh-revenue",
+        "randomization_unit:organization"
+      ],
+      "desired": {
+        "key": "legacy-checkout-redesign-test",
+        "ldEnv": "production",
+        "statsigEnv": "production",
+        "name": "Checkout redesign",
+        "description": "The new checkout against the old one. Ended in the source project, winner “Redesign” (Checkout completed +4.1%, credible.).",
+        "type": "experiment",
+        "tags": [
+          "migrated-from-launchdarkly",
+          "migration-src-legacy",
+          "checkout"
+        ],
+        "maintainerId": "mem-legacy-ops",
+        "methodology": "bayesian",
+        "hypothesis": "The redesign lifts completed checkouts by 3%.",
+        "randomizationUnit": "organization",
+        "attributes": [
+          "plan"
+        ],
+        "canReshuffleTraffic": true,
+        "metrics": [
+          {
+            "key": "legacy-checkout-completed",
+            "isGroup": false
+          },
+          {
+            "key": "legacy-wh-revenue",
+            "isGroup": false
+          }
+        ],
+        "primary": {
+          "key": "legacy-checkout-completed",
+          "isGroup": false
+        },
+        "treatments": [
+          {
+            "name": "Old checkout",
+            "baseline": true,
+            "allocationPercent": "70",
+            "parameters": [
+              {
+                "flagKey": "legacy-checkout-redesign",
+                "variation": 1
+              }
+            ]
+          },
+          {
+            "name": "Redesign",
+            "baseline": false,
+            "allocationPercent": "30",
+            "parameters": [
+              {
+                "flagKey": "legacy-checkout-redesign",
+                "variation": 0
+              }
+            ]
+          }
+        ],
+        "flags": [
+          {
+            "flagKey": "legacy-checkout-redesign",
+            "rule": {
+              "kind": "fallthrough"
+            },
+            "notInExperimentVariation": 1
+          }
+        ],
+        "sourceStatus": "stopped"
+      }
+    },
+    {
+      "experiment": "legacy-cta-copy-test",
+      "fidelity": "partial",
+      "notes": [
+        "partial: Running in the source project: the target gets the same design as a not-started draft; assignments and results so far stay in the source.",
+        "full: Joins the copied holdout “legacy-q3-holdout” (created first in the same environment). [holdout]",
+        "partial: Reserves 40% of layer “legacy-checkout-layer” in the target; the layer buckets contexts afresh, so the reserved population differs from the source's. [layer]",
+        "partial: Owner growth@acme-legacy.example is not a LaunchDarkly member: no maintainer (kept in migration.owner). [flag settings]",
+        "full: Created as a draft on the migrated flag: nothing is served until someone starts it in LaunchDarkly. Treatments map to the same variations by position; the target flag buckets contexts with its own salt."
+      ],
+      "decisions": [
+        "choice experiment_running (legacy-cta-copy-test) → prestage",
+        "choice maintainer_unknown (flag settings) → unassigned"
+      ],
+      "dependencies": [
+        "flag:legacy-cta-copy",
+        "holdout:legacy-q3-holdout",
+        "layer:legacy-checkout-layer",
+        "metric_group:legacy-checkout-funnel",
+        "metric:legacy-cta-click",
+        "metric:legacy-order-value"
+      ],
+      "desired": {
+        "key": "legacy-cta-copy-test",
+        "ldEnv": "production",
+        "statsigEnv": "production",
+        "name": "Checkout CTA wording",
+        "description": "“Buy now” vs “Checkout” on the cart page.",
+        "type": "experiment",
+        "tags": [
+          "migrated-from-launchdarkly",
+          "migration-src-legacy",
+          "checkout",
+          "experiment"
+        ],
+        "methodology": "bayesian",
+        "analysisConfig": {
+          "bayesianThreshold": "0.95"
+        },
+        "holdoutKey": "legacy-q3-holdout",
+        "layer": {
+          "key": "legacy-checkout-layer",
+          "reservationPercent": 40
+        },
+        "hypothesis": "“Checkout” is clearer and converts better than “Buy now”.",
+        "randomizationUnit": "user",
+        "canReshuffleTraffic": true,
+        "metrics": [
+          {
+            "key": "legacy-checkout-funnel",
+            "isGroup": true
+          },
+          {
+            "key": "legacy-order-value",
+            "isGroup": false
+          },
+          {
+            "key": "legacy-cta-click",
+            "isGroup": false
+          }
+        ],
+        "primary": {
+          "key": "legacy-checkout-funnel",
+          "isGroup": true
+        },
+        "treatments": [
+          {
+            "name": "Buy now",
+            "baseline": true,
+            "allocationPercent": "50",
+            "parameters": [
+              {
+                "flagKey": "legacy-cta-copy",
+                "variation": 0
+              }
+            ]
+          },
+          {
+            "name": "Checkout",
+            "baseline": false,
+            "allocationPercent": "50",
+            "parameters": [
+              {
+                "flagKey": "legacy-cta-copy",
+                "variation": 1
+              }
+            ]
+          }
+        ],
+        "flags": [
+          {
+            "flagKey": "legacy-cta-copy",
+            "rule": {
+              "kind": "fallthrough"
+            },
+            "notInExperimentVariation": 0
+          }
+        ],
+        "sourceStatus": "running"
+      }
+    },
+    {
+      "experiment": "legacy-old-banner-test",
+      "skipped": "archived in the source project",
+      "fidelity": "skipped",
+      "notes": [
+        "skipped: Not migrated: archived in the source project."
+      ],
+      "decisions": [],
+      "dependencies": [],
+      "desired": null
+    },
+    {
+      "experiment": "legacy-pricing-bandit",
+      "fidelity": "partial",
+      "notes": [
+        "partial: Running in the source project: the target gets the same design as a not-started draft; assignments and results so far stay in the source.",
+        "partial: Owner growth@acme-legacy.example is not a LaunchDarkly member: no maintainer (kept in migration.owner). [flag settings]",
+        "full: Created as a draft on the migrated flag: nothing is served until someone starts it in LaunchDarkly. Treatments map to the same variations by position; the target flag buckets contexts with its own salt."
+      ],
+      "decisions": [
+        "choice experiment_running (legacy-pricing-bandit) → prestage",
+        "choice maintainer_unknown (flag settings) → unassigned"
+      ],
+      "dependencies": [
+        "flag:legacy-pricing-tiers",
+        "metric:legacy-pricing-pageview",
+        "randomization_unit:organization"
+      ],
+      "desired": {
+        "key": "legacy-pricing-bandit",
+        "ldEnv": "production",
+        "statsigEnv": "production",
+        "name": "Pricing page bandit",
+        "description": "",
+        "type": "mab",
+        "tags": [
+          "migrated-from-launchdarkly",
+          "migration-src-legacy",
+          "pricing"
+        ],
+        "methodology": "bayesian",
+        "hypothesis": "Let the bandit find the pricing page that sells.",
+        "randomizationUnit": "organization",
+        "canReshuffleTraffic": true,
+        "reallocationFrequencyMillis": 3600000,
+        "metrics": [
+          {
+            "key": "legacy-pricing-pageview",
+            "isGroup": false
+          }
+        ],
+        "primary": {
+          "key": "legacy-pricing-pageview",
+          "isGroup": false
+        },
+        "treatments": [
+          {
+            "name": "Standard",
+            "baseline": true,
+            "allocationPercent": "34",
+            "parameters": [
+              {
+                "flagKey": "legacy-pricing-tiers",
+                "variation": 0
+              }
+            ]
+          },
+          {
+            "name": "Plus",
+            "baseline": false,
+            "allocationPercent": "33",
+            "parameters": [
+              {
+                "flagKey": "legacy-pricing-tiers",
+                "variation": 1
+              }
+            ]
+          },
+          {
+            "name": "Enterprise",
+            "baseline": false,
+            "allocationPercent": "33",
+            "parameters": [
+              {
+                "flagKey": "legacy-pricing-tiers",
+                "variation": 2
+              }
+            ]
+          }
+        ],
+        "flags": [
+          {
+            "flagKey": "legacy-pricing-tiers",
+            "rule": {
+              "kind": "fallthrough"
+            },
+            "notInExperimentVariation": 0
+          }
+        ],
+        "sourceStatus": "running"
+      }
+    },
+    {
+      "experiment": "legacy-theme-test",
+      "skipped": "not present in source environment “production” (exists in: test)",
+      "fidelity": "skipped",
+      "notes": [
+        "skipped: Not migrated: not present in source environment “production” (exists in: test)."
+      ],
+      "decisions": [],
+      "dependencies": [],
+      "desired": null
+    }
+  ],
+  "holdouts": [
+    {
+      "holdout": "legacy-q3-holdout",
+      "fidelity": "partial",
+      "notes": [
+        "partial: Running in the source project: created unstarted in the target, bucketing a new population.",
+        "partial: Owner growth@acme-legacy.example is not a LaunchDarkly member: no maintainer (kept in migration.owner). [flag settings]",
+        "full: 1 experiment (legacy-cta-copy-test) joins it when copied. [experiments]"
+      ],
+      "decisions": [
+        "acknowledge holdout_running (legacy-q3-holdout) → acknowledge",
+        "choice maintainer_unknown (flag settings) → unassigned"
+      ],
+      "dependencies": [
+        "metric:legacy-checkout-completed",
+        "metric:legacy-order-value"
+      ],
+      "desired": {
+        "key": "legacy-q3-holdout",
+        "ldEnv": "production",
+        "statsigEnv": "production",
+        "name": "Q3 holdout",
+        "description": "Keeps 10% of users out of every Q3 experiment to measure their combined effect.",
+        "randomizationUnit": "user",
+        "holdoutAmount": "10",
+        "metrics": [
+          {
+            "key": "legacy-checkout-completed",
+            "isGroup": false
+          },
+          {
+            "key": "legacy-order-value",
+            "isGroup": false
+          }
+        ],
+        "primaryMetricKey": "legacy-checkout-completed"
       }
     }
   ]

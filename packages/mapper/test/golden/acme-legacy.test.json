@@ -116,10 +116,10 @@
     {
       "flag": "legacy-cta-copy",
       "flagKind": "multivariate",
-      "fidelity": "partial",
+      "fidelity": "full",
       "notes": [
         "full: Deprecated in the source project. Consider retiring it instead of migrating.",
-        "partial: 1 experiment runs on this flag in the source project (legacy-cta-copy-test); experiments are not migrated (PLAN §11)."
+        "full: 1 experiment runs on this flag in the source project (legacy-cta-copy-test); select it under Experiments to copy its design as a draft (the targeting here is copied as it is)."
       ],
       "decisions": [],
       "dependencies": [],
@@ -661,6 +661,436 @@
           "u-contractor-9"
         ]
       }
+    }
+  ],
+  "metrics": [
+    {
+      "metric": "legacy-cart-conversion",
+      "fidelity": "full",
+      "notes": [
+        "full: Event “checkout_completed” must be sent to the target project by the SDK (track()) for the metric to have data; events already recorded in the source project do not carry over. [event]"
+      ],
+      "decisions": [],
+      "dependencies": [],
+      "desired": {
+        "key": "legacy-cart-conversion",
+        "name": "Cart conversion rate",
+        "description": "",
+        "kind": "custom",
+        "eventKey": "checkout_completed",
+        "isNumeric": false,
+        "successCriteria": "HigherThanBaseline",
+        "tags": [
+          "migrated-from-launchdarkly",
+          "migration-src-legacy",
+          "checkout"
+        ],
+        "analysisUnits": [
+          "user"
+        ],
+        "unitAggregationType": "count_distinct",
+        "denominator": {
+          "eventName": "cart_viewed",
+          "isNumeric": false,
+          "unitAggregationType": "count_distinct"
+        }
+      }
+    },
+    {
+      "metric": "legacy-checkout-completed",
+      "fidelity": "full",
+      "notes": [
+        "full: Event “checkout_completed” must be sent to the target project by the SDK (track()) for the metric to have data; events already recorded in the source project do not carry over. [event]"
+      ],
+      "decisions": [],
+      "dependencies": [
+        "randomization_unit:organization"
+      ],
+      "desired": {
+        "key": "legacy-checkout-completed",
+        "name": "Checkout completed",
+        "description": "A user completed checkout.",
+        "kind": "custom",
+        "eventKey": "checkout_completed",
+        "isNumeric": false,
+        "successCriteria": "HigherThanBaseline",
+        "tags": [
+          "migrated-from-launchdarkly",
+          "migration-src-legacy",
+          "checkout"
+        ],
+        "analysisUnits": [
+          "user",
+          "organization"
+        ],
+        "maintainerId": "mem-legacy-ops",
+        "unitAggregationType": "average",
+        "analysisType": "mean"
+      }
+    },
+    {
+      "metric": "legacy-cta-click",
+      "fidelity": "full",
+      "notes": [
+        "full: Click and page view metrics need the target environment’s client-side SDK key in the pages they watch. [event]"
+      ],
+      "decisions": [],
+      "dependencies": [],
+      "desired": {
+        "key": "legacy-cta-click",
+        "name": "CTA clicked",
+        "description": "",
+        "kind": "click",
+        "isNumeric": false,
+        "successCriteria": "HigherThanBaseline",
+        "tags": [
+          "migrated-from-launchdarkly",
+          "migration-src-legacy",
+          "checkout"
+        ],
+        "analysisUnits": [
+          "user"
+        ],
+        "selector": "#checkout-cta",
+        "urls": [
+          {
+            "kind": "exact",
+            "url": "https://shop.acme-legacy.example/cart"
+          }
+        ]
+      }
+    },
+    {
+      "metric": "legacy-old-signup",
+      "skipped": "archived in the source project",
+      "fidelity": "skipped",
+      "notes": [
+        "skipped: Not migrated: archived in the source project."
+      ],
+      "decisions": [],
+      "dependencies": [],
+      "desired": null
+    },
+    {
+      "metric": "legacy-order-value",
+      "fidelity": "partial",
+      "notes": [
+        "partial: Owner growth@acme-legacy.example is not a LaunchDarkly member: no maintainer (kept in migration.owner). [flag settings]",
+        "full: Event “order_placed” must be sent to the target project by the SDK (track()) for the metric to have data; events already recorded in the source project do not carry over. [event]"
+      ],
+      "decisions": [
+        "choice maintainer_unknown (flag settings) → unassigned"
+      ],
+      "dependencies": [],
+      "desired": {
+        "key": "legacy-order-value",
+        "name": "Order value",
+        "description": "Order total in USD.",
+        "kind": "custom",
+        "eventKey": "order_placed",
+        "isNumeric": true,
+        "successCriteria": "HigherThanBaseline",
+        "tags": [
+          "migrated-from-launchdarkly",
+          "migration-src-legacy",
+          "checkout",
+          "revenue"
+        ],
+        "analysisUnits": [
+          "user"
+        ],
+        "unit": "USD",
+        "unitAggregationType": "sum",
+        "analysisType": "percentile",
+        "percentileValue": 90,
+        "eventDefault": {
+          "disabled": false,
+          "value": 0
+        },
+        "filters": {
+          "type": "eventProperty",
+          "attribute": "currency",
+          "op": "in",
+          "values": [
+            "USD"
+          ],
+          "negate": false
+        },
+        "winsorLowerPercentile": 1,
+        "winsorUpperPercentile": 99,
+        "winsorIncludeImputed": false
+      }
+    },
+    {
+      "metric": "legacy-pricing-pageview",
+      "fidelity": "full",
+      "notes": [
+        "full: Click and page view metrics need the target environment’s client-side SDK key in the pages they watch. [event]"
+      ],
+      "decisions": [],
+      "dependencies": [],
+      "desired": {
+        "key": "legacy-pricing-pageview",
+        "name": "Pricing page viewed",
+        "description": "",
+        "kind": "pageview",
+        "isNumeric": false,
+        "successCriteria": "HigherThanBaseline",
+        "tags": [
+          "migrated-from-launchdarkly",
+          "migration-src-legacy",
+          "pricing"
+        ],
+        "analysisUnits": [
+          "user"
+        ],
+        "urls": [
+          {
+            "kind": "substring",
+            "substring": "/pricing"
+          }
+        ]
+      }
+    },
+    {
+      "metric": "legacy-wh-revenue",
+      "fidelity": "manual",
+      "notes": [
+        "manual: Warehouse-native: set up the data source “legacy-snowflake” in the target project before the run, with the same key. [data source]",
+        "partial: Owner growth@acme-legacy.example is not a LaunchDarkly member: no maintainer (kept in migration.owner). [flag settings]"
+      ],
+      "decisions": [
+        "choice metric_data_source (data source) → same_key",
+        "choice maintainer_unknown (flag settings) → unassigned"
+      ],
+      "dependencies": [],
+      "desired": {
+        "key": "legacy-wh-revenue",
+        "name": "Revenue (warehouse)",
+        "description": "Daily revenue from the Snowflake orders table.",
+        "kind": "custom",
+        "isNumeric": true,
+        "successCriteria": "HigherThanBaseline",
+        "tags": [
+          "migrated-from-launchdarkly",
+          "migration-src-legacy",
+          "revenue",
+          "warehouse"
+        ],
+        "analysisUnits": [
+          "user"
+        ],
+        "unitAggregationType": "sum",
+        "analysisType": "mean",
+        "dataSource": {
+          "key": "legacy-snowflake",
+          "environmentKey": "production"
+        },
+        "valueColumn": "revenue_usd"
+      }
+    }
+  ],
+  "metricGroups": [
+    {
+      "metricGroup": "legacy-checkout-funnel",
+      "fidelity": "partial",
+      "notes": [
+        "partial: Owner growth@acme-legacy.example is not a LaunchDarkly member: no maintainer (kept in migration.owner). [flag settings]",
+        "partial: LaunchDarkly requires a metric group maintainer: the member behind the API token is assigned. [metric group settings]"
+      ],
+      "decisions": [
+        "choice maintainer_unknown (flag settings) → unassigned"
+      ],
+      "dependencies": [
+        "metric:legacy-checkout-completed",
+        "metric:legacy-cta-click"
+      ],
+      "desired": {
+        "key": "legacy-checkout-funnel",
+        "name": "Checkout funnel",
+        "description": "Cart → CTA → order.",
+        "kind": "funnel",
+        "tags": [
+          "migrated-from-launchdarkly",
+          "migration-src-legacy",
+          "checkout"
+        ],
+        "metrics": [
+          {
+            "key": "legacy-cta-click",
+            "nameInGroup": "Clicked CTA"
+          },
+          {
+            "key": "legacy-checkout-completed",
+            "nameInGroup": "Completed checkout"
+          }
+        ]
+      }
+    }
+  ],
+  "layers": [
+    {
+      "layer": "legacy-checkout-layer",
+      "fidelity": "full",
+      "notes": [
+        "full: Reservations (1) are written by the copied experiments as they are created. [reservations]"
+      ],
+      "decisions": [],
+      "dependencies": [],
+      "desired": {
+        "key": "legacy-checkout-layer",
+        "name": "Checkout layer",
+        "description": "Mutually exclusive checkout experiments."
+      }
+    }
+  ],
+  "experiments": [
+    {
+      "experiment": "legacy-checkout-redesign-test",
+      "skipped": "not present in source environment “test” (exists in: production)",
+      "fidelity": "skipped",
+      "notes": [
+        "skipped: Not migrated: not present in source environment “test” (exists in: production)."
+      ],
+      "decisions": [],
+      "dependencies": [],
+      "desired": null
+    },
+    {
+      "experiment": "legacy-cta-copy-test",
+      "skipped": "not present in source environment “test” (exists in: production)",
+      "fidelity": "skipped",
+      "notes": [
+        "skipped: Not migrated: not present in source environment “test” (exists in: production)."
+      ],
+      "decisions": [],
+      "dependencies": [],
+      "desired": null
+    },
+    {
+      "experiment": "legacy-old-banner-test",
+      "skipped": "archived in the source project",
+      "fidelity": "skipped",
+      "notes": [
+        "skipped: Not migrated: archived in the source project."
+      ],
+      "decisions": [],
+      "dependencies": [],
+      "desired": null
+    },
+    {
+      "experiment": "legacy-pricing-bandit",
+      "skipped": "not present in source environment “test” (exists in: production)",
+      "fidelity": "skipped",
+      "notes": [
+        "skipped: Not migrated: not present in source environment “test” (exists in: production)."
+      ],
+      "decisions": [],
+      "dependencies": [],
+      "desired": null
+    },
+    {
+      "experiment": "legacy-theme-test",
+      "fidelity": "full",
+      "notes": [
+        "full: Not started in the source project: the draft is copied as it is.",
+        "full: Created as a draft on the migrated flag: nothing is served until someone starts it in LaunchDarkly. Treatments map to the same variations by position; the target flag buckets contexts with its own salt."
+      ],
+      "decisions": [],
+      "dependencies": [
+        "flag:legacy-theme",
+        "metric:legacy-checkout-completed",
+        "metric:legacy-order-value"
+      ],
+      "desired": {
+        "key": "legacy-theme-test",
+        "ldEnv": "test",
+        "statsigEnv": "test",
+        "name": "Dark theme uplift",
+        "description": "Does the dark theme keep people in checkout longer?",
+        "type": "experiment",
+        "tags": [
+          "migrated-from-launchdarkly",
+          "migration-src-legacy",
+          "ui"
+        ],
+        "maintainerId": "mem-legacy-ops",
+        "methodology": "frequentist",
+        "analysisConfig": {
+          "significanceThreshold": "0.05",
+          "testDirection": "two-sided",
+          "multipleComparisonCorrectionMethod": "bonferroni",
+          "multipleComparisonCorrectionScope": "variations",
+          "sequentialTestingEnabled": true
+        },
+        "hypothesis": "Dark mode users complete checkout more often.",
+        "randomizationUnit": "user",
+        "canReshuffleTraffic": true,
+        "metrics": [
+          {
+            "key": "legacy-checkout-completed",
+            "isGroup": false
+          },
+          {
+            "key": "legacy-order-value",
+            "isGroup": false
+          }
+        ],
+        "primary": {
+          "key": "legacy-checkout-completed",
+          "isGroup": false
+        },
+        "treatments": [
+          {
+            "name": "Light",
+            "baseline": true,
+            "allocationPercent": "50",
+            "parameters": [
+              {
+                "flagKey": "legacy-theme",
+                "variation": 0
+              }
+            ]
+          },
+          {
+            "name": "Dark",
+            "baseline": false,
+            "allocationPercent": "50",
+            "parameters": [
+              {
+                "flagKey": "legacy-theme",
+                "variation": 1
+              }
+            ]
+          }
+        ],
+        "flags": [
+          {
+            "flagKey": "legacy-theme",
+            "rule": {
+              "kind": "rule",
+              "index": 0,
+              "description": "Dark mode opt-in",
+              "sourceRuleId": "rule-dark"
+            },
+            "notInExperimentVariation": 0
+          }
+        ],
+        "sourceStatus": "not_started"
+      }
+    }
+  ],
+  "holdouts": [
+    {
+      "holdout": "legacy-q3-holdout",
+      "skipped": "not present in source environment “test” (exists in: production)",
+      "fidelity": "skipped",
+      "notes": [
+        "skipped: Not migrated: not present in source environment “test” (exists in: production)."
+      ],
+      "decisions": [],
+      "dependencies": [],
+      "desired": null
     }
   ]
 }

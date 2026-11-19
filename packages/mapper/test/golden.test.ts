@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { CanonicalSnapshot } from '@sslm/canonical';
-import { mapAutotune, mapConfig, mapGate, mapNeutralFlag, mapNeutralSegment, mapPrompt, mapSegment } from '../src/index.ts';
+import { mapAutotune, mapConfig, mapGate, mapNeutralExperiment, mapNeutralFlag, mapNeutralHoldout, mapNeutralLayer, mapNeutralMetric, mapNeutralMetricGroup, mapNeutralSegment, mapPrompt, mapSegment } from '../src/index.ts';
 import { acmeSnapshot, CAPS, DIRECTORY, hogSnapshot, legacySnapshot, NOW, profileFor, server } from './fixtures.ts';
 
 beforeAll(() => server.listen({ onUnhandledFrame: 'error' }));
@@ -147,7 +147,22 @@ describe('mapper golden files', () => {
         desired: r.desired,
       };
     });
-    await expect(JSON.stringify({ flags, segments }, null, 2) + '\n').toMatchFileSnapshot(`golden/acme-legacy.${source}.json`);
+    // Experimentation (PLAN §20.5): project-level metrics, metric groups and layers once; experiments and holdouts per environment.
+    const summarize = (r: { skipped?: string; fidelity: { overall: string; notes: { fidelity: string; message: string; location?: string }[] }; unresolved: { severity: string; type: string; subject: { location?: string; id: string }; recommended?: string }[]; dependencies: { kind: string; key: string }[]; desired: unknown }) => ({
+      ...(r.skipped ? { skipped: r.skipped } : {}),
+      fidelity: r.fidelity.overall,
+      notes: r.fidelity.notes.map((n) => `${n.fidelity}: ${n.message}${n.location ? ` [${n.location}]` : ''}`),
+      decisions: r.unresolved.map((d) => `${d.severity} ${d.type} (${d.subject.location ?? d.subject.id}) → ${d.recommended ?? 'no default'}`),
+      dependencies: r.dependencies.map((d) => `${d.kind}:${d.key}`),
+      desired: r.desired,
+    });
+    const projectArgs = { ...args, env: { statsig: '', ld: '' } };
+    const metrics = (snap.neutral!.metrics ?? []).map((m) => ({ metric: m.key, ...summarize(mapNeutralMetric({ ...projectArgs, entity: m })) }));
+    const metricGroups = (snap.neutral!.metricGroups ?? []).map((g) => ({ metricGroup: g.key, ...summarize(mapNeutralMetricGroup({ ...projectArgs, entity: g })) }));
+    const layers = (snap.neutral!.layers ?? []).map((l) => ({ layer: l.key, ...summarize(mapNeutralLayer({ ...projectArgs, entity: l })) }));
+    const experiments = (snap.neutral!.experiments ?? []).map((x) => ({ experiment: x.key, ...summarize(mapNeutralExperiment({ ...args, entity: x })) }));
+    const holdouts = (snap.neutral!.holdouts ?? []).map((h) => ({ holdout: h.key, ...summarize(mapNeutralHoldout({ ...args, entity: h })) }));
+    await expect(JSON.stringify({ flags, segments, metrics, metricGroups, layers, experiments, holdouts }, null, 2) + '\n').toMatchFileSnapshot(`golden/acme-legacy.${source}.json`);
   });
 
   /**

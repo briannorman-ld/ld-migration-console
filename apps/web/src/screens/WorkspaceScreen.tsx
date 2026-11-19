@@ -322,7 +322,16 @@ export function WorkspaceScreen({
   const warningCount = visibleSnaps.reduce((n, s) => n + s.warnings.length, 0);
   // Resources of LD-source projects (PLAN §20) live in the snapshot's neutral block, not in the StatSig kinds.
   const neutralCounts = useMemo(
-    () => visibleSnaps.reduce((acc, s) => ({ flags: acc.flags + (s.neutral?.flags.length ?? 0), segments: acc.segments + (s.neutral?.segments.length ?? 0) }), { flags: 0, segments: 0 }),
+    () =>
+      visibleSnaps.reduce(
+        (acc, s) => ({
+          flag: acc.flag + (s.neutral?.flags.length ?? 0),
+          segment: acc.segment + (s.neutral?.segments.length ?? 0),
+          metric: acc.metric + (s.neutral?.metrics?.length ?? 0) + (s.neutral?.metricGroups?.length ?? 0),
+          experiment: acc.experiment + (s.neutral?.experiments?.length ?? 0) + (s.neutral?.holdouts?.length ?? 0) + (s.neutral?.layers?.length ?? 0),
+        }),
+        { flag: 0, segment: 0, metric: 0, experiment: 0 },
+      ),
     [visibleSnaps],
   );
   // Which source kinds feed the neutral block (LD projects, PostHog projects or payloads): the
@@ -736,19 +745,20 @@ export function WorkspaceScreen({
             <>
               <SectionTitle>{neutralTitle}</SectionTitle>
               <ul>
-                {(["flag", "segment"] as const).map((k) => (
-                  <li key={k}>
-                    <NavItem
-                      active={view.kind === "ld-source" && view.resource === k}
-                      onClick={() => setView({ kind: "ld-source", resource: k })}
-                    >
-                      <span>{k === "flag" ? "Flags" : "Segments"}</span>
-                      <span className="text-fg-muted tabular-nums">
-                        {k === "flag" ? neutralCounts.flags : neutralCounts.segments}
-                      </span>
-                    </NavItem>
-                  </li>
-                ))}
+                {(["flag", "segment", "metric", "experiment"] as const)
+                  // Metrics and experiments are read from LaunchDarkly sources only (PLAN §20.5); the entries show once a source has some.
+                  .filter((k) => k === "flag" || k === "segment" || neutralCounts[k] > 0)
+                  .map((k) => (
+                    <li key={k}>
+                      <NavItem
+                        active={view.kind === "ld-source" && view.resource === k}
+                        onClick={() => setView({ kind: "ld-source", resource: k })}
+                      >
+                        <span>{k === "flag" ? "Flags" : k === "segment" ? "Segments" : k === "metric" ? "Metrics" : "Experiments"}</span>
+                        <span className="text-fg-muted tabular-nums">{neutralCounts[k]}</span>
+                      </NavItem>
+                    </li>
+                  ))}
               </ul>
             </>
           )}

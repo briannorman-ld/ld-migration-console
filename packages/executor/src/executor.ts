@@ -14,9 +14,9 @@
  * segments filled by a CSV import. The first write a plan refuses updates the capability matrix.
  */
 import { footer as provenanceFooter, ownValue, parseFooter as parseProvenanceFooter, PROP, readSync, SOURCE_KIND_LABEL, stableStringify, withFooter as withProvenanceFooter, type FooterInput, CONSOLE_CREATED_MARKER } from '@sslm/canonical';
-import { LdAuthError, LdSchemaError, LdWriteError, type JsonPatchOp, type LdAiConfig, type LdClient, type LdExperiment, type LdExperimentationSettings, type LdFlag, type LdFlagConfig, type LdMetric, type LdSegment, type SemanticPatch } from '@sslm/ld-client';
+import { LdAuthError, LdSchemaError, LdWriteError, type JsonPatchOp, type LdAiConfig, type LdClient, type LdExperiment, type LdExperimentationSettings, type LdFlag, type LdFlagConfig, type LdHoldout, type LdLayer, type LdMetric, type LdMetricGroup, type LdSegment, type SemanticPatch } from '@sslm/ld-client';
 import { flagOwner, ownsSegment, syncPropertyKey, type PlanStep, ldChange } from '@sslm/planner';
-import { FLAG_SIZE_BUDGET, FLAG_SIZE_LIMIT, SOURCE_KIND, type DesiredBandit, type DesiredFlagEnv, type DesiredRule, type DesiredSegment, type VariationOrRollout } from '@sslm/mapper';
+import { FLAG_SIZE_BUDGET, FLAG_SIZE_LIMIT, SOURCE_KIND, type DesiredBandit, type DesiredExperiment, type DesiredFlagEnv, type DesiredMetric, type DesiredRule, type DesiredSegment, type VariationOrRollout } from '@sslm/mapper';
 import type { MigrationSourceKind } from '@sslm/canonical';
 
 export type LdWriter = Pick<
@@ -43,6 +43,17 @@ export type LdWriter = Pick<
   | 'patchExperimentSemantic'
   | 'getExperimentationSettings'
   | 'putExperimentationSettings'
+  | 'callerIdentity'
+  | 'getMetricGroup'
+  | 'createMetricGroup'
+  | 'patchMetricGroupJson'
+  | 'deleteMetricGroup'
+  | 'getHoldout'
+  | 'createHoldout'
+  | 'patchHoldoutSemantic'
+  | 'listLayers'
+  | 'createLayer'
+  | 'patchLayerSemantic'
   | 'createSegmentImport'
   | 'getSegmentMembership'
   | 'createFlagApprovalRequest'
@@ -89,7 +100,7 @@ export interface StepRecord {
   /** A context kind that already existed, archived, and this run unarchived: undo archives it again. */
   unarchived?: boolean;
   /** State before this run touched it: undo restores it. Contains customer config; stays local. */
-  preImage?: LdFlag | LdSegment | LdMetric | LdExperiment | LdExperimentationSettings;
+  preImage?: LdFlag | LdSegment | LdMetric | LdExperiment | LdExperimentationSettings | LdMetricGroup | LdHoldout | LdLayer;
   /**
    * Set by the journal (@sslm/store) on a record it lists without its pre-image, which it keeps
    * apart; reading the run back by id puts the pre-image in place.
@@ -201,6 +212,14 @@ export function resourceLane(s: PlanStep): string {
       return `context_kind:${s.key}`;
     case 'ensure_randomization_unit':
       return 'experimentation_settings';
+    case 'upsert_metric_group':
+      return `metric_group:${s.key}`;
+    case 'create_experiment':
+      return `experiment:${s.ldEnv}:${s.key}`;
+    case 'upsert_holdout':
+      return `holdout:${s.ldEnv}:${s.key}`;
+    case 'ensure_layer':
+      return `layer:${s.key}`;
   }
 }
 
@@ -247,6 +266,14 @@ export function stepLabel(s: PlanStep): string {
       return `Bandit “${s.key}” in ${s.ldEnv} (draft)`;
     case 'upsert_ai_config':
       return `AI Config “${s.key}” (project)`;
+    case 'upsert_metric_group':
+      return `Metric group “${s.key}” (project)`;
+    case 'create_experiment':
+      return `Experiment “${s.key}” in ${s.ldEnv} (draft)`;
+    case 'upsert_holdout':
+      return `Holdout “${s.key}” in ${s.ldEnv}`;
+    case 'ensure_layer':
+      return `Layer “${s.key}” (project)`;
   }
 }
 
@@ -638,7 +665,7 @@ export class Executor {
   private comment(run: RunRecord, s: PlanStep): string {
     const by = this.opts.actor ? ` by ${this.opts.actor}` : '';
     const ref = `run #${run.id.slice(0, 8)}`;
-    if (s.op === 'update_flag_env' || s.op === 'upsert_segment' || s.op === 'upsert_metric' || s.op === 'create_bandit' || s.op === 'upsert_ai_config') {
+    if (s.op === 'update_flag_env' || s.op === 'upsert_segment' || s.op === 'upsert_metric' || s.op === 'create_bandit' || s.op === 'upsert_ai_config' || s.op === 'upsert_metric_group' || s.op === 'create_experiment' || s.op === 'upsert_holdout' || s.op === 'ensure_layer') {
       const p = s.provenance;
       return `Synced from ${SOURCE_KIND_LABEL[p.sourceKind ?? SOURCE_KIND]} ${p.statsigType} ${p.statsigId}${p.statsigVersion !== undefined ? ` v${p.statsigVersion}` : ''} (source ${p.sourceAlias})${by}, ${ref}`;
     }
@@ -668,6 +695,14 @@ export class Executor {
         return this.bandit(run, rec, s);
       case 'upsert_ai_config':
         return this.aiConfig(run, rec, s);
+      case 'upsert_metric_group':
+        return this.metricGroup(run, rec, s);
+      case 'create_experiment':
+        return this.experiment(run, rec, s);
+      case 'upsert_holdout':
+        return this.holdout(run, rec, s);
+      case 'ensure_layer':
+        return this.layer(run, rec, s);
     }
   }
 
@@ -733,8 +768,8 @@ export class Executor {
       await this.keepPreImage(run, rec, current);
     }
     if (!current) {
-      if (run.dryRun) return `Would create custom metric “${s.key}” on event “${d.eventKey}”.`;
-      const body = { key: d.key, name: d.name, description: d.description, kind: d.kind, eventKey: d.eventKey, isNumeric: d.isNumeric, successCriteria: d.successCriteria, tags: d.tags, analysisUnits: d.analysisUnits };
+      if (run.dryRun) return `Would create ${metricSummary(d)}.`;
+      const body = metricBody(d);
       try {
         current = await this.c.createMetric(this.p, body, this.signal);
         rec.created = true;
@@ -746,13 +781,26 @@ export class Executor {
         const same = current.kind === 'custom' && current.eventKey === d.eventKey;
         await this.foundAfterConflict(run, rec, { adopt: s.adopt || same }, ownsSegment({ tags: current.tags ?? [] }, s.provenance.sourceAlias), current, `Metric “${s.key}” appeared since planning and wasn't created by this app. Re-plan to decide.`);
       }
-      if (rec.created) return `Created metric “${s.key}” on event “${d.eventKey}”.`;
+      if (rec.created) return `Created ${metricSummary(d)}.`;
     }
-    // Same event under the same key: the metric already is what the bandit needs. Only tag it.
+    // An existing metric is brought to the desired definition field by field; what LaunchDarkly
+    // keeps immutable after create (kind, isNumeric, data source) is left as is.
     const ops: JsonPatchOp[] = [];
     const tags = union(current.tags ?? [], d.tags);
     if (tags.length !== (current.tags ?? []).length) ops.push({ op: 'replace', path: '/tags', value: tags });
-    if (current.eventKey !== d.eventKey) ops.push({ op: 'replace', path: '/eventKey', value: d.eventKey });
+    if (d.eventKey && current.eventKey !== d.eventKey) ops.push({ op: 'replace', path: '/eventKey', value: d.eventKey });
+    if (s.provenance.sourceKind && s.provenance.sourceKind !== 'statsig') {
+      // An LD source copies the whole definition (PLAN §20.5); a StatSig autotune only names the event.
+      if ((current.name ?? '') !== d.name) ops.push({ op: 'add', path: '/name', value: d.name });
+      if ((current.description ?? '') !== d.description) ops.push({ op: 'add', path: '/description', value: d.description });
+      if ((current.successCriteria ?? 'HigherThanBaseline') !== d.successCriteria) ops.push({ op: 'add', path: '/successCriteria', value: d.successCriteria });
+      if (stableStringify([...(current.analysisUnits ?? current.randomizationUnits ?? ['user'])].sort()) !== stableStringify([...d.analysisUnits].sort())) ops.push({ op: 'add', path: '/analysisUnits', value: d.analysisUnits });
+      for (const k of ['unit', 'selector', 'urls', 'unitAggregationType', 'analysisType', 'percentileValue', 'eventDefault', 'filters', 'winsorLowerPercentile', 'winsorUpperPercentile', 'winsorIncludeImputed', 'unitAggregationField', 'valueColumn', 'traceQuery', 'traceValueLocation'] as const) {
+        const want = d[k];
+        if (want !== undefined && stableStringify((current as Record<string, unknown>)[k] ?? null) !== stableStringify(want)) ops.push({ op: 'add', path: `/${k}`, value: want });
+      }
+      if (d.maintainerId && current.maintainerId !== d.maintainerId) ops.push({ op: 'add', path: '/maintainerId', value: d.maintainerId });
+    }
     if (ops.length === 0) return `Metric “${s.key}” already up to date.`;
     if (run.dryRun) return `Would update metric “${s.key}” (${ops.map((o) => o.path.slice(1)).join(', ')}).`;
     await this.c.patchMetricJson(this.p, s.key, ops, { comment: this.comment(run, s), signal: this.signal });
@@ -793,6 +841,202 @@ export class Executor {
     if (run.dryRun) return `Would replace the draft of bandit “${s.key}” in ${s.ldEnv}: ${banditSummary(d)}.`;
     await this.c.createIteration(this.p, s.ldEnv, s.key, iteration, this.signal);
     return `Replaced the draft of bandit “${s.key}” in ${s.ldEnv}: ${banditSummary(d)}.`;
+  }
+
+  // --- LD-source experimentation (PLAN §20.5) --------------------------------------------------
+
+  private callerMember?: Promise<string | undefined>;
+  /** The member behind the API token: LaunchDarkly requires a metric group maintainer, and the source's may not exist here. */
+  private memberOfToken(): Promise<string | undefined> {
+    return (this.callerMember ??= this.c.callerIdentity(this.signal).then((i) => i.memberId ?? undefined).catch(() => undefined));
+  }
+
+  private async metricGroup(run: RunRecord, rec: StepRecord, s: Extract<PlanStep, { op: 'upsert_metric_group' }>): Promise<string> {
+    const d = s.desired;
+    let current = this.mustRead(rec, s) ? await this.c.getMetricGroup(this.p, s.key, this.signal) : null;
+    if (current && !rec.created && rec.preImage === undefined) {
+      if (!s.adopt && !ownsSegment({ key: current.key, tags: current.tags ?? [] }, s.provenance.sourceAlias)) throw new Error(`Metric group “${s.key}” appeared since planning and wasn't created by this app. Re-plan to decide.`);
+      await this.keepPreImage(run, rec, current);
+    }
+    const description = withFooter(d.description, footer(s.provenance, this.now()));
+    const summary = `${d.kind} of ${d.metrics.length} metric${d.metrics.length === 1 ? '' : 's'} (${d.metrics.map((m) => m.key).join(', ')})`;
+    if (!current) {
+      if (run.dryRun) return `Would create metric group “${s.key}”: ${summary}.`;
+      const maintainerId = d.maintainerId ?? (await this.memberOfToken());
+      if (!maintainerId) throw new Error(`Metric group “${s.key}” needs a maintainer and the token's member could not be read (service tokens have none): pick a member on the People step.`);
+      const body = { key: d.key, name: d.name, description, kind: d.kind, maintainerId, tags: d.tags, metrics: d.metrics };
+      try {
+        current = await this.c.createMetricGroup(this.p, body, this.signal);
+        rec.created = true;
+      } catch (e) {
+        if (!(e instanceof LdWriteError && e.status === 409)) throw e;
+        current = await this.c.getMetricGroup(this.p, s.key, this.signal);
+        if (!current) throw e;
+        await this.foundAfterConflict(run, rec, s, ownsSegment({ key: current.key, tags: current.tags ?? [] }, s.provenance.sourceAlias), current, `Metric group “${s.key}” appeared since planning and wasn't created by this app. Re-plan to decide.`);
+      }
+      if (rec.created) return `Created metric group “${s.key}”: ${summary}${d.maintainerId ? '' : ' (maintainer: the member behind the token)'}.`;
+    }
+    const ops: JsonPatchOp[] = [];
+    if (current.name !== d.name) ops.push({ op: 'replace', path: '/name', value: d.name });
+    if ((current.description ?? '') !== description) ops.push({ op: 'add', path: '/description', value: description });
+    const tags = union(current.tags ?? [], d.tags);
+    if (tags.length !== (current.tags ?? []).length) ops.push({ op: 'replace', path: '/tags', value: tags });
+    const have = (current.metrics ?? []).map((m) => `${m.key}|${m.nameInGroup ?? ''}`).join(',');
+    if (have !== d.metrics.map((m) => `${m.key}|${m.nameInGroup}`).join(',')) ops.push({ op: 'replace', path: '/metrics', value: d.metrics });
+    if (d.maintainerId && current.maintainer?.key !== d.maintainerId) ops.push({ op: 'add', path: '/maintainerId', value: d.maintainerId });
+    if (ops.length === 0) return `Metric group “${s.key}” already up to date.`;
+    if (run.dryRun) return `Would update metric group “${s.key}” (${ops.map((o) => o.path.slice(1)).join(', ')}).`;
+    await this.c.patchMetricGroupJson(this.p, s.key, ops, { comment: this.comment(run, s), signal: this.signal });
+    return `Updated metric group “${s.key}” (${ops.map((o) => o.path.slice(1)).join(', ')}).`;
+  }
+
+  private async experiment(run: RunRecord, rec: StepRecord, s: Extract<PlanStep, { op: 'create_experiment' }>): Promise<string> {
+    const d = s.desired;
+    const would = `Would create experiment “${s.key}” in ${s.ldEnv} as a draft: ${experimentSummary(d)}.`;
+    // The flags the iteration runs on, as this run left them (the targeting step wrote the rules whose ids the iteration needs).
+    const flags = new Map<string, LdFlag>();
+    for (const key of new Set([...d.flags.map((f) => f.flagKey), ...d.treatments.flatMap((t) => t.parameters.map((p) => p.flagKey))])) {
+      const flag = this.flags.get(key) ?? (await this.c.getFlag(this.p, key, this.signal));
+      if (!flag) {
+        if (run.dryRun) return would;
+        throw new Error(`Flag “${key}” doesn't exist (its targeting step didn't run).`);
+      }
+      flags.set(key, flag);
+    }
+    let holdoutId: string | undefined;
+    if (d.holdoutKey) {
+      const h = await this.c.getHoldout(this.p, s.ldEnv, d.holdoutKey, this.signal);
+      if (!h?._id) {
+        if (run.dryRun) return would;
+        throw new Error(`Holdout “${d.holdoutKey}” doesn't exist in ${s.ldEnv} (its step didn't run).`);
+      }
+      holdoutId = h._id;
+    }
+    const iteration = experimentIteration(d, flags, s.ldEnv);
+    let current = this.mustRead(rec, s) ? await this.c.getExperiment(this.p, s.ldEnv, s.key, this.signal) : null;
+    if (current && !rec.created && rec.preImage === undefined) {
+      if (!s.adopt && !ownsSegment({ tags: current.tags ?? [] }, s.provenance.sourceAlias)) throw new Error(`Experiment “${s.key}” appeared in ${s.ldEnv} since planning and wasn't created by this app. Re-plan to decide.`);
+      await this.keepPreImage(run, rec, current);
+    }
+    let outcome: string;
+    if (!current) {
+      if (run.dryRun) return would;
+      const body = {
+        key: d.key,
+        name: d.name,
+        description: withFooter(d.description, footer(s.provenance, this.now())),
+        type: d.type,
+        tags: d.tags,
+        ...(d.maintainerId ? { maintainerId: d.maintainerId } : {}),
+        ...(d.methodology ? { methodology: d.methodology } : {}),
+        ...(d.analysisConfig ? { analysisConfig: d.analysisConfig } : {}),
+        ...(holdoutId ? { holdoutId } : {}),
+        iteration,
+      };
+      try {
+        current = await this.c.createExperiment(this.p, s.ldEnv, body, this.signal);
+        rec.created = true;
+      } catch (e) {
+        if (!(e instanceof LdWriteError && e.status === 409)) throw e;
+        current = await this.c.getExperiment(this.p, s.ldEnv, s.key, this.signal);
+        if (!current) throw e;
+        await this.foundAfterConflict(run, rec, s, ownsSegment({ tags: current.tags ?? [] }, s.provenance.sourceAlias), current, `Experiment “${s.key}” appeared in ${s.ldEnv} since planning and wasn't created by this app. Re-plan to decide.`);
+      }
+      outcome = rec.created ? `Created experiment “${s.key}” in ${s.ldEnv} as a draft: ${experimentSummary(d)}` : '';
+    } else outcome = '';
+    if (!rec.created) {
+      // An iteration that ran (or runs) is the customer's experiment history: never replaced.
+      const status = current.draftIteration?.status ?? current.currentIteration?.status;
+      if (status && status !== 'not_started') return `Experiment “${s.key}” in ${s.ldEnv} has ${status === 'running' ? 'a running' : 'a finished'} iteration; left as is.`;
+      if (run.dryRun) return `Would replace the draft of experiment “${s.key}” in ${s.ldEnv}: ${experimentSummary(d)}.`;
+      await this.c.createIteration(this.p, s.ldEnv, s.key, iteration, this.signal);
+      outcome = `Replaced the draft of experiment “${s.key}” in ${s.ldEnv}: ${experimentSummary(d)}`;
+    }
+    if (d.layer) {
+      // Reservations live on the layer (PATCH updateExperimentReservation); 0% is allowed until the iteration starts.
+      await this.c.patchLayerSemantic(this.p, d.layer.key, { environmentKey: s.ldEnv, comment: this.comment(run, s), instructions: [{ kind: 'updateExperimentReservation', experimentKey: d.key, reservationPercent: d.layer.reservationPercent }] }, this.signal);
+      outcome += `; reserved ${d.layer.reservationPercent}% of layer “${d.layer.key}”`;
+    }
+    return `${outcome}.`;
+  }
+
+  private async holdout(run: RunRecord, rec: StepRecord, s: Extract<PlanStep, { op: 'upsert_holdout' }>): Promise<string> {
+    const d = s.desired;
+    const owned = (h: LdHoldout) => parseFooter(h.description ?? '')?.src === s.provenance.sourceAlias;
+    let current = this.mustRead(rec, s) ? await this.c.getHoldout(this.p, s.ldEnv, s.key, this.signal) : null;
+    if (current && !rec.created && rec.preImage === undefined) {
+      if (!s.adopt && !owned(current)) throw new Error(`Holdout “${s.key}” appeared in ${s.ldEnv} since planning and wasn't created by this app. Re-plan to decide.`);
+      await this.keepPreImage(run, rec, current);
+    }
+    const description = withFooter(d.description, footer(s.provenance, this.now()));
+    const summary = `${d.holdoutAmount}% of ${d.randomizationUnit} contexts held out, ${d.metrics.length} metric${d.metrics.length === 1 ? '' : 's'}`;
+    if (!current) {
+      if (run.dryRun) return `Would create holdout “${s.key}” in ${s.ldEnv} (not started): ${summary}.`;
+      // HoldoutPostRequest spells its fields in lower case (reference/launchdarkly/openapi.json).
+      const body = {
+        key: d.key,
+        name: d.name,
+        description,
+        randomizationunit: d.randomizationUnit,
+        ...(d.attributes?.length ? { attributes: d.attributes } : {}),
+        holdoutamount: d.holdoutAmount,
+        ...(d.primaryMetricKey ? { primarymetrickey: d.primaryMetricKey } : {}),
+        metrics: d.metrics.map((m) => ({ key: m.key, isGroup: m.isGroup, ...(m.analysisUnit ? { analysisUnit: m.analysisUnit } : {}) })),
+        ...(d.prerequisiteFlagKey ? { prerequisiteflagkey: d.prerequisiteFlagKey } : {}),
+        ...(d.maintainerId ? { maintainerId: d.maintainerId } : {}),
+      };
+      try {
+        current = await this.c.createHoldout(this.p, s.ldEnv, body, this.signal);
+        rec.created = true;
+      } catch (e) {
+        if (!(e instanceof LdWriteError && e.status === 409)) throw e;
+        current = await this.c.getHoldout(this.p, s.ldEnv, s.key, this.signal);
+        if (!current) throw e;
+        await this.foundAfterConflict(run, rec, s, owned(current), current, `Holdout “${s.key}” appeared in ${s.ldEnv} since planning and wasn't created by this app. Re-plan to decide.`);
+      }
+      if (rec.created) return `Created holdout “${s.key}” in ${s.ldEnv} (not started): ${summary}.`;
+    }
+    // Amount, metrics and randomization unit are fixed once a holdout exists; the name and description follow the source.
+    const instructions: SemanticPatch['instructions'] = [];
+    if ((current.name ?? current.baseExperiment?.name) !== d.name) instructions.push({ kind: 'updateName', value: d.name });
+    if ((current.description ?? current.baseExperiment?.description ?? '') !== description) instructions.push({ kind: 'updateDescription', value: description });
+    if (instructions.length === 0) return `Holdout “${s.key}” in ${s.ldEnv} already up to date (${current.status ?? 'created'}).`;
+    if (run.dryRun) return `Would update holdout “${s.key}” in ${s.ldEnv} (${instructions.map((i) => i.kind).join(', ')}).`;
+    await this.c.patchHoldoutSemantic(this.p, s.ldEnv, s.key, { comment: this.comment(run, s), instructions }, this.signal);
+    return `Updated holdout “${s.key}” in ${s.ldEnv} (${instructions.map((i) => i.kind).join(', ')}).`;
+  }
+
+  private async layer(run: RunRecord, rec: StepRecord, s: Extract<PlanStep, { op: 'ensure_layer' }>): Promise<string> {
+    const d = s.desired;
+    const owned = (l: LdLayer) => parseFooter(l.description ?? '')?.src === s.provenance.sourceAlias;
+    // Layers have no GET by key: the listing is the read.
+    const find = async () => (await this.c.listLayers(this.p, this.signal)).find((l) => l.key === s.key) ?? null;
+    let current = this.mustRead(rec, s) ? await find() : null;
+    if (current && !rec.created && rec.preImage === undefined) {
+      if (!s.adopt && !owned(current)) throw new Error(`Layer “${s.key}” appeared since planning and wasn't created by this app. Re-plan to decide.`);
+      await this.keepPreImage(run, rec, current);
+    }
+    const description = withFooter(d.description, footer(s.provenance, this.now()));
+    if (!current) {
+      if (run.dryRun) return `Would create layer “${s.key}” (reservations follow with its experiments).`;
+      try {
+        current = await this.c.createLayer(this.p, { key: d.key, name: d.name, description }, this.signal);
+        rec.created = true;
+      } catch (e) {
+        if (!(e instanceof LdWriteError && e.status === 409)) throw e;
+        current = await find();
+        if (!current) throw e;
+        await this.foundAfterConflict(run, rec, s, owned(current), current, `Layer “${s.key}” appeared since planning and wasn't created by this app. Re-plan to decide.`);
+      }
+      if (rec.created) return `Created layer “${s.key}”; its experiments reserve their share as they are created.`;
+    }
+    const instructions: SemanticPatch['instructions'] = [];
+    if ((current.name ?? '') !== d.name) instructions.push({ kind: 'updateName', name: d.name });
+    if ((current.description ?? '') !== description) instructions.push({ kind: 'updateDescription', description });
+    if (instructions.length === 0) return `Layer “${s.key}” already up to date.`;
+    if (run.dryRun) return `Would update layer “${s.key}” (${instructions.map((i) => i.kind).join(', ')}).`;
+    await this.c.patchLayerSemantic(this.p, s.key, { comment: this.comment(run, s), instructions }, this.signal);
+    return `Updated layer “${s.key}” (${instructions.map((i) => i.kind).join(', ')}).`;
   }
 
   private async contextKind(run: RunRecord, rec: StepRecord, s: Extract<PlanStep, { op: 'ensure_context_kind' }>): Promise<string> {
@@ -1317,6 +1561,47 @@ export class Executor {
         if (rec.created) await this.c.patchExperimentSemantic(this.p, s.ldEnv, s.key, { comment, instructions: [{ kind: 'archiveExperiment' }] }, this.signal);
         return;
       }
+      case 'upsert_metric_group': {
+        if (rec.created) {
+          await this.c.deleteMetricGroup(this.p, s.key, this.signal).catch((e) => {
+            if (!(e instanceof LdWriteError && e.status === 404)) throw e;
+          });
+          return;
+        }
+        const pre = rec.preImage as LdMetricGroup | undefined;
+        if (!pre) return;
+        await this.c.patchMetricGroupJson(this.p, s.key, [{ op: 'replace', path: '/name', value: pre.name }, { op: 'add', path: '/description', value: pre.description ?? '' }, { op: 'replace', path: '/tags', value: pre.tags ?? [] }, { op: 'replace', path: '/metrics', value: (pre.metrics ?? []).map((m) => ({ key: m.key, nameInGroup: m.nameInGroup ?? m.name ?? m.key })) }], { comment, signal: this.signal });
+        return;
+      }
+      case 'create_experiment': {
+        // Experiments can't be deleted: a draft this run created is archived (and taken out of its
+        // layer first). An adopted experiment keeps the replaced draft (LD has no way to restore an iteration).
+        if (s.desired.layer) await this.c.patchLayerSemantic(this.p, s.desired.layer.key, { environmentKey: s.ldEnv, comment, instructions: [{ kind: 'removeExperiment', experimentKey: s.key }] }, this.signal).catch(() => undefined);
+        if (rec.created) await this.c.patchExperimentSemantic(this.p, s.ldEnv, s.key, { comment, instructions: [{ kind: 'archiveExperiment' }] }, this.signal);
+        return;
+      }
+      case 'upsert_holdout': {
+        // Holdouts can't be deleted, and ending one is not an undo: a holdout this run created stays, unstarted.
+        if (rec.created) {
+          rec.message = `left holdout “${s.key}” in ${s.ldEnv} in place (LaunchDarkly has no delete for holdouts; it was never started)`;
+          return;
+        }
+        const pre = rec.preImage as LdHoldout | undefined;
+        if (!pre) return;
+        await this.c.patchHoldoutSemantic(this.p, s.ldEnv, s.key, { comment, instructions: [{ kind: 'updateName', value: pre.name ?? pre.baseExperiment?.name ?? s.key }, { kind: 'updateDescription', value: pre.description ?? pre.baseExperiment?.description ?? '' }] }, this.signal);
+        return;
+      }
+      case 'ensure_layer': {
+        // Layers can't be deleted: one this run created stays (empty once its experiments are archived).
+        if (rec.created) {
+          rec.message = `left layer “${s.key}” in place (LaunchDarkly has no delete for layers)`;
+          return;
+        }
+        const pre = rec.preImage as LdLayer | undefined;
+        if (!pre) return;
+        await this.c.patchLayerSemantic(this.p, s.key, { comment, instructions: [{ kind: 'updateName', name: pre.name ?? s.key }, { kind: 'updateDescription', description: pre.description ?? '' }] }, this.signal);
+        return;
+      }
       case 'upsert_ai_config': {
         if (rec.created) {
           await this.c.deleteAiConfig(this.p, s.key, this.signal).catch((e) => {
@@ -1652,6 +1937,67 @@ export function banditIteration(d: DesiredBandit, flag: LdFlag, flagConfigVersio
     randomizationUnit: d.randomizationUnit,
     reallocationFrequencyMillis: d.reallocationFrequencyMillis,
   };
+}
+
+/** `MetricPost` for a desired metric: every field that is set (reference/launchdarkly/openapi.json). */
+export function metricBody(d: DesiredMetric): Record<string, unknown> {
+  const { key, name, description, kind, isNumeric, successCriteria, tags, analysisUnits, ...rest } = d;
+  const body: Record<string, unknown> = { key, name, description, kind, isNumeric, successCriteria, tags, analysisUnits };
+  for (const [k, v] of Object.entries(rest)) if (v !== undefined) body[k] = v;
+  return body;
+}
+
+export function metricSummary(d: DesiredMetric): string {
+  const what = d.kind === 'custom' ? (d.dataSource ? `warehouse metric “${d.key}” on data source “${d.dataSource.key}”` : `custom metric “${d.key}”${d.eventKey ? ` on event “${d.eventKey}”` : ''}`) : `${d.kind} metric “${d.key}”`;
+  return `${what}${d.isNumeric ? ' (numeric)' : ''}`;
+}
+
+/**
+ * `IterationInput` for a copied experiment (PLAN §20.5): treatments by the target flag's variation
+ * IDs, the flag rule by the id the target gave it (found by description, then position), the
+ * environment's current config version.
+ */
+export function experimentIteration(d: DesiredExperiment, flags: Map<string, LdFlag>, ldEnv: string): Record<string, unknown> {
+  const flagOf = (key: string): LdFlag => {
+    const f = flags.get(key);
+    if (!f) throw new Error(`Flag “${key}” was not read.`);
+    return f;
+  };
+  const variationId = (flagKey: string, i: number): string => {
+    const v = flagOf(flagKey).variations[i];
+    if (!v?._id) throw new Error(`Flag “${flagKey}” has no variation ${i}.`);
+    return v._id;
+  };
+  const ruleId = (f: DesiredExperiment['flags'][number]): string => {
+    const rule = f.rule;
+    if (rule.kind === 'fallthrough') return 'fallthrough';
+    const rules = (ownValue(flagOf(f.flagKey).environments, ldEnv)?.rules ?? []) as { _id?: string | null; description?: string | null }[];
+    const byDescription = rule.description ? rules.filter((r) => (r.description ?? '') === rule.description) : [];
+    const match = byDescription.length === 1 ? byDescription[0] : (byDescription[rule.index] ?? rules[rule.index]);
+    if (!match?._id) throw new Error(`Flag “${f.flagKey}” in ${ldEnv} has no rule “${rule.description || rule.sourceRuleId}” (position ${rule.index + 1}) for the experiment to run on; re-plan after its targeting step.`);
+    return match._id;
+  };
+  const baseline = d.treatments.find((t) => t.baseline) ?? d.treatments[0];
+  return {
+    hypothesis: d.hypothesis,
+    canReshuffleTraffic: d.canReshuffleTraffic,
+    metrics: d.metrics.map((m) => ({ key: m.key, isGroup: m.isGroup, ...(m.analysisUnit ? { analysisUnit: m.analysisUnit } : {}) })),
+    ...(d.primary.isGroup ? { primaryFunnelKey: d.primary.key } : { primarySingleMetricKey: d.primary.key }),
+    treatments: d.treatments.map((t) => ({ name: t.name, baseline: t.baseline, allocationPercent: t.allocationPercent, parameters: t.parameters.map((p) => ({ flagKey: p.flagKey, variationId: variationId(p.flagKey, p.variation) })) })),
+    flags: Object.fromEntries(
+      d.flags.map((f) => {
+        const notIn = f.notInExperimentVariation ?? baseline?.parameters.find((p) => p.flagKey === f.flagKey)?.variation;
+        return [f.flagKey, { ruleId: ruleId(f), flagConfigVersion: ownValue(flagOf(f.flagKey).environments, ldEnv)?.version ?? 0, ...(notIn !== undefined ? { notInExperimentVariationId: variationId(f.flagKey, notIn) } : {}) }];
+      }),
+    ),
+    randomizationUnit: d.randomizationUnit,
+    ...(d.attributes?.length ? { attributes: d.attributes } : {}),
+    ...(d.reallocationFrequencyMillis !== undefined ? { reallocationFrequencyMillis: d.reallocationFrequencyMillis } : {}),
+  };
+}
+
+export function experimentSummary(d: DesiredExperiment): string {
+  return `${d.treatments.length} treatments (${d.treatments.map((t) => `${t.name} ${t.allocationPercent}%`).join(', ')}) on ${d.flags.map((f) => `${f.flagKey}${f.rule.kind === 'rule' ? ` rule “${f.rule.description || f.rule.index + 1}”` : ''}`).join(', ')}, primary ${d.primary.isGroup ? 'funnel' : 'metric'} “${d.primary.key}”, by ${d.randomizationUnit}${d.type === 'mab' ? ' (bandit)' : ''}`;
 }
 
 export function banditSummary(d: DesiredBandit): string {

@@ -2,13 +2,15 @@
  * LaunchDarkly source adapter, read side (PLAN §20.2): everything the console needs from a
  * source LD project, read with the lenient schemas of @sslm/ld-client and never written to.
  * One request per flag (GET /flags/{p}/{key} carries every environment's targeting), one per
- * environment for segments. Experiments and metrics are not read (PLAN §11, §20.4).
+ * environment for segments, experiments and holdouts; one each for metrics, metric groups and
+ * layers (PLAN §20.5). Experimentation routes answer 403 on plans without the add-on, so each of
+ * them is optional: a failure is recorded in `skipped` and the collection stays empty.
  */
-import type { LdClient, LdEnvironment, LdFlag, LdFlagSummary, LdProject, LdSchemaIssue, LdSegment } from '@sslm/ld-client';
+import type { LdClient, LdEnvironment, LdExperiment, LdFlag, LdFlagSummary, LdHoldout, LdLayer, LdMember, LdMetric, LdMetricGroup, LdProject, LdSchemaIssue, LdSegment } from '@sslm/ld-client';
 import { HttpError } from '@sslm/http';
 
 /** The reads the adapter makes; `LdClient` satisfies it, and tests can pass a fake. */
-export type LdSourceReader = Pick<LdClient, 'getProject' | 'listEnvironments' | 'listContextKinds' | 'listFlags' | 'getFlag' | 'listSegments'>;
+export type LdSourceReader = Pick<LdClient, 'getProject' | 'listEnvironments' | 'listContextKinds' | 'listFlags' | 'getFlag' | 'listSegments' | 'listMetrics' | 'listMetricGroups' | 'listExperiments' | 'listHoldouts' | 'getHoldout' | 'listLayers' | 'getMember'>;
 
 export interface RawLdSnapshot {
   kind: 'launchdarkly';
@@ -21,6 +23,16 @@ export interface RawLdSnapshot {
   flags: LdFlag[];
   /** Segments per environment key. */
   segments: Record<string, LdSegment[]>;
+  /** Experimentation (PLAN §20.5): empty when the route was skipped (see `skipped`). */
+  metrics: LdMetric[];
+  metricGroups: LdMetricGroup[];
+  /** Experiments per environment key, expanded (treatments, draft and previous iterations, secondary metrics, analysis config). */
+  experiments: Record<string, LdExperiment[]>;
+  /** Holdouts per environment key, each read in full (the listing carries no design). */
+  holdouts: Record<string, LdHoldout[]>;
+  layers: LdLayer[];
+  /** Members named as maintainers by metrics, experiments and holdouts, by id (the flag read carries its own `_maintainer`). */
+  members: Record<string, LdMember>;
   schemaIssues: LdSchemaIssue[];
   /** Reads that failed without failing the whole read (a 403 on one route, a segment page). */
   skipped: { endpoint: string; reason: string }[];
@@ -45,6 +57,9 @@ export class LdReadAuthError extends Error {
     this.name = 'LdReadAuthError';
   }
 }
+
+/** What `GET …/experiments` leaves out unless asked (reference/launchdarkly/openapi.json `expand`). */
+export const EXPERIMENT_EXPAND = ['treatments', 'draftIteration', 'previousIterations', 'secondaryMetrics', 'analysisConfig'];
 
 /** Read one LD project. A 401/403 on the project itself is an auth error; later 403s are skipped routes. */
 export async function readLdProject(client: LdSourceReader, projectKey: string, opts: LdReadOptions = {}): Promise<RawLdSnapshot> {
@@ -102,6 +117,22 @@ export async function readLdProject(client: LdSourceReader, projectKey: string, 
   flags.sort((a, b) => a.key.localeCompare(b.key));
 
   const segments: Record<string, LdSegment[]> = {};
+  const experiments: Record<string, LdExperiment[]> = {};
+  const holdouts: Record<string, LdHoldout[]> = {};
+  // Routes a plan may not have (experimentation) or a token may not read: the failure is recorded, the read goes on.
+  const optional = async <T>(endpoint: string, read: () => Promise<T>, empty: T): Promise<T> => {
+    progress(endpoint);
+    try {
+      return await read();
+    } catch (e) {
+      if (opts.signal?.aborted) throw e;
+      skipped.push({ endpoint, reason: reason(e) });
+      return empty;
+    } finally {
+      done++;
+    }
+  };
+  total += 3 + 2 * environments.length;
   for (const env of environments) {
     const endpoint = `/segments/${projectKey}/${env.key}`;
     progress(endpoint);
@@ -113,10 +144,36 @@ export async function readLdProject(client: LdSourceReader, projectKey: string, 
       skipped.push({ endpoint, reason: reason(e) });
     }
     done++;
+    experiments[env.key] = (await optional(`/projects/${projectKey}/environments/${env.key}/experiments`, () => client.listExperiments(projectKey, env.key, opts.signal, { expand: EXPERIMENT_EXPAND }), [] as LdExperiment[])).sort((a, b) => a.key.localeCompare(b.key));
+    // The holdout listing carries key, name and status; the design (base experiment, metrics, amount) needs one read per holdout.
+    const listed = await optional(`/projects/${projectKey}/environments/${env.key}/holdouts`, () => client.listHoldouts(projectKey, env.key, opts.signal), [] as LdHoldout[]);
+    const full: LdHoldout[] = [];
+    for (const h of listed) {
+      if (!h.key) continue;
+      const detail = await optional(`/projects/${projectKey}/environments/${env.key}/holdouts/${h.key}`, () => client.getHoldout(projectKey, env.key, h.key!, opts.signal), null as LdHoldout | null);
+      full.push(detail ? { ...h, ...detail } : h);
+    }
+    holdouts[env.key] = full.sort((a, b) => (a.key ?? '').localeCompare(b.key ?? ''));
+  }
+  const metrics = (await optional(`/metrics/${projectKey}`, () => client.listMetrics(projectKey, opts.signal), [] as LdMetric[])).sort((a, b) => a.key.localeCompare(b.key));
+  const metricGroups = (await optional(`/projects/${projectKey}/metric-groups`, () => client.listMetricGroups(projectKey, opts.signal), [] as LdMetricGroup[])).sort((a, b) => a.key.localeCompare(b.key));
+  const layers = (await optional(`/projects/${projectKey}/layers`, () => client.listLayers(projectKey, opts.signal), [] as LdLayer[])).sort((a, b) => a.key.localeCompare(b.key));
+
+  // Maintainers: experiments give only `_maintainerId`; metrics and holdouts may too. The email is what another account can match.
+  const memberIds = new Set<string>();
+  for (const m of metrics) if (m.maintainerId && !m._maintainer?.email) memberIds.add(m.maintainerId);
+  for (const list of Object.values(experiments)) for (const x of list) if (x._maintainerId) memberIds.add(x._maintainerId);
+  for (const list of Object.values(holdouts)) for (const h of list) if (h.baseExperiment?._maintainerId) memberIds.add(h.baseExperiment._maintainerId);
+  for (const g of metricGroups) if (g.maintainer?.kind === 'member' && g.maintainer.key && !g.maintainer._member?.email) memberIds.add(g.maintainer.key);
+  const members: Record<string, LdMember> = {};
+  total += memberIds.size;
+  for (const id of memberIds) {
+    const m = await optional(`/members/${id}`, () => client.getMember(id, opts.signal), null as LdMember | null);
+    if (m) members[id] = m;
   }
   progress('done');
 
-  return { kind: 'launchdarkly', fetchedAt: new Date().toISOString(), projectKey, project, environments, contextKinds, flags, segments, schemaIssues: [], skipped };
+  return { kind: 'launchdarkly', fetchedAt: new Date().toISOString(), projectKey, project, environments, contextKinds, flags, segments, metrics, metricGroups, experiments, holdouts, layers, members, schemaIssues: [], skipped };
 }
 
 function reason(e: unknown): string {

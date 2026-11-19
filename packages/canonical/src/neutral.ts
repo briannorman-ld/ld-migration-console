@@ -11,7 +11,7 @@
  */
 
 /** One `{ uid, id, name }` style identity for neutral resources: `<sourceId>/<kind>/<key>`. */
-export type NeutralKind = 'flag' | 'segment';
+export type NeutralKind = 'flag' | 'segment' | 'metric' | 'metric_group' | 'experiment' | 'holdout' | 'layer';
 
 export function neutralUid(sourceId: string, kind: NeutralKind, key: string): string {
   return `${sourceId}/${kind}/${key}`;
@@ -196,7 +196,10 @@ export interface NeutralFlag {
   defaults?: { onVariation: number; offVariation: number };
   customProperties: Record<string, NeutralCustomProperty>;
   maintainer?: { id?: string; email?: string; teamKey?: string };
-  /** Experiments the source runs on this flag (not migrated, PLAN §11); keys or names. */
+  /**
+   * Experiments the source runs on this flag; keys or names. An LD source also reads them in full
+   * (`NeutralProject.experiments`, PLAN §20.5); other sources only note them (PLAN §11).
+   */
   experiments: string[];
   /** Project-level version counter, when the source has one. */
   version?: number;
@@ -261,6 +264,236 @@ export interface NeutralContextKind {
   archived?: boolean;
 }
 
+// ---------------------------------------------------------------------------------------------
+// Experimentation (PLAN §20.5): metrics, metric groups, experiments, holdouts and layers of an LD
+// source. LD-shaped (reference/launchdarkly/openapi.json MetricRep, MetricGroupRep, Experiment,
+// IterationRep, HoldoutRep, LayerRep) with the account-specific ids resolved to keys and indexes:
+// a treatment names a flag *variation index*, an experiment's flag names a *source rule id*, a
+// holdout is referenced by *key*. Results, exposures and iteration history cannot be written
+// into another project, so an iteration carries its design and its outcome, not its data.
+// ---------------------------------------------------------------------------------------------
+
+/** A person the source names as a maintainer; the id belongs to the source account, the email is what the target can match. */
+export interface NeutralMaintainer {
+  id?: string;
+  email?: string;
+  teamKey?: string;
+}
+
+/** An LD event filter (MetricRep.filters / EventFilter), kept as the source gave it. */
+export interface NeutralMetricFilter {
+  type: string;
+  attribute?: string;
+  op: string;
+  values: unknown[];
+  contextKind?: string;
+  negate: boolean;
+}
+
+/** A metric (MetricRep). Every field LD's MetricPost accepts is carried, so the copy is an identity where the target allows it. */
+export interface NeutralMetric {
+  kind: 'metric';
+  /** `<sourceId>/metric/<key>`. */
+  uid: string;
+  key: string;
+  name: string;
+  description: string;
+  /** `pageview`, `click`, `custom` or `trace`; unknown kinds are kept verbatim and the mapper decides. */
+  metricKind: string;
+  tags: string[];
+  archived: boolean;
+  maintainer?: NeutralMaintainer;
+  isNumeric?: boolean;
+  unit?: string;
+  /** Custom metrics: the event name the SDK sends. */
+  eventKey?: string;
+  /** Click metrics: the CSS selector. */
+  selector?: string;
+  /** Click and pageview metrics: URL matchers (UrlMatchers), kept as given. */
+  urls?: unknown[];
+  successCriteria?: 'HigherThanBaseline' | 'LowerThanBaseline' | string;
+  /** Context kinds the metric can be analyzed by (`analysisUnits`, or the deprecated `randomizationUnits`). */
+  analysisUnits: string[];
+  unitAggregationType?: string;
+  analysisType?: string;
+  percentileValue?: number;
+  eventDefault?: { disabled?: boolean; value?: number };
+  filters?: NeutralMetricFilter;
+  /** Warehouse-native metric: the data source it reads from (must exist in the target, PLAN §11). */
+  dataSource?: { key: string; environmentKey?: string; name?: string; integrationKey?: string };
+  windowStartOffset?: number;
+  windowEndOffset?: number;
+  winsorLowerPercentile?: number;
+  winsorUpperPercentile?: number;
+  winsorIncludeImputed?: boolean;
+  traceQuery?: string;
+  traceValueLocation?: string;
+  unitAggregationField?: string;
+  valueColumn?: string;
+  /** Ratio metric denominator (MetricDenominatorRep), kept as given. */
+  denominator?: Record<string, unknown>;
+  creationDate?: number;
+  lastModified?: number;
+  version?: number;
+}
+
+/** A metric group (MetricGroupRep): an ordered funnel or a standard group of metrics. */
+export interface NeutralMetricGroup {
+  kind: 'metric_group';
+  /** `<sourceId>/metric_group/<key>`. */
+  uid: string;
+  key: string;
+  name: string;
+  description: string;
+  groupKind: 'funnel' | 'standard' | string;
+  tags: string[];
+  archived: boolean;
+  maintainer?: NeutralMaintainer;
+  /** Ordered; `nameInGroup` is the step name of a funnel. */
+  metrics: { key: string; nameInGroup: string }[];
+  creationDate?: number;
+  lastModified?: number;
+  version?: number;
+}
+
+/** One arm of an iteration (TreatmentRep). `variation` indexes the flag's variations in the source. */
+export interface NeutralTreatment {
+  id?: string;
+  name: string;
+  baseline: boolean;
+  /** LD's percent string ("33.34"). */
+  allocationPercent: string;
+  parameters: { flagKey: string; variation: number }[];
+}
+
+/** A metric or metric group an iteration measures (DependentMetricOrMetricGroupRep). */
+export interface NeutralIterationMetric {
+  key: string;
+  isGroup: boolean;
+  analysisUnit?: string;
+}
+
+/** The flag an iteration runs on (IterationRep.flags[key]). `ruleId` is `fallthrough` or a source rule id. */
+export interface NeutralIterationFlag {
+  flagKey: string;
+  ruleId: string;
+  ruleDescription?: string;
+  flagConfigVersion?: number;
+  /** Index into the flag's variations in the source: what contexts outside the experiment get. */
+  notInExperimentVariation?: number;
+}
+
+/** One iteration of an experiment (IterationRep): the design, and how it ended. */
+export interface NeutralIteration {
+  id?: string;
+  hypothesis: string;
+  status: 'not_started' | 'running' | 'stopped' | string;
+  createdAt?: number;
+  startedAt?: number;
+  endedAt?: number;
+  winningTreatment?: { id?: string; name?: string };
+  winningReason?: string;
+  canReshuffleTraffic?: boolean;
+  randomizationUnit: string;
+  attributes?: string[];
+  /** Bandits only. */
+  reallocationFrequencyMillis?: number;
+  treatments: NeutralTreatment[];
+  metrics: NeutralIterationMetric[];
+  /** The primary metric or funnel. */
+  primary?: { key: string; isGroup: boolean };
+  flags: NeutralIterationFlag[];
+  /** Layer membership LD records when an iteration in a layer stops. */
+  layerSnapshot?: { key: string; name?: string; reservationPercent: number; otherReservationPercent?: number };
+}
+
+/** An experiment in one source environment (Experiment). */
+export interface NeutralExperimentEnv {
+  env: string;
+  id?: string;
+  name: string;
+  description: string;
+  /** `experiment`, `mab` or `holdout` (the base experiment of a holdout). */
+  experimentType: string;
+  tags: string[];
+  archived: boolean;
+  maintainer?: NeutralMaintainer;
+  methodology?: string;
+  analysisConfig?: { bayesianThreshold?: string; significanceThreshold?: string; testDirection?: string; multipleComparisonCorrectionMethod?: string; multipleComparisonCorrectionScope?: string; sequentialTestingEnabled?: boolean };
+  /** `launchdarkly` (events) or a warehouse. */
+  dataSource?: string;
+  /** The holdout the experiment belongs to, by key when the adapter could resolve the id. */
+  holdout?: { id: string; key?: string };
+  currentIteration?: NeutralIteration;
+  draftIteration?: NeutralIteration;
+  previousIterations: NeutralIteration[];
+  /** The layer the experiment is reserved in, from the source's layer list. */
+  layer?: { key: string; reservationPercent: number };
+  creationDate?: number;
+}
+
+/** Experiments are per environment in LD; a neutral experiment groups the environments that share one key. */
+export interface NeutralExperiment {
+  kind: 'experiment';
+  /** `<sourceId>/experiment/<key>`. */
+  uid: string;
+  key: string;
+  /** The first environment's name, description and tags; the rest are per environment. */
+  name: string;
+  description: string;
+  tags: string[];
+  /** Archived in every environment it exists in. */
+  archived: boolean;
+  environments: NeutralExperimentEnv[];
+}
+
+/** A holdout in one source environment (HoldoutRep + its base experiment). */
+export interface NeutralHoldoutEnv {
+  env: string;
+  id?: string;
+  name: string;
+  description: string;
+  /** `created`, `enabled`, `running` or `ended`. */
+  status: string;
+  /** LD's percent string ("10"). */
+  holdoutAmount: string;
+  randomizationUnit: string;
+  attributes?: string[];
+  metrics: NeutralIterationMetric[];
+  primaryMetricKey?: string;
+  prerequisiteFlagKey?: string;
+  maintainer?: NeutralMaintainer;
+  /** Keys of the experiments attached to the holdout. */
+  experiments: string[];
+  createdAt?: number;
+}
+
+export interface NeutralHoldout {
+  kind: 'holdout';
+  /** `<sourceId>/holdout/<key>`. */
+  uid: string;
+  key: string;
+  name: string;
+  description: string;
+  /** Ended in every environment: nothing to create. */
+  archived: boolean;
+  environments: NeutralHoldoutEnv[];
+}
+
+/** A layer (LayerRep): project-level, with per-environment reservations. */
+export interface NeutralLayer {
+  kind: 'layer';
+  /** `<sourceId>/layer/<key>`. */
+  uid: string;
+  key: string;
+  name: string;
+  description: string;
+  randomizationUnit?: string;
+  archived: false;
+  environments: { env: string; reservations: { experimentKey: string; flagKey: string; reservationPercent: number }[] }[];
+  createdAt?: number;
+}
+
 /** The neutral block of a snapshot (PLAN §20.1 "How it plugs in"). */
 export interface NeutralProject {
   flags: NeutralFlag[];
@@ -268,6 +501,12 @@ export interface NeutralProject {
   contextKinds: NeutralContextKind[];
   /** PLAN §21.4: the source's attribute schema, when it has one. */
   attributes?: NeutralAttribute[];
+  /** PLAN §20.5: experimentation resources of an LD source. Absent on snapshots taken before 2026-11-19 and on sources that do not read them. */
+  metrics?: NeutralMetric[];
+  metricGroups?: NeutralMetricGroup[];
+  experiments?: NeutralExperiment[];
+  holdouts?: NeutralHoldout[];
+  layers?: NeutralLayer[];
 }
 
 export function emptyNeutralProject(): NeutralProject {
@@ -281,6 +520,23 @@ export function neutralEnvOf(flag: NeutralFlag, env: string): NeutralFlagEnv | u
 
 export function neutralSegmentEnvOf(seg: NeutralSegment, env: string): NeutralSegmentEnv | undefined {
   return seg.environments.find((e) => e.env === env);
+}
+
+export function neutralExperimentEnvOf(x: NeutralExperiment, env: string): NeutralExperimentEnv | undefined {
+  return x.environments.find((e) => e.env === env);
+}
+
+export function neutralHoldoutEnvOf(h: NeutralHoldout, env: string): NeutralHoldoutEnv | undefined {
+  return h.environments.find((e) => e.env === env);
+}
+
+/**
+ * The iteration a copy of the experiment is designed from (PLAN §20.5): the draft when there is one
+ * (a not-started experiment), else the current iteration (running or stopped), else the last
+ * previous one. `undefined` for an experiment that never had an iteration.
+ */
+export function neutralDesignIteration(x: NeutralExperimentEnv): NeutralIteration | undefined {
+  return x.draftIteration ?? x.currentIteration ?? x.previousIterations[x.previousIterations.length - 1];
 }
 
 /** Provenance tags and properties an earlier migration wrote into the *source* project; never copied onward. */

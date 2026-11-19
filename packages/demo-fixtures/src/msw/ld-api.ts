@@ -12,9 +12,10 @@ export interface MockLdApiOptions {
 }
 
 /**
- * A simulated LaunchDarkly REST API, enough for the LD *source* adapter (PLAN §20.2): project,
- * environments, context kinds, flags (list + full), segments per environment. Read-only; any
- * write method is answered 405 so a bug that wrote to a source would show up in tests.
+ * A simulated LaunchDarkly REST API, enough for the LD *source* adapter (PLAN §20.2, §20.5):
+ * project, environments, context kinds, flags (list + full), segments, experiments and holdouts
+ * per environment, metrics, metric groups, layers, members by id. Read-only; any write method is
+ * answered 405 so a bug that wrote to a source would show up in tests.
  */
 export function createLdApiHandlers(opts: MockLdApiOptions): HttpHandler[] {
   const base = `${opts.baseUrl.replace(/\/+$/, '')}/api/v2`;
@@ -72,6 +73,30 @@ export function createLdApiHandlers(opts: MockLdApiOptions): HttpHandler[] {
     route('/flags/:projectKey/:key', ({ params, p }) => (inProject(params, p) ? (p.flags.find((f) => f.key === params.key) ?? NOT_FOUND) : NOT_FOUND)),
     route('/segments/:projectKey/:envKey', ({ params, p, url }) => (inProject(params, p) ? page(p.segments[params.envKey!] ?? [], url) : NOT_FOUND)),
     route('/segments/:projectKey/:envKey/:key', ({ params, p }) => (inProject(params, p) ? ((p.segments[params.envKey!] ?? []).find((s) => s.key === params.key) ?? NOT_FOUND) : NOT_FOUND)),
+    // Experimentation (PLAN §20.5). The experiment listing honours `lifecycleState` (archived ones
+    // only when asked) like LD; `expand` is accepted and the full shape served regardless.
+    route('/metrics/:projectKey', ({ params, p, url }) => (inProject(params, p) ? page(p.metrics, url) : NOT_FOUND)),
+    route('/metrics/:projectKey/:key', ({ params, p }) => (inProject(params, p) ? (p.metrics.find((m) => m.key === params.key) ?? NOT_FOUND) : NOT_FOUND)),
+    route('/projects/:projectKey/metric-groups', ({ params, p, url }) => (inProject(params, p) ? page(p.metricGroups, url) : NOT_FOUND)),
+    route('/projects/:projectKey/metric-groups/:key', ({ params, p }) => (inProject(params, p) ? (p.metricGroups.find((g) => g.key === params.key) ?? NOT_FOUND) : NOT_FOUND)),
+    route('/projects/:projectKey/layers', ({ params, p }) => (inProject(params, p) ? { items: p.layers, totalCount: p.layers.length, _links: {} } : NOT_FOUND)),
+    route('/projects/:projectKey/environments/:envKey/experiments', ({ params, p, url }) => {
+      if (!inProject(params, p)) return NOT_FOUND;
+      const states = (url.searchParams.get('lifecycleState') ?? 'active').split(',');
+      const items = (p.experiments[params.envKey!] ?? []).filter((x) => states.includes(x.archivedDate ? 'archived' : 'active'));
+      const pg = page(items, url);
+      return { items: pg.items, total_count: pg.totalCount, _links: {} };
+    }),
+    route('/projects/:projectKey/environments/:envKey/experiments/:key', ({ params, p }) => (inProject(params, p) ? ((p.experiments[params.envKey!] ?? []).find((x) => x.key === params.key) ?? NOT_FOUND) : NOT_FOUND)),
+    route('/projects/:projectKey/environments/:envKey/holdouts', ({ params, p, url }) => {
+      if (!inProject(params, p)) return NOT_FOUND;
+      // SimpleHoldoutRep: no design in the listing.
+      const items = (p.holdouts[params.envKey!] ?? []).map(({ _id, key, name, status, createdAt, updatedAt, experiments }) => ({ _id, key, name, status, createdAt, updatedAt, experiments }));
+      const pg = page(items, url);
+      return { items: pg.items, total_count: pg.totalCount, _links: {} };
+    }),
+    route('/projects/:projectKey/environments/:envKey/holdouts/:key', ({ params, p }) => (inProject(params, p) ? ((p.holdouts[params.envKey!] ?? []).find((h) => h.key === params.key) ?? NOT_FOUND) : NOT_FOUND)),
+    route('/members/:id', ({ params, p }) => p.members[params.id!] ?? NOT_FOUND),
     ...writes.map((m) => http[m](`${base}/*`, () => HttpResponse.json({ code: 'method_not_allowed', message: 'The demo LaunchDarkly source is read-only.' }, { status: 405 }))),
   ];
 }

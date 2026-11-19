@@ -10,7 +10,7 @@ import { AREAS, COVERAGE } from './matrix.ts';
 import type { CoverageArea, CoverageAreaInfo, CoverageEntry } from './types.ts';
 
 /** A StatSig resource kind, a resource of a LaunchDarkly project attached as a source, or a PostHog flag or cohort (PLAN §22). */
-export type ExplainerKey = EntityKind | 'ld_flag' | 'ld_segment' | 'ph_flag' | 'ph_segment';
+export type ExplainerKey = EntityKind | 'ld_flag' | 'ld_segment' | 'ld_metric' | 'ld_experiment' | 'ph_flag' | 'ph_segment';
 
 export interface MappingExplanation {
   /** The row for the resource itself: `statsig → ld`, how, detail. */
@@ -40,7 +40,10 @@ const SECTIONS: Record<ExplainerKey, { headline: string; related: (CoverageArea 
   param_store: { headline: 'param_stores.static', related: ['configs.per_param', 'sdk.code_changes'] },
   prompt: { headline: 'operations.ai', related: ['structure.tags_owners'] },
   ld_flag: { headline: 'ld_source.flags', related: ['ld_source.targeting', 'ld_source.rollouts', 'ld_source.context_kinds', 'ld_source.prerequisites', 'ld_source.custom_properties', 'ld_source.maintainers', 'ld_source.experiments'] },
-  ld_segment: { headline: 'ld_source.segments', related: ['ld_source.big_segments', 'ld_source.context_kinds'] },  ph_flag: {
+  ld_segment: { headline: 'ld_source.segments', related: ['ld_source.big_segments', 'ld_source.context_kinds'] },
+  ld_metric: { headline: 'ld_source.metrics', related: ['ld_source.metric_groups', 'ld_source.maintainers', 'ld_source.context_kinds'] },
+  ld_experiment: { headline: 'ld_source.experiments', related: ['ld_source.experiment_results', 'ld_source.holdouts', 'ld_source.layers', 'ld_source.metrics', 'ld_source.metric_groups', 'ld_source.maintainers', 'ld_source.not_copied'] },
+  ph_flag: {
     headline: 'posthog.flags',
     related: [
       'posthog.project', 'posthog.condition_sets', 'posthog.rollouts', 'posthog.variants', 'posthog.payloads', 'posthog.remote_config',

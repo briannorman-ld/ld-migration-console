@@ -78,7 +78,7 @@ export interface NeutralSegmentMapResult extends MapOutcome {
   desired: DesiredSegment | null;
 }
 
-interface Ctx {
+export interface Ctx {
   snapshot: CanonicalSnapshot;
   sourceId: string;
   kind: MigrationSourceKind;
@@ -92,11 +92,11 @@ interface Ctx {
 
 const SOURCE_WORD: Record<MigrationSourceKind, string> = { launchdarkly: 'the source project', posthog: 'PostHog', statsig: 'StatSig' };
 const SOURCE_KIND_WORD: Record<MigrationSourceKind, string> = { launchdarkly: 'LaunchDarkly', posthog: 'PostHog', statsig: 'StatSig' };
-const sourceLabel = (ctx: Ctx) => SOURCE_WORD[ctx.kind] ?? 'the source';
+export const sourceLabel = (ctx: Ctx) => SOURCE_WORD[ctx.kind] ?? 'the source';
 /** Clauses from an LD source already carry LD semantics; other sources' negations, regexes and versions are checked. */
 const foreign = (ctx: Ctx) => ctx.kind !== 'launchdarkly';
 
-function makeCtx(args: MapArgs<NeutralFlag | NeutralSegment>, kind: DecisionSubject['kind']): Ctx {
+export function makeCtx(args: MapArgs<{ uid: string; key: string }>, kind: DecisionSubject['kind']): Ctx {
   const snapshot = args.canonical.snapshot;
   return {
     snapshot,
@@ -558,7 +558,12 @@ export function mapNeutralFlag(args: MapArgs<NeutralFlag>): NeutralFlagMapResult
   try {
     const desired = applyCaveats(ctx, flag, source, translateEnv(ctx, flag, source, env.ld));
     if (flag.deprecated) ctx.fidelity.push({ fidelity: 'full', message: `Deprecated in ${sourceLabel(ctx)}. Consider retiring it instead of migrating.` });
-    if (flag.experiments.length && !source.rules.some((r) => r.experiment)) ctx.fidelity.push({ fidelity: 'partial', message: `${flag.experiments.length} experiment${flag.experiments.length === 1 ? '' : 's'} run${flag.experiments.length === 1 ? 's' : ''} on this flag in ${sourceLabel(ctx)} (${flag.experiments.join(', ')}); experiments are not migrated (PLAN §11).` });
+    if (flag.experiments.length && !source.rules.some((r) => r.experiment)) {
+      const n = flag.experiments.length;
+      // An LD source reads its experiments in full and migrates them as items of their own (PLAN §20.5); other sources only name them (PLAN §11).
+      if (ctx.kind === 'launchdarkly') ctx.fidelity.push({ fidelity: 'full', message: `${n} experiment${n === 1 ? '' : 's'} run${n === 1 ? 's' : ''} on this flag in ${sourceLabel(ctx)} (${flag.experiments.join(', ')}); select ${n === 1 ? 'it' : 'them'} under Experiments to copy ${n === 1 ? 'its' : 'their'} design as a draft (the targeting here is copied as it is).` });
+      else ctx.fidelity.push({ fidelity: 'partial', message: `${n} experiment${n === 1 ? '' : 's'} run${n === 1 ? 's' : ''} on this flag in ${sourceLabel(ctx)} (${flag.experiments.join(', ')}); experiments are not migrated (PLAN §11).` });
+    }
     return finish(desired);
   } catch (e) {
     if (e instanceof SkipItem) return finish(offEnv, e.reason);

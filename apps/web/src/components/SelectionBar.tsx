@@ -61,11 +61,13 @@ export function SelectionBar({
   );
 }
 
-const LABEL: Record<SelectionKind, string> = { gate: 'Gates', config: 'Dynamic configs', autotune: 'Autotunes', flag: 'LaunchDarkly flags', segment: 'Segments', prompt: 'AI Configs' };
+const LABEL: Record<SelectionKind, string> = { gate: 'Gates', config: 'Dynamic configs', autotune: 'Autotunes', flag: 'LaunchDarkly flags', segment: 'Segments', prompt: 'AI Configs', metric: 'Metrics (source)', metric_group: 'Metric groups (source)', experiment: 'Experiments (source)', holdout: 'Holdouts (source)', layer: 'Layers (source)' };
 
 /** Where a selection kind is viewed: a StatSig resource list, or the LD-source list. */
-export function viewFor(kind: SelectionKind): { kind: 'resource'; resource: EntityKind } | { kind: 'ld-source'; resource: 'flag' | 'segment' } {
+export function viewFor(kind: SelectionKind): { kind: 'resource'; resource: EntityKind } | { kind: 'ld-source'; resource: 'flag' | 'segment' | 'metric' | 'experiment' } {
   if (kind === 'flag') return { kind: 'ld-source', resource: 'flag' };
   if (kind === 'segment') return { kind: 'ld-source', resource: 'segment' };
+  if (kind === 'metric' || kind === 'metric_group') return { kind: 'ld-source', resource: 'metric' };
+  if (kind === 'experiment' || kind === 'holdout' || kind === 'layer') return { kind: 'ld-source', resource: 'experiment' };
   return { kind: 'resource', resource: kind };
 }

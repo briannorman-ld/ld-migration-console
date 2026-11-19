@@ -36,6 +36,13 @@ export const TYPE_LABEL: Record<string, string> = {
   copy_custom_properties: 'Copy custom properties',
   prerequisite_unsupported: 'Prerequisites not available',
   maintainer_unknown: 'Owner is not a LaunchDarkly member',
+  experiment_rule: 'Experiment allocation on a rule',
+  experiment_running: 'Experiment running in the source',
+  experiment_concluded: 'Experiment stopped in the source',
+  experiment_rule_missing: 'Experiment rule disabled or gone',
+  metric_data_source: 'Warehouse data source',
+  experimentation_unavailable: 'Experimentation not available in the target',
+  holdout_running: 'Holdout running in the source',
 };
 
 /**

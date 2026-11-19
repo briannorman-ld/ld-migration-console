@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { CanonicalSnapshot, NeutralFlag, NeutralSegment } from '@sslm/canonical';
-import { mapNeutralFlag, mapNeutralSegment, type MapArgs, type MapperCapabilities, type Resolution } from '../src/index.ts';
+import type { CanonicalSnapshot, NeutralExperiment, NeutralFlag, NeutralMetric, NeutralSegment } from '@sslm/canonical';
+import { mapNeutralExperiment, mapNeutralFlag, mapNeutralHoldout, mapNeutralLayer, mapNeutralMetric, mapNeutralMetricGroup, mapNeutralSegment, type MapArgs, type MapperCapabilities, type Resolution } from '../src/index.ts';
 import { CAPS, DIRECTORY, legacySnapshot, NOW, profileFor, server } from './fixtures.ts';
 
 beforeAll(() => server.listen({ onUnhandledFrame: 'error' }));
@@ -170,5 +170,140 @@ describe('LaunchDarkly segments (PLAN §20.3)', () => {
     const noPlan = mapNeutralSegment(segArgs('legacy-fraud-blocklist', { capabilities: { ...caps, bigSegments: 'unavailable' } }));
     expect(noPlan.skipped).toMatch(/no big segments/);
     expect(mapNeutralSegment(segArgs('legacy-fraud-blocklist', { env: { statsig: 'test', ld: 'test' } })).skipped).toMatch(/not present in source environment/);
+  });
+});
+
+describe('LaunchDarkly experimentation → LaunchDarkly (PLAN §20.5)', () => {
+  const expArgs = (key: string, env = 'production', over: Partial<MapArgs<NeutralExperiment>> = {}): MapArgs<NeutralExperiment> => {
+    const entity = legacy.neutral!.experiments!.find((x) => x.key === key)!;
+    return { canonical: { snapshot: legacy }, entity, profile: profileFor(legacy, MAPPING), resolutions: new Map(), capabilities: caps, env: { statsig: env, ld: env }, now: NOW, directory: DIRECTORY, ...over };
+  };
+  const metricArgs = (key: string, over: Partial<MapArgs<NeutralMetric>> = {}): MapArgs<NeutralMetric> => {
+    const entity = legacy.neutral!.metrics!.find((m) => m.key === key)!;
+    return { canonical: { snapshot: legacy }, entity, profile: profileFor(legacy, MAPPING), resolutions: new Map(), capabilities: caps, env: { statsig: '', ld: '' }, now: NOW, directory: DIRECTORY, ...over };
+  };
+
+  it('copies every field of a metric, matches the maintainer by email and resolves analysis units like context kinds', () => {
+    const r = mapNeutralMetric(metricArgs('legacy-order-value'));
+    expect(r.skipped).toBeUndefined();
+    expect(types(r)).toEqual(['maintainer_unknown']);
+    expect(r.desired).toMatchObject({ key: 'legacy-order-value', kind: 'custom', eventKey: 'order_placed', isNumeric: true, unit: 'USD', successCriteria: 'HigherThanBaseline', unitAggregationType: 'sum', analysisType: 'percentile', percentileValue: 90, winsorLowerPercentile: 1, winsorUpperPercentile: 99, eventDefault: { disabled: false, value: 0 }, filters: { type: 'eventProperty', attribute: 'currency', op: 'in', values: ['USD'], negate: false }, analysisUnits: ['user'] });
+    expect(r.desired!.tags).toEqual(['migrated-from-launchdarkly', 'migration-src-legacy', 'checkout', 'revenue']);
+    // growth@acme-legacy.example is not a member of the target account: no maintainer, and a maintainer_unknown decision on the item.
+    expect(r.desired!.maintainerId).toBeUndefined();
+    const ops = mapNeutralMetric(metricArgs('legacy-checkout-completed'));
+    expect(ops.desired!.maintainerId).toBe('mem-legacy-ops');
+    expect(ops.desired!.analysisUnits).toEqual(['user', 'organization']);
+    expect(types(ops)).toEqual([]);
+    expect(ops.fidelity.notes.map((n) => n.message)).toContainEqual(expect.stringContaining('track()'));
+  });
+
+  it('asks about a warehouse-native data source and never migrates an archived metric', () => {
+    const r = mapNeutralMetric(metricArgs('legacy-wh-revenue'));
+    expect(types(r)).toEqual(['maintainer_unknown', 'metric_data_source']);
+    expect(r.desired!.dataSource).toEqual({ key: 'legacy-snowflake', environmentKey: 'production' });
+    expect(r.fidelity.overall).toBe('manual');
+    const skipped = mapNeutralMetric(metricArgs('legacy-wh-revenue', { resolutions: resolve(r, { metric_data_source: 'skip' }) }));
+    expect(skipped.skipped).toMatch(/data source/);
+    expect(mapNeutralMetric(metricArgs('legacy-old-signup')).skipped).toMatch(/archived/);
+    // Click and page view metrics carry their selector and URL matchers.
+    expect(mapNeutralMetric(metricArgs('legacy-cta-click')).desired).toMatchObject({ kind: 'click', selector: '#checkout-cta', urls: [{ kind: 'exact', url: 'https://shop.acme-legacy.example/cart' }] });
+    expect(mapNeutralMetric(metricArgs('legacy-cart-conversion')).desired!.denominator).toEqual({ eventName: 'cart_viewed', isNumeric: false, unitAggregationType: 'count_distinct' });
+  });
+
+  it('copies a funnel after its metrics and notes the maintainer LaunchDarkly requires', () => {
+    const g = legacy.neutral!.metricGroups![0]!;
+    const r = mapNeutralMetricGroup({ canonical: { snapshot: legacy }, entity: g, profile: profileFor(legacy, MAPPING), resolutions: new Map(), capabilities: caps, env: { statsig: '', ld: '' }, now: NOW, directory: DIRECTORY });
+    expect(r.desired).toEqual({ key: 'legacy-checkout-funnel', name: 'Checkout funnel', description: 'Cart → CTA → order.', kind: 'funnel', tags: ['migrated-from-launchdarkly', 'migration-src-legacy', 'checkout'], metrics: [{ key: 'legacy-cta-click', nameInGroup: 'Clicked CTA' }, { key: 'legacy-checkout-completed', nameInGroup: 'Completed checkout' }] });
+    expect(r.dependencies.map((d) => `${d.kind}:${d.key}`)).toEqual(['metric:legacy-checkout-completed', 'metric:legacy-cta-click']);
+    expect(r.fidelity.notes.map((n) => n.message)).toContainEqual(expect.stringContaining('member behind the API token'));
+  });
+
+  it('copies a not-started draft as it is, on the rule it runs on, with its flag and metrics as dependencies', () => {
+    const r = mapNeutralExperiment(expArgs('legacy-theme-test', 'test'));
+    expect(r.skipped).toBeUndefined();
+    expect(types(r)).toEqual([]);
+    expect(r.desired).toMatchObject({
+      key: 'legacy-theme-test',
+      ldEnv: 'test',
+      type: 'experiment',
+      methodology: 'frequentist',
+      analysisConfig: { significanceThreshold: '0.05', testDirection: 'two-sided', multipleComparisonCorrectionMethod: 'bonferroni', multipleComparisonCorrectionScope: 'variations', sequentialTestingEnabled: true },
+      maintainerId: 'mem-legacy-ops',
+      hypothesis: 'Dark mode users complete checkout more often.',
+      randomizationUnit: 'user',
+      canReshuffleTraffic: true,
+      primary: { key: 'legacy-checkout-completed', isGroup: false },
+      flags: [{ flagKey: 'legacy-theme', rule: { kind: 'rule', index: 0, description: 'Dark mode opt-in', sourceRuleId: 'rule-dark' }, notInExperimentVariation: 0 }],
+      sourceStatus: 'not_started',
+    });
+    expect(r.desired!.treatments).toEqual([
+      { name: 'Light', baseline: true, allocationPercent: '50', parameters: [{ flagKey: 'legacy-theme', variation: 0 }] },
+      { name: 'Dark', baseline: false, allocationPercent: '50', parameters: [{ flagKey: 'legacy-theme', variation: 1 }] },
+    ]);
+    expect(r.dependencies.map((d) => `${d.kind}:${d.key}`)).toEqual(['flag:legacy-theme', 'metric:legacy-checkout-completed', 'metric:legacy-order-value']);
+    expect(r.fidelity.overall).toBe('full');
+  });
+
+  it('asks before copying a running experiment, and copies it with its holdout, layer and funnel when told to', () => {
+    const r = mapNeutralExperiment(expArgs('legacy-cta-copy-test'));
+    expect(types(r)).toEqual(['experiment_running', 'maintainer_unknown']);
+    expect(r.unresolved.find((d) => d.type === 'experiment_running')!.recommended).toBe('prestage');
+    // The preview shows the recommended answer: the design, as a draft.
+    expect(r.desired).toMatchObject({ holdoutKey: 'legacy-q3-holdout', layer: { key: 'legacy-checkout-layer', reservationPercent: 40 }, primary: { key: 'legacy-checkout-funnel', isGroup: true }, sourceStatus: 'running', analysisConfig: { bayesianThreshold: '0.95' } });
+    expect(r.desired!.flags).toEqual([{ flagKey: 'legacy-cta-copy', rule: { kind: 'fallthrough' }, notInExperimentVariation: 0 }]);
+    expect(r.dependencies.map((d) => `${d.kind}:${d.key}`)).toEqual(['flag:legacy-cta-copy', 'holdout:legacy-q3-holdout', 'layer:legacy-checkout-layer', 'metric_group:legacy-checkout-funnel', 'metric:legacy-cta-click', 'metric:legacy-order-value']);
+    const wait = mapNeutralExperiment(expArgs('legacy-cta-copy-test', 'production', { resolutions: resolve(r, { experiment_running: 'skip' }) }));
+    expect(wait.skipped).toMatch(/running/);
+    // Skipped before the maintainer is looked at: nothing else is asked.
+    expect(wait.unresolved).toEqual([]);
+  });
+
+  it('recreates a stopped experiment as a draft with its outcome in the description, randomized by a custom kind', () => {
+    const r = mapNeutralExperiment(expArgs('legacy-checkout-redesign-test'));
+    expect(types(r)).toEqual(['experiment_concluded']);
+    expect(r.desired).toMatchObject({ randomizationUnit: 'organization', attributes: ['plan'], sourceStatus: 'stopped', maintainerId: 'mem-legacy-ops' });
+    expect(r.desired!.description).toContain('winner “Redesign”');
+    expect(r.dependencies.map((d) => `${d.kind}:${d.key}`)).toContain('randomization_unit:organization');
+    expect(r.fidelity.notes.map((n) => n.message)).toContainEqual(expect.stringContaining('1 earlier iteration'));
+    // The warehouse metric it measures is a dependency like any other; its own decision is raised on the metric.
+    expect(r.dependencies.map((d) => `${d.kind}:${d.key}`)).toContain('metric:legacy-wh-revenue');
+    expect(mapNeutralExperiment(expArgs('legacy-checkout-redesign-test', 'production', { resolutions: resolve(r, { experiment_concluded: 'skip' }) })).skipped).toMatch(/stopped/);
+  });
+
+  it('copies a bandit with its reallocation frequency and skips archived experiments and other environments', () => {
+    const r = mapNeutralExperiment(expArgs('legacy-pricing-bandit'));
+    expect(r.desired).toMatchObject({ type: 'mab', reallocationFrequencyMillis: 3_600_000, randomizationUnit: 'organization' });
+    expect(r.desired!.treatments.map((t) => t.allocationPercent)).toEqual(['34', '33', '33']);
+    expect(mapNeutralExperiment(expArgs('legacy-old-banner-test')).skipped).toMatch(/archived/);
+    expect(mapNeutralExperiment(expArgs('legacy-theme-test', 'production')).skipped).toMatch(/not present/);
+  });
+
+  it('blocks on an experiment whose target plan has no experimentation, with skip as the only answer', () => {
+    const r = mapNeutralExperiment(expArgs('legacy-theme-test', 'test', { capabilities: { ...caps, experimentation: 'unavailable' } }));
+    expect(types(r)).toEqual(['experimentation_unavailable']);
+    expect(r.unresolved[0]!.severity).toBe('blocking');
+    expect(r.skipped).toMatch(/no experiments/);
+  });
+
+  it('creates a running holdout unstarted after acknowledging, and a layer whose reservations follow its experiments', () => {
+    const h = legacy.neutral!.holdouts![0]!;
+    const base = { canonical: { snapshot: legacy }, profile: profileFor(legacy, MAPPING), resolutions: new Map(), capabilities: caps, now: NOW, directory: DIRECTORY };
+    const r = mapNeutralHoldout({ ...base, entity: h, env: { statsig: 'production', ld: 'production' } });
+    expect(types(r)).toEqual(['holdout_running', 'maintainer_unknown']);
+    expect(r.desired).toEqual({ key: 'legacy-q3-holdout', ldEnv: 'production', statsigEnv: 'production', name: 'Q3 holdout', description: 'Keeps 10% of users out of every Q3 experiment to measure their combined effect.', randomizationUnit: 'user', holdoutAmount: '10', metrics: [{ key: 'legacy-checkout-completed', isGroup: false }, { key: 'legacy-order-value', isGroup: false }], primaryMetricKey: 'legacy-checkout-completed' });
+    expect(r.dependencies.map((d) => `${d.kind}:${d.key}`)).toEqual(['metric:legacy-checkout-completed', 'metric:legacy-order-value']);
+    expect(mapNeutralHoldout({ ...base, entity: h, env: { statsig: 'test', ld: 'test' } }).skipped).toMatch(/not present/);
+    const l = mapNeutralLayer({ ...base, entity: legacy.neutral!.layers![0]!, env: { statsig: '', ld: '' } });
+    expect(l.desired).toEqual({ key: 'legacy-checkout-layer', name: 'Checkout layer', description: 'Mutually exclusive checkout experiments.' });
+    expect(l.fidelity.notes.map((n) => n.message)).toContainEqual(expect.stringContaining('Reservations (1)'));
+  });
+
+  it('is deterministic for experimentation items too', () => {
+    const a = mapNeutralExperiment(expArgs('legacy-cta-copy-test'));
+    const b = mapNeutralExperiment(expArgs('legacy-cta-copy-test'));
+    expect(a.statsigFingerprint).toBe(b.statsigFingerprint);
+    expect(a.unresolved.map((d) => d.id)).toEqual(b.unresolved.map((d) => d.id));
+    expect(a.unresolved[0]!.id).toBe('experiment_running:src-legacy/experiment/legacy-cta-copy-test:running');
   });
 });

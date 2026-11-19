@@ -187,7 +187,7 @@ export const SegmentSchema = z.looseObject({
 export const SegmentsSchema = z.looseObject({ items: z.array(SegmentSchema), totalCount: optNum });
 export type LdSegment = z.infer<typeof SegmentSchema>;
 
-/** Metric (GET /metrics/{p}/{key}); the listing returns the same shape with fewer fields. */
+/** Metric (GET /metrics/{p}/{key}); the listing returns the same shape with fewer fields (reference/launchdarkly/openapi.json MetricRep). */
 export const MetricSchema = z.looseObject({
   key: z.string(),
   name: optStr,
@@ -196,16 +196,62 @@ export const MetricSchema = z.looseObject({
   tags: z.array(z.string()).nullish(),
   eventKey: optStr,
   isNumeric: optBool,
+  unit: optStr,
+  selector: optStr,
+  urls: z.array(z.unknown()).nullish(),
   successCriteria: optStr,
   analysisUnits: z.array(z.string()).nullish(),
   randomizationUnits: z.array(z.string()).nullish(),
+  unitAggregationType: optStr,
+  analysisType: optStr,
+  percentileValue: optNum,
+  eventDefault: z.looseObject({ disabled: optBool, value: optNum }).nullish(),
+  filters: z.looseObject({ type: optStr, attribute: optStr, op: optStr, values: z.array(z.unknown()).nullish(), contextKind: optStr, negate: optBool }).nullish(),
+  dataSource: z.looseObject({ key: optStr, environmentKey: optStr, _name: optStr, _integrationKey: optStr }).nullish(),
+  windowStartOffset: optNum,
+  windowEndOffset: optNum,
+  winsorLowerPercentile: optNum,
+  winsorUpperPercentile: optNum,
+  winsorIncludeImputed: optBool,
+  traceQuery: optStr,
+  traceValueLocation: optStr,
+  unitAggregationField: optStr,
+  valueColumn: optStr,
+  denominator: z.record(z.string(), z.unknown()).nullish(),
+  maintainerId: optStr,
+  _maintainer: z.looseObject({ _id: optStr, email: optStr, firstName: optStr, lastName: optStr }).nullish(),
   archived: optBool,
+  archivedAt: optNum,
+  isActive: optBool,
+  _creationDate: optNum,
+  lastModified: z.looseObject({ date: optStr }).nullish(),
   _version: optNum,
   _id: optStr,
 });
 export const MetricsSchema = z.looseObject({ items: z.array(MetricSchema).nullish(), totalCount: optNum });
 export type LdMetric = z.infer<typeof MetricSchema>;
 
+/** Metric group (GET /projects/{p}/metric-groups/{key}, beta): a funnel or a standard group of metrics. */
+export const MetricGroupSchema = z.looseObject({
+  _id: optStr,
+  key: z.string(),
+  name: z.string(),
+  kind: optStr,
+  description: optStr,
+  tags: z.array(z.string()).nullish(),
+  maintainer: z.looseObject({ key: optStr, kind: optStr, _member: z.looseObject({ _id: optStr, email: optStr }).nullish(), _team: z.looseObject({ key: optStr, name: optStr }).nullish() }).nullish(),
+  metrics: z.array(z.looseObject({ key: z.string(), name: optStr, nameInGroup: optStr, kind: optStr })).nullish(),
+  _creationDate: optNum,
+  _lastModified: optNum,
+  _version: optNum,
+});
+export const MetricGroupsSchema = z.looseObject({ items: z.array(MetricGroupSchema).nullish(), totalCount: optNum });
+export type LdMetricGroup = z.infer<typeof MetricGroupSchema>;
+
+/** A metric or metric group an iteration measures (DependentMetricOrMetricGroupRep). */
+const IterationMetricSchema = z.looseObject({ key: z.string(), name: optStr, kind: optStr, isGroup: optBool, analysisUnit: optStr, isNumeric: optBool, eventKey: optStr });
+
+/** IterationRep: the design of one iteration and how it ended. */
 const IterationSchema = z.looseObject({
   _id: optStr,
   hypothesis: optStr,
@@ -213,13 +259,27 @@ const IterationSchema = z.looseObject({
   createdAt: optNum,
   startedAt: optNum,
   endedAt: optNum,
+  winningTreatmentId: optStr,
+  winningReason: optStr,
+  canReshuffleTraffic: optBool,
   randomizationUnit: optStr,
+  attributes: z.array(z.string()).nullish(),
   reallocationFrequencyMillis: optNum,
-  treatments: z.array(z.looseObject({ _id: optStr, name: z.string(), allocationPercent: z.string(), baseline: optBool })).nullish(),
-  flags: z.record(z.string(), z.looseObject({ targetingRule: optStr, flagConfigVersion: optNum })).nullish(),
+  version: optNum,
+  treatments: z
+    .array(z.looseObject({ _id: optStr, name: z.string(), allocationPercent: z.string(), baseline: optBool, parameters: z.array(z.looseObject({ flagKey: optStr, variationId: optStr })).nullish() }))
+    .nullish(),
+  flags: z.record(z.string(), z.looseObject({ targetingRule: optStr, targetingRuleDescription: optStr, flagConfigVersion: optNum, notInExperimentVariationId: optStr })).nullish(),
+  metrics: z.array(IterationMetricSchema).nullish(),
+  primarySingleMetric: IterationMetricSchema.nullish(),
+  primaryFunnel: IterationMetricSchema.nullish(),
+  /** Deprecated in LD; still the only primary field on older experiments. */
+  primaryMetric: IterationMetricSchema.nullish(),
+  secondaryMetrics: z.array(IterationMetricSchema).nullish(),
+  layerSnapshot: z.looseObject({ key: optStr, name: optStr, reservationPercent: optNum, otherReservationPercent: optNum }).nullish(),
 });
 
-/** Experiment (GET /projects/{p}/environments/{e}/experiments/{key}). Bandits are experiments with `type: mab`. */
+/** Experiment (GET /projects/{p}/environments/{e}/experiments/{key}). Bandits are experiments with `type: mab`; a holdout's base experiment has `type: holdout`. */
 export const ExperimentSchema = z.looseObject({
   _id: optStr,
   key: z.string(),
@@ -228,6 +288,14 @@ export const ExperimentSchema = z.looseObject({
   environmentKey: optStr,
   type: optStr,
   tags: z.array(z.string()).nullish(),
+  _maintainerId: optStr,
+  _creationDate: optNum,
+  methodology: optStr,
+  dataSource: optStr,
+  holdoutId: optStr,
+  analysisConfig: z
+    .looseObject({ bayesianThreshold: optStr, significanceThreshold: optStr, testDirection: optStr, multipleComparisonCorrectionMethod: optStr, multipleComparisonCorrectionScope: optStr, sequentialTestingEnabled: optBool })
+    .nullish(),
   archivedDate: optNum,
   currentIteration: IterationSchema.nullish(),
   draftIteration: IterationSchema.nullish(),
@@ -237,6 +305,36 @@ export const ExperimentSchema = z.looseObject({
 export const ExperimentsSchema = z.looseObject({ items: z.array(ExperimentSchema), total_count: optNum, totalCount: optNum });
 export type LdExperiment = z.infer<typeof ExperimentSchema>;
 export type LdIteration = z.infer<typeof IterationSchema>;
+
+/** Holdout listing item (SimpleHoldoutRep) and detail (HoldoutDetailRep: the base experiment carries the design). */
+export const HoldoutSchema = z.looseObject({
+  _id: optStr,
+  key: optStr,
+  name: optStr,
+  description: optStr,
+  status: optStr,
+  holdoutAmount: optStr,
+  createdAt: optNum,
+  updatedAt: optNum,
+  baseExperiment: ExperimentSchema.nullish(),
+  experiments: z.array(z.looseObject({ key: optStr, name: optStr, environment: optStr })).nullish(),
+  relatedExperiments: z.array(z.looseObject({ key: z.string(), name: optStr })).nullish(),
+  prerequisiteFlagKey: optStr,
+});
+export const HoldoutsSchema = z.looseObject({ items: z.array(HoldoutSchema).nullish(), total_count: optNum, totalCount: optNum });
+export type LdHoldout = z.infer<typeof HoldoutSchema>;
+
+/** Layer (LayerRep): project-level, with per-environment experiment reservations. */
+export const LayerSchema = z.looseObject({
+  key: z.string(),
+  name: optStr,
+  description: optStr,
+  createdAt: optNum,
+  randomizationUnit: optStr,
+  environments: z.record(z.string(), z.looseObject({ reservations: z.array(z.looseObject({ experimentKey: z.string(), flagKey: optStr, reservationPercent: optNum })).nullish() })).nullish(),
+});
+export const LayersSchema = z.looseObject({ items: z.array(LayerSchema).nullish(), totalCount: optNum });
+export type LdLayer = z.infer<typeof LayerSchema>;
 
 /** Project experimentation settings: the context kinds experiments may randomize by. */
 export const ExperimentationSettingsSchema = z.looseObject({

@@ -1,4 +1,4 @@
-import { LdWriteError, type LdAiConfig, type LdExperiment, type LdFlag, type LdMetric } from '@sslm/ld-client';
+import { LdWriteError, type LdAiConfig, type LdExperiment, type LdFlag, type LdHoldout, type LdLayer, type LdMetric, type LdMetricGroup } from '@sslm/ld-client';
 import type { LdWriter } from '../src/index.ts';
 
 /** Minimal in-memory LD, shared by the executor tests: enough state for the executor's control flow, not LD's semantics. */
@@ -7,6 +7,9 @@ export function fakeLd(over: Partial<Record<keyof LdWriter, (...a: never[]) => u
   const metrics = new Map<string, LdMetric>();
   const experiments = new Map<string, LdExperiment & { iteration?: unknown }>();
   const aiConfigs = new Map<string, LdAiConfig>();
+  const metricGroups = new Map<string, LdMetricGroup>();
+  const holdouts = new Map<string, LdHoldout & { body?: unknown }>();
+  const layers = new Map<string, LdLayer>();
   const units: string[] = ['user'];
   const calls: string[] = [];
   const approvals = new Map<string, { status: string; reviewStatus: string; executionDate?: number }>();
@@ -76,6 +79,35 @@ export function fakeLd(over: Partial<Record<keyof LdWriter, (...a: never[]) => u
     createIteration: async (_p, env, key, body) => (calls.push(`iteration ${env}/${key}`), { ...experiments.get(`${env}/${key}`)!, iteration: body }),
     patchExperimentSemantic: async (_p, env, key, patch) => (calls.push(`semantic experiment ${env}/${key} ${patch.instructions.map((i) => i.kind).join(',')}`), experiments.get(`${env}/${key}`)!),
     getExperimentationSettings: async () => (calls.push('get settings'), { randomizationUnits: units.map((u) => ({ randomizationUnit: u })) }),
+    callerIdentity: async () => ({ memberId: 'mem-token' }),
+    getMetricGroup: async (_p, key) => (calls.push(`get metric group ${key}`), metricGroups.get(key) ?? null),
+    createMetricGroup: async (_p, body) => {
+      calls.push(`create metric group ${body.key}`);
+      if (metricGroups.has(body.key as string)) throw new LdWriteError(409, '/metric-groups', { message: 'Duplicate key' });
+      const g = { key: body.key as string, name: body.name as string, kind: body.kind as string, description: body.description as string, tags: (body.tags as string[]) ?? [], metrics: body.metrics as { key: string; nameInGroup: string }[], maintainer: { key: body.maintainerId as string, kind: 'member' } };
+      metricGroups.set(g.key, g);
+      return g;
+    },
+    patchMetricGroupJson: async (_p, key, ops) => (calls.push(`json metric group ${key} ${ops.map((o) => o.path).join(',')}`), metricGroups.get(key)!),
+    deleteMetricGroup: async (_p, key) => void (calls.push(`delete metric group ${key}`), metricGroups.delete(key)),
+    getHoldout: async (_p, env, key) => (calls.push(`get holdout ${env}/${key}`), holdouts.get(`${env}/${key}`) ?? null),
+    createHoldout: async (_p, env, body) => {
+      calls.push(`create holdout ${env}/${body.key}`);
+      if (holdouts.has(`${env}/${body.key}`)) throw new LdWriteError(409, '/holdouts', { message: 'Duplicate key' });
+      const h = { _id: `hold-${nextId++}`, key: body.key as string, name: body.name as string, description: body.description as string, status: 'created', holdoutAmount: body.holdoutamount as string, createdAt: Date.now() + 60_000, body };
+      holdouts.set(`${env}/${h.key}`, h);
+      return h;
+    },
+    patchHoldoutSemantic: async (_p, env, key, patch) => (calls.push(`semantic holdout ${env}/${key} ${patch.instructions.map((i) => i.kind).join(',')}`), holdouts.get(`${env}/${key}`)!),
+    listLayers: async () => (calls.push('list layers'), [...layers.values()]),
+    createLayer: async (_p, body) => {
+      calls.push(`create layer ${body.key}`);
+      if (layers.has(body.key)) throw new LdWriteError(409, '/layers', { message: 'Duplicate key' });
+      const l = { key: body.key, name: body.name, description: body.description, createdAt: Date.now() + 60_000, environments: {} };
+      layers.set(l.key, l);
+      return l;
+    },
+    patchLayerSemantic: async (_p, key, patch) => (calls.push(`semantic layer ${key} ${patch.environmentKey ?? ''} ${patch.instructions.map((i) => `${i.kind}:${i.experimentKey ?? ''}${i.reservationPercent !== undefined ? `=${i.reservationPercent}` : ''}`).join(',')}`), layers.get(key)!),
     putExperimentationSettings: async (_p, body) => {
       calls.push(`put settings ${body.randomizationUnits.map((u) => u.randomizationUnit).join(',')}`);
       units.splice(0, units.length, ...body.randomizationUnits.map((u) => u.randomizationUnit));
@@ -111,5 +143,5 @@ export function fakeLd(over: Partial<Record<keyof LdWriter, (...a: never[]) => u
       if (!scheduled.delete(id)) throw new LdWriteError(404, '/scheduled-changes', null);
     },
   };
-  return { client: { ...base, ...over } as LdWriter, flags, metrics, experiments, aiConfigs, units, calls, flag, approvals, scheduled, imports };
+  return { client: { ...base, ...over } as LdWriter, flags, metrics, experiments, aiConfigs, metricGroups, holdouts, layers, units, calls, flag, approvals, scheduled, imports };
 }

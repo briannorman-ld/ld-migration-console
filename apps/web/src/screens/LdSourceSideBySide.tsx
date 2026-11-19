@@ -1,7 +1,7 @@
 import { indexByKey } from '../lib/indexByKey.ts';
 import { Fragment, useMemo, useState, type Dispatch, type SetStateAction } from 'react';
-import type { CanonicalSnapshot, NeutralAttribute, NeutralFlag, NeutralSegment, SourceKind } from '@sslm/canonical';
-import { optionLabel, type DecisionType, type NeutralFlagMapResult, type NeutralSegmentMapResult } from '@sslm/mapper';
+import { neutralDesignIteration, type CanonicalSnapshot, type NeutralAttribute, type NeutralExperiment, type NeutralFlag, type NeutralHoldout, type NeutralIteration, type NeutralLayer, type NeutralMetric, type NeutralMetricGroup, type NeutralSegment, type SourceKind } from '@sslm/canonical';
+import { optionLabel, type DecisionType, type DesiredExperiment, type NeutralExperimentMapResult, type NeutralFlagMapResult, type NeutralHoldoutMapResult, type NeutralLayerMapResult, type NeutralMetricGroupMapResult, type NeutralMetricMapResult, type NeutralSegmentMapResult } from '@sslm/mapper';
 import { migrationStatus, ownsSegment, type MigrationStatus } from '@sslm/planner';
 import type { SourceRecord } from '@sslm/store';
 import { DecisionCard, FIDELITY_TONE } from '../components/DecisionCard.tsx';
@@ -13,12 +13,13 @@ import { SOURCE_BADGE } from '../lib/kinds.ts';
 import { TagFilter } from '../components/TagFilter.tsx';
 import { MappingExplainer } from '../components/MappingExplainer.tsx';
 import { matchesTags, pruneTags, tagOptions } from '../lib/tags.ts';
-import { ldFlagState, mapNeutralFlagFor, mapNeutralSegmentFor } from '../lib/migration.ts';
+import { ldFlagState, mapNeutralExperimentFor, mapNeutralFlagFor, mapNeutralHoldoutFor, mapNeutralLayerFor, mapNeutralMetricFor, mapNeutralMetricGroupFor, mapNeutralSegmentFor } from '../lib/migration.ts';
 import type { MigrationContext } from '../lib/useMigration.ts';
 import type { ExplorerNav } from './AutotunesSideBySide.tsx';
 import { STATUS } from './GatesSideBySide.tsx';
 
-export type LdSourceResource = 'flag' | 'segment';
+/** `metric` lists metrics and metric groups; `experiment` lists experiments, holdouts and layers (PLAN §20.5). */
+export type LdSourceResource = 'flag' | 'segment' | 'metric' | 'experiment';
 type Filter = 'all' | 'open' | 'blocking' | 'not_migrated' | 'in_sync' | 'changed';
 
 interface FlagRow {
@@ -58,11 +59,60 @@ interface SegmentRow {
   ldEnv: string | null;
   strip: { ldEnv: string; status: MigrationStatus }[];
 }
-type Row = FlagRow | SegmentRow;
+interface BaseRow {
+  sourceId: string;
+  sourceKind: SourceKind;
+  alias: string;
+  ldEnv: string | null;
+  strip: { ldEnv: string; status: MigrationStatus }[];
+}
+interface MetricRow extends BaseRow {
+  kind: 'metric';
+  entity: NeutralMetric;
+  result: NeutralMetricMapResult;
+  owner?: FlagOwner;
+}
+interface MetricGroupRow extends BaseRow {
+  kind: 'metric_group';
+  entity: NeutralMetricGroup;
+  result: NeutralMetricGroupMapResult;
+  owner?: FlagOwner;
+}
+interface ExperimentRow extends BaseRow {
+  kind: 'experiment';
+  entity: NeutralExperiment;
+  result: NeutralExperimentMapResult;
+  owner?: FlagOwner;
+}
+interface HoldoutRow extends BaseRow {
+  kind: 'holdout';
+  entity: NeutralHoldout;
+  result: NeutralHoldoutMapResult;
+  owner?: FlagOwner;
+}
+interface LayerRow extends BaseRow {
+  kind: 'layer';
+  entity: NeutralLayer;
+  result: NeutralLayerMapResult;
+}
+type Row = FlagRow | SegmentRow | MetricRow | MetricGroupRow | ExperimentRow | HoldoutRow | LayerRow;
 
 const WORDS: Record<LdSourceResource, { title: string; one: string; many: string }> = {
   flag: { title: 'Flags (source projects)', one: 'flag', many: 'flags' },
   segment: { title: 'Segments and cohorts', one: 'segment', many: 'segments' },
+  metric: { title: 'Metrics and metric groups (source projects)', one: 'metric', many: 'metrics' },
+  experiment: { title: 'Experiments, holdouts and layers (source projects)', one: 'experiment', many: 'experiments' },
+};
+
+const KIND_BADGE: Record<Row['kind'], string | null> = { flag: null, segment: null, metric: 'metric', metric_group: 'metric group', experiment: 'experiment', holdout: 'holdout', layer: 'layer' };
+
+/** Tags of a row's entity (holdouts have none). */
+const tagsOf = (r: Row): string[] => ('tags' in r.entity ? r.entity.tags : []);
+const ownerOf = (m: { email?: string; teamKey?: string } | undefined, users: CanonicalSnapshot['users'] | undefined): FlagOwner | undefined => {
+  if (!m || (!m.email && !m.teamKey)) return undefined;
+  const email = m.email?.trim().toLowerCase();
+  const name = email ? users?.find((u) => u.email?.trim().toLowerCase() === email)?.name : undefined;
+  return { ...(email ? { email } : {}), ...(name ? { name } : {}), ...(m.teamKey ? { teamKey: m.teamKey } : {}) };
 };
 
 const isPostHogKind = (k: SourceKind) => k === 'posthog' || k === 'posthog_payload';
@@ -91,7 +141,7 @@ export function LdSourceSideBySide({
   /** Source environment key selected in the header. */
   env: string;
   m: MigrationContext;
-  onMigrate: (selection: { flags: string[]; segments: string[] }, ldEnvs: string[]) => void;
+  onMigrate: (selection: { flags?: string[]; segments?: string[]; metrics?: string[]; metricGroups?: string[]; experiments?: string[]; holdouts?: string[]; layers?: string[] }, ldEnvs: string[]) => void;
   nav: ExplorerNav;
   readOnly?: boolean;
   /** The workspace-wide selection (lib/selection.ts): ticks here add to it, so a pick survives switching views. */
@@ -117,6 +167,20 @@ export function LdSourceSideBySide({
       const envPairs = m.connected
         ? m.ldEnvs.map((le) => ({ le: le.key, se: Object.entries(m.profile.sources[s.id]?.envMapping ?? {}).find(([, v]) => v === le.key)?.[0] }))
         : [];
+      // Project-level resources (metrics, metric groups, layers) carry one pill: whether the target project has one of ours.
+      const projectStrip = (key: string, list: { key: string; tags?: string[] | null }[] | undefined, byFooter?: { key: string; description?: string | null }[]): { ldEnv: string; status: MigrationStatus }[] => {
+        if (!m.connected) return [];
+        const existing = list ? indexByKey(list).get(key) : byFooter?.find((x) => x.key === key);
+        const owned = existing && ('tags' in existing && existing.tags ? ownsSegment({ key: existing.key, tags: existing.tags }, snap.source.alias) : (existing as { description?: string | null }).description?.includes(`src=${snap.source.alias}`));
+        return [{ ldEnv: 'project', status: !existing ? 'not_in_ld' : owned ? 'in_sync' : 'foreign' }];
+      };
+      const envStrip = (key: string, lists: Record<string, { key: string; tags?: string[] | null; description?: string | null }[]> | undefined, byFooter: boolean): { ldEnv: string; status: MigrationStatus }[] =>
+        envPairs.map(({ le, se }) => {
+          const existing = lists?.[le]?.find((x) => x.key === key);
+          const owned = existing && (byFooter ? existing.description?.includes(`src=${snap.source.alias}`) : ownsSegment({ key: existing.key, tags: existing.tags ?? [] }, snap.source.alias));
+          const status: MigrationStatus = !se ? 'not_in_ld' : !existing ? 'not_in_ld' : owned ? 'in_sync' : 'foreign';
+          return { ldEnv: le, status };
+        });
       if (resource === 'flag') {
         for (const f of snap.neutral!.flags) {
           const result = mapNeutralFlagFor(snap, f, { statsig: env, ld: ldEnv ?? env }, m);
@@ -129,7 +193,7 @@ export function LdSourceSideBySide({
           const owner = flagOwner(f, snap.users);
           out.push({ kind: 'flag', sourceId: s.id, sourceKind: s.kind, alias: s.alias, entity: f, result, ldEnv, strip, ...(owner ? { owner } : {}) });
         }
-      } else {
+      } else if (resource === 'segment') {
         for (const g of snap.neutral!.segments) {
           const result = mapNeutralSegmentFor(snap, g, { statsig: env, ld: ldEnv ?? env }, m);
           // Segments carry no sync record: the strip says whether the target has one of ours in each environment.
@@ -141,13 +205,34 @@ export function LdSourceSideBySide({
           });
           out.push({ kind: 'segment', sourceId: s.id, sourceKind: s.kind, alias: s.alias, entity: g, result, ldEnv, strip });
         }
+      } else if (resource === 'metric') {
+        for (const mt of snap.neutral!.metrics ?? []) {
+          const owner = ownerOf(mt.maintainer, snap.users);
+          out.push({ kind: 'metric', sourceId: s.id, sourceKind: s.kind, alias: s.alias, entity: mt, result: mapNeutralMetricFor(snap, mt, m), ldEnv, strip: projectStrip(mt.key, m.ld.metrics), ...(owner ? { owner } : {}) });
+        }
+        for (const g of snap.neutral!.metricGroups ?? []) {
+          const owner = ownerOf(g.maintainer, snap.users);
+          out.push({ kind: 'metric_group', sourceId: s.id, sourceKind: s.kind, alias: s.alias, entity: g, result: mapNeutralMetricGroupFor(snap, g, m), ldEnv, strip: projectStrip(g.key, m.ld.metricGroups), ...(owner ? { owner } : {}) });
+        }
+      } else {
+        for (const x of snap.neutral!.experiments ?? []) {
+          const owner = ownerOf(x.environments.find((e) => e.env === env)?.maintainer ?? x.environments[0]?.maintainer, snap.users);
+          out.push({ kind: 'experiment', sourceId: s.id, sourceKind: s.kind, alias: s.alias, entity: x, result: mapNeutralExperimentFor(snap, x, { statsig: env, ld: ldEnv ?? env }, m), ldEnv, strip: envStrip(x.key, m.ld.experiments, false), ...(owner ? { owner } : {}) });
+        }
+        for (const h of snap.neutral!.holdouts ?? []) {
+          const owner = ownerOf(h.environments.find((e) => e.env === env)?.maintainer ?? h.environments[0]?.maintainer, snap.users);
+          out.push({ kind: 'holdout', sourceId: s.id, sourceKind: s.kind, alias: s.alias, entity: h, result: mapNeutralHoldoutFor(snap, h, { statsig: env, ld: ldEnv ?? env }, m), ldEnv, strip: envStrip(h.key, m.ld.holdouts as Record<string, { key: string; description?: string | null }[]> | undefined, true), ...(owner ? { owner } : {}) });
+        }
+        for (const l of snap.neutral!.layers ?? []) {
+          out.push({ kind: 'layer', sourceId: s.id, sourceKind: s.kind, alias: s.alias, entity: l, result: mapNeutralLayerFor(snap, l, m), ldEnv, strip: projectStrip(l.key, undefined, m.ld.layers) });
+        }
       }
     }
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on what the rows read of `m` (see GatesSideBySide)
-  }, [neutralSources, snapshots, env, m.inputs, m.connected, m.ldEnvs, m.ld.segments, ldFlags, resource]);
+  }, [neutralSources, snapshots, env, m.inputs, m.connected, m.ldEnvs, m.ld.segments, m.ld.metrics, m.ld.metricGroups, m.ld.experiments, m.ld.holdouts, m.ld.layers, ldFlags, resource]);
 
-  const tagChoices = useMemo(() => tagOptions(rows.map((r) => r.entity)), [rows]);
+  const tagChoices = useMemo(() => tagOptions(rows.map((r) => ({ tags: tagsOf(r) }))), [rows]);
   const chosenTags = useMemo(() => pruneTags(tags, tagChoices), [tags, tagChoices]);
 
   const visible = useMemo(
@@ -155,7 +240,7 @@ export function LdSourceSideBySide({
       rows.filter((r) => {
         if (!showArchived && r.entity.archived) return false;
         if (q && !r.entity.key.toLowerCase().includes(q.toLowerCase()) && !r.entity.name.toLowerCase().includes(q.toLowerCase())) return false;
-        if (!matchesTags(r.entity.tags, chosenTags)) return false;
+        if (!matchesTags(tagsOf(r), chosenTags)) return false;
         const here = r.strip.find((s) => s.ldEnv === r.ldEnv)?.status;
         switch (filter) {
           case 'open':
@@ -189,8 +274,10 @@ export function LdSourceSideBySide({
       return n;
     });
   const migrate = () => {
-    const uids = selectedRows.map((r) => r.entity.uid);
-    onMigrate(resource === 'flag' ? { flags: uids, segments: [] } : { flags: [], segments: uids }, mappedHere);
+    const sel: Parameters<typeof onMigrate>[0] = {};
+    const field: Record<Row['kind'], keyof typeof sel> = { flag: 'flags', segment: 'segments', metric: 'metrics', metric_group: 'metricGroups', experiment: 'experiments', holdout: 'holdouts', layer: 'layers' };
+    for (const r of selectedRows) (sel[field[r.kind]] ??= []).push(r.entity.uid);
+    onMigrate(sel, mappedHere);
   };
   // Only this explorer's items: other kinds stay selected across views.
   const selectAll = () =>
@@ -201,7 +288,7 @@ export function LdSourceSideBySide({
     });
 
   // The explainer speaks for one vocabulary: the PostHog one when every source here is PostHog, else LD's.
-  const explainerKey = neutralSources.length > 0 && neutralSources.every((s) => isPostHogKind(s.kind)) ? (resource === 'flag' ? 'ph_flag' : 'ph_segment') : resource === 'flag' ? 'ld_flag' : 'ld_segment';
+  const explainerKey = resource === 'metric' ? 'ld_metric' : resource === 'experiment' ? 'ld_experiment' : neutralSources.length > 0 && neutralSources.every((s) => isPostHogKind(s.kind)) ? (resource === 'flag' ? 'ph_flag' : 'ph_segment') : resource === 'flag' ? 'ld_flag' : 'ld_segment';
   const attributes = neutralSources.flatMap((s) => (snapshots[s.id]?.neutral?.attributes ?? []).map((a) => ({ ...a, alias: s.alias })));
 
   if (neutralSources.length === 0) return <Callout tone="blue">No LaunchDarkly or PostHog source is attached. Add one under Connections to compare a source project with the target.</Callout>;
@@ -287,12 +374,17 @@ export function LdSourceSideBySide({
                         )}
                         {r.kind === 'flag' && <Badge tone="slate">{r.entity.flagKind}</Badge>}
                         {r.kind === 'segment' && r.entity.environments.some((e) => e.unbounded) && <Badge tone="violet">big segment</Badge>}
+                        {KIND_BADGE[r.kind] && <Badge tone="slate">{KIND_BADGE[r.kind]}</Badge>}
+                        {r.kind === 'metric' && <Badge tone="violet">{r.entity.metricKind}{r.entity.isNumeric ? ', numeric' : ''}</Badge>}
+                        {r.kind === 'metric_group' && <Badge tone="violet">{r.entity.groupKind}</Badge>}
+                        {r.kind === 'experiment' && <ExperimentStateBadge x={r.entity} env={env} />}
+                        {r.kind === 'holdout' && <Badge tone="amber">{r.entity.environments.find((e) => e.env === env)?.status ?? r.entity.environments[0]?.status}</Badge>}
                         {r.entity.archived && <Badge>archived</Badge>}
                         {r.kind === 'flag' && r.entity.deprecated && <Badge tone="amber">deprecated</Badge>}
                       </div>
                       <div className="truncate text-xs text-fg-muted">{r.entity.name !== r.entity.key ? r.entity.name : r.entity.description}</div>
                     </td>
-                    <td className="px-3 py-2 font-mono text-[13px]">{r.result.skipped ? <span className="text-fg-subtle">—</span> : r.kind === 'flag' ? r.result.flagKey : r.result.segmentKey}</td>
+                    <td className="px-3 py-2 font-mono text-[13px]">{r.result.skipped ? <span className="text-fg-subtle">—</span> : r.entity.key}</td>
                     <td className="px-3 py-2">
                       <Badge tone={FIDELITY_TONE[r.result.fidelity.overall]}>{r.result.fidelity.overall}</Badge>
                     </td>
@@ -351,8 +443,22 @@ function Detail({ row, m, readOnly, sourceEnv }: { row: Row; m: MigrationContext
         <div className="mb-1.5 text-xs font-semibold tracking-wide text-fg-muted uppercase">
           Source ({SOURCE_BADGE[row.sourceKind].label} {row.alias})
         </div>
-        {row.kind === 'flag' ? <SourceFlag flag={row.entity} env={sourceEnv} /> : <SourceSegment segment={row.entity} env={sourceEnv} />}
-        {row.kind === 'flag' && row.owner && (
+        {row.kind === 'flag' ? (
+          <SourceFlag flag={row.entity} env={sourceEnv} />
+        ) : row.kind === 'segment' ? (
+          <SourceSegment segment={row.entity} env={sourceEnv} />
+        ) : row.kind === 'metric' ? (
+          <SourceMetric metric={row.entity} />
+        ) : row.kind === 'metric_group' ? (
+          <SourceMetricGroup group={row.entity} />
+        ) : row.kind === 'experiment' ? (
+          <SourceExperiment experiment={row.entity} env={sourceEnv} />
+        ) : row.kind === 'holdout' ? (
+          <SourceHoldout holdout={row.entity} env={sourceEnv} />
+        ) : (
+          <SourceLayer layer={row.entity} />
+        )}
+        {row.kind !== 'segment' && row.kind !== 'layer' && row.owner && (
           <div className="mt-1.5 text-xs text-fg-subtle" data-testid="flag-owner">
             owner:{' '}
             {row.owner.email ? (
@@ -371,8 +477,12 @@ function Detail({ row, m, readOnly, sourceEnv }: { row: Row; m: MigrationContext
           <Callout tone="amber">Not migrated: {r.skipped}.</Callout>
         ) : row.kind === 'flag' ? (
           <LdTargeting env={row.result.env} variations={row.result.shell.variations} />
-        ) : (
+        ) : row.kind === 'segment' ? (
           <TargetSegment result={row.result} />
+        ) : row.kind === 'experiment' ? (
+          <TargetExperiment desired={row.result.desired} />
+        ) : (
+          <TargetSummary result={row.result} />
         )}
         {r.fidelity.notes.length > 0 && (
           <ul className="mt-2 space-y-0.5 text-xs">
@@ -557,6 +667,219 @@ function TargetSegment({ result }: { result: NeutralSegmentMapResult }) {
         </div>
       ))}
       <div className="text-fg-subtle">tags: {d.tags.join(', ')}</div>
+    </div>
+  );
+}
+
+function ExperimentStateBadge({ x, env }: { x: NeutralExperiment; env: string }) {
+  const e = x.environments.find((v) => v.env === env);
+  if (!e) return <Badge tone="slate">not in {env}</Badge>;
+  const it = neutralDesignIteration(e);
+  const status = it?.status ?? 'no iteration';
+  return (
+    <>
+      {e.experimentType === 'mab' && <Badge tone="violet">bandit</Badge>}
+      <Badge tone={status === 'running' ? 'green' : status === 'stopped' ? 'amber' : 'slate'}>{status.replace('_', ' ')}</Badge>
+    </>
+  );
+}
+
+function Iteration({ it, flagName }: { it: NeutralIteration; flagName: (flagKey: string, i: number | undefined) => string }) {
+  return (
+    <div className="space-y-1">
+      <div>
+        <span className="text-fg-subtle">hypothesis</span> {it.hypothesis || '—'}
+      </div>
+      <div>
+        <span className="text-fg-subtle">randomizes by</span> <b>{it.randomizationUnit}</b>
+        {it.attributes?.length ? <span className="text-fg-subtle"> · attributes {it.attributes.join(', ')}</span> : null}
+        {it.reallocationFrequencyMillis ? <span className="text-fg-subtle"> · reallocates every {Math.round(it.reallocationFrequencyMillis / 60_000)} min</span> : null}
+      </div>
+      {it.flags.map((f) => (
+        <div key={f.flagKey}>
+          <span className="text-fg-subtle">on flag</span> <span className="font-mono">{f.flagKey}</span> <span className="text-fg-subtle">{f.ruleId === 'fallthrough' ? 'default rule' : `rule “${f.ruleDescription ?? f.ruleId}”`}</span>
+          {f.notInExperimentVariation !== undefined && <span className="text-fg-subtle"> · outside the experiment: {flagName(f.flagKey, f.notInExperimentVariation)}</span>}
+        </div>
+      ))}
+      {it.treatments.map((t) => (
+        <div key={t.name}>
+          <span className="font-medium">{t.name}</span> {t.allocationPercent}%{t.baseline && <Badge tone="slate">baseline</Badge>} → <b>{t.parameters.map((p) => flagName(p.flagKey, p.variation)).join(', ') || '—'}</b>
+        </div>
+      ))}
+      <div>
+        <span className="text-fg-subtle">metrics</span> {it.metrics.map((m) => `${m.key}${m.isGroup ? ' (group)' : ''}${it.primary?.key === m.key ? ' ★' : ''}`).join(', ') || '—'}
+      </div>
+      {(it.startedAt || it.endedAt) && (
+        <div className="text-fg-subtle">
+          {it.startedAt ? `started ${new Date(it.startedAt).toISOString().slice(0, 10)}` : ''}
+          {it.endedAt ? ` · ended ${new Date(it.endedAt).toISOString().slice(0, 10)}` : ''}
+          {it.winningTreatment?.name ? ` · winner “${it.winningTreatment.name}”` : ''}
+          {it.winningReason ? ` (${it.winningReason})` : ''}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SourceExperiment({ experiment, env }: { experiment: NeutralExperiment; env: string }) {
+  const e = experiment.environments.find((v) => v.env === env);
+  if (!e) return <p className="text-xs text-fg-muted">Not present in environment “{env}”. Exists in: {experiment.environments.map((v) => v.env).join(', ') || 'none'}.</p>;
+  const it = neutralDesignIteration(e);
+  const flagName = (_flagKey: string, i: number | undefined) => (i === undefined ? '?' : `variation ${i}`);
+  return (
+    <div className="space-y-1.5 text-xs">
+      <div>
+        <Badge tone="slate">{e.experimentType}</Badge> {e.methodology && <span className="text-fg-subtle">{e.methodology}</span>}
+        {e.holdout && <span className="text-fg-subtle"> · holdout {e.holdout.key ?? e.holdout.id}</span>}
+        {e.layer && <span className="text-fg-subtle"> · layer {e.layer.key} ({e.layer.reservationPercent}%)</span>}
+        {e.dataSource && <span className="text-fg-subtle"> · data source {e.dataSource}</span>}
+      </div>
+      {e.description && <div className="text-fg-muted">{e.description}</div>}
+      {it ? <Iteration it={it} flagName={flagName} /> : <div className="text-fg-muted">No iteration.</div>}
+      {e.previousIterations.length > 0 && <div className="text-fg-subtle">{e.previousIterations.length} earlier iteration{e.previousIterations.length === 1 ? '' : 's'} (stay in the source)</div>}
+      {e.analysisConfig && <div className="text-fg-subtle">analysis: {Object.entries(e.analysisConfig).map(([k, v]) => `${k} ${String(v)}`).join(', ')}</div>}
+      {e.tags.length > 0 && <div className="text-fg-subtle">tags: {e.tags.join(', ')}</div>}
+    </div>
+  );
+}
+
+function TargetExperiment({ desired }: { desired: DesiredExperiment | null }) {
+  if (!desired) return null;
+  return (
+    <div className="space-y-1.5 text-xs">
+      <div>
+        <Badge tone="slate">draft, not started</Badge> <Badge tone="slate">{desired.type}</Badge>
+        {desired.holdoutKey && <span className="text-fg-subtle"> · holdout {desired.holdoutKey}</span>}
+        {desired.layer && <span className="text-fg-subtle"> · layer {desired.layer.key} ({desired.layer.reservationPercent}%)</span>}
+      </div>
+      <div>
+        <span className="text-fg-subtle">hypothesis</span> {desired.hypothesis}
+      </div>
+      <div>
+        <span className="text-fg-subtle">randomizes by</span> <b>{desired.randomizationUnit}</b>
+      </div>
+      {desired.flags.map((f) => (
+        <div key={f.flagKey}>
+          <span className="text-fg-subtle">on flag</span> <span className="font-mono">{f.flagKey}</span> <span className="text-fg-subtle">{f.rule.kind === 'fallthrough' ? 'default rule' : `rule “${f.rule.description || `#${f.rule.index + 1}`}”`}</span>
+        </div>
+      ))}
+      {desired.treatments.map((t) => (
+        <div key={t.name}>
+          <span className="font-medium">{t.name}</span> {t.allocationPercent}%{t.baseline && <Badge tone="slate">baseline</Badge>} → <b>{t.parameters.map((p) => `variation ${p.variation}`).join(', ')}</b>
+        </div>
+      ))}
+      <div>
+        <span className="text-fg-subtle">metrics</span> {desired.metrics.map((m) => `${m.key}${m.isGroup ? ' (group)' : ''}${desired.primary.key === m.key ? ' ★' : ''}`).join(', ')}
+      </div>
+      <div className="text-fg-subtle">tags: {desired.tags.join(', ')}</div>
+    </div>
+  );
+}
+
+function SourceMetric({ metric: mt }: { metric: NeutralMetric }) {
+  const facts: [string, string | undefined][] = [
+    ['kind', `${mt.metricKind}${mt.isNumeric ? ' (numeric)' : ''}`],
+    ['event', mt.eventKey],
+    ['selector', mt.selector],
+    ['URLs', mt.urls?.length ? `${mt.urls.length}` : undefined],
+    ['success', mt.successCriteria],
+    ['unit', mt.unit],
+    ['analysis units', mt.analysisUnits.join(', ')],
+    ['aggregation', mt.unitAggregationType],
+    ['analysis', mt.analysisType ? `${mt.analysisType}${mt.percentileValue != null ? ` p${mt.percentileValue}` : ''}` : undefined],
+    ['filter', mt.filters ? `${mt.filters.attribute ?? mt.filters.type} ${mt.filters.negate ? 'not ' : ''}${mt.filters.op} ${JSON.stringify(mt.filters.values)}` : undefined],
+    ['data source', mt.dataSource ? `${mt.dataSource.name ?? mt.dataSource.key}${mt.dataSource.environmentKey ? ` (${mt.dataSource.environmentKey})` : ''}` : undefined],
+    ['denominator', mt.denominator ? JSON.stringify(mt.denominator) : undefined],
+    ['winsorize', mt.winsorLowerPercentile != null || mt.winsorUpperPercentile != null ? `${mt.winsorLowerPercentile ?? 0}–${mt.winsorUpperPercentile ?? 100}` : undefined],
+  ];
+  return (
+    <div className="space-y-1 text-xs">
+      {mt.description && <div className="text-fg-muted">{mt.description}</div>}
+      {facts.filter(([, v]) => v).map(([k, v]) => (
+        <div key={k}>
+          <span className="text-fg-subtle">{k}</span> {v}
+        </div>
+      ))}
+      {mt.tags.length > 0 && <div className="text-fg-subtle">tags: {mt.tags.join(', ')}</div>}
+    </div>
+  );
+}
+
+function SourceMetricGroup({ group }: { group: NeutralMetricGroup }) {
+  return (
+    <div className="space-y-1 text-xs">
+      {group.description && <div className="text-fg-muted">{group.description}</div>}
+      <div>
+        <span className="text-fg-subtle">{group.groupKind}</span>
+      </div>
+      <ol className="list-decimal pl-4">
+        {group.metrics.map((m) => (
+          <li key={m.key}>
+            <span className="font-mono">{m.key}</span> <span className="text-fg-subtle">as “{m.nameInGroup}”</span>
+          </li>
+        ))}
+      </ol>
+      {group.tags.length > 0 && <div className="text-fg-subtle">tags: {group.tags.join(', ')}</div>}
+    </div>
+  );
+}
+
+function SourceHoldout({ holdout, env }: { holdout: NeutralHoldout; env: string }) {
+  const h = holdout.environments.find((v) => v.env === env);
+  if (!h) return <p className="text-xs text-fg-muted">Not present in environment “{env}”. Exists in: {holdout.environments.map((v) => v.env).join(', ') || 'none'}.</p>;
+  return (
+    <div className="space-y-1 text-xs">
+      {h.description && <div className="text-fg-muted">{h.description}</div>}
+      <div>
+        <Badge tone="amber">{h.status}</Badge> <b>{h.holdoutAmount}%</b> <span className="text-fg-subtle">of {h.randomizationUnit} contexts held out</span>
+      </div>
+      <div>
+        <span className="text-fg-subtle">metrics</span> {h.metrics.map((m) => `${m.key}${m.isGroup ? ' (group)' : ''}${h.primaryMetricKey === m.key ? ' ★' : ''}`).join(', ') || '—'}
+      </div>
+      {h.prerequisiteFlagKey && (
+        <div>
+          <span className="text-fg-subtle">prerequisite flag</span> <span className="font-mono">{h.prerequisiteFlagKey}</span>
+        </div>
+      )}
+      <div>
+        <span className="text-fg-subtle">experiments</span> {h.experiments.join(', ') || 'none'}
+      </div>
+    </div>
+  );
+}
+
+function SourceLayer({ layer }: { layer: NeutralLayer }) {
+  return (
+    <div className="space-y-1 text-xs">
+      {layer.description && <div className="text-fg-muted">{layer.description}</div>}
+      {layer.randomizationUnit && (
+        <div>
+          <span className="text-fg-subtle">randomizes by</span> <b>{layer.randomizationUnit}</b>
+        </div>
+      )}
+      {layer.environments.map((e) => (
+        <div key={e.env}>
+          <span className="text-fg-subtle">{e.env}</span> {e.reservations.length ? e.reservations.map((r) => `${r.experimentKey} ${r.reservationPercent}%`).join(', ') : 'no reservations'}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** The target side of a metric, metric group, holdout or layer: the fields the console writes, as a list. */
+function TargetSummary({ result }: { result: NeutralMetricMapResult | NeutralMetricGroupMapResult | NeutralHoldoutMapResult | NeutralLayerMapResult }) {
+  const d = result.desired as Record<string, unknown> | null;
+  if (!d) return null;
+  const skip = new Set(['key', 'ldEnv', 'statsigEnv']);
+  return (
+    <div className="space-y-0.5 text-xs">
+      {Object.entries(d)
+        .filter(([k, v]) => !skip.has(k) && v !== undefined && v !== '' && !(Array.isArray(v) && v.length === 0))
+        .map(([k, v]) => (
+          <div key={k}>
+            <span className="text-fg-subtle">{k}</span> {typeof v === 'string' ? v : Array.isArray(v) && v.every((x) => typeof x === 'string') ? v.join(', ') : JSON.stringify(v)}
+          </div>
+        ))}
     </div>
   );
 }

@@ -866,3 +866,116 @@ describe('two PostHog projects → one LaunchDarkly project (PLAN §12, §22.1; 
     expect(foreign.items[0]).toMatchObject({ status: 'error', reason: 'LaunchDarkly flag “hog-kill-switch” was migrated from hog/hog-kill-switch, which is not a source of this workspace producing this key' });
   });
 });
+
+// ---------------------------------------------------------------------------------------------
+// LD-source experimentation (PLAN §20.5)
+// ---------------------------------------------------------------------------------------------
+describe('planMigration with LaunchDarkly-source experimentation (PLAN §20.5)', () => {
+  let legacy: CanonicalSnapshot;
+  beforeAll(async () => {
+    legacy = await legacySnapshot();
+  });
+  const uid = (kind: 'experiments' | 'holdouts' | 'metrics' | 'metricGroups' | 'layers', key: string) => legacy.neutral![kind]!.find((x) => x.key === key)!.uid;
+  const ldWithKinds: LdProjectState = { ...EMPTY_LD, contextKinds: ['user', 'organization'], randomizationUnits: ['user'] };
+  function legacyRequest(over: Partial<PlanRequest>): PlanRequest {
+    return {
+      gates: [],
+      ldEnvs: ['production'],
+      snapshots: [legacy],
+      profile: profileFor(legacy, { test: 'test', production: 'production' }),
+      resolutions: new Map(),
+      directory: { ...DIRECTORY, members: [...DIRECTORY.members, { id: 'mem-legacy-ops', email: 'ops@acme-legacy.example' }] },
+      capabilities: { ...CAPS, existingContextKinds: ['user', 'organization'] },
+      ld: ldWithKinds,
+      now: NOW,
+      ...over,
+    };
+  }
+
+  it('plans a running experiment with its flag, metrics, funnel, holdout and layer, in dependency order', () => {
+    const blocked = planMigration(legacyRequest({ experiments: [uid('experiments', 'legacy-cta-copy-test')] }));
+    expect(blocked.ready).toBe(false);
+    // The experiment's own question, plus those of what it pulls in (the flag's rollout, the holdout, the maintainers nobody here matches).
+    expect([...new Set(blocked.decisions.map((d) => d.type))].sort()).toEqual(['experiment_running', 'holdout_running', 'maintainer_unknown', 'partial_rollout_rebucket']);
+    expect(blocked.items.find((i) => i.kind === 'experiment')).toMatchObject({ status: 'blocked' });
+
+    const plan = planMigration(acceptAll(legacyRequest({ experiments: [uid('experiments', 'legacy-cta-copy-test')] })));
+    expect(plan.errors).toEqual([]);
+    expect(plan.ready).toBe(true);
+    // legacy-checkout-completed is analyzed by organization too, so that kind is enabled as a randomization unit first.
+    expect(plan.steps.map((s) => s.id)).toEqual([
+      'randomization_unit:organization',
+      'metric:legacy-checkout-completed',
+      'metric:legacy-cta-click',
+      'metric:legacy-order-value',
+      'metric_group:legacy-checkout-funnel',
+      'layer:legacy-checkout-layer',
+      'shell:legacy-cta-copy',
+      'env:production:legacy-cta-copy',
+      'holdout:production:legacy-q3-holdout',
+      'experiment:production:legacy-cta-copy-test',
+    ]);
+    const x = plan.steps.find((s) => s.op === 'create_experiment');
+    expect(x?.op === 'create_experiment' && x.deps.sort()).toEqual(['env:production:legacy-cta-copy', 'holdout:production:legacy-q3-holdout', 'layer:legacy-checkout-layer', 'metric:legacy-cta-click', 'metric:legacy-order-value', 'metric_group:legacy-checkout-funnel']);
+    expect(x?.op === 'create_experiment' && x.provenance).toMatchObject({ sourceKind: 'launchdarkly', sourceAlias: 'legacy', statsigType: 'experiment', statsigId: 'legacy-cta-copy-test' });
+    expect(x?.op === 'create_experiment' && x.desired).toMatchObject({ holdoutKey: 'legacy-q3-holdout', layer: { key: 'legacy-checkout-layer', reservationPercent: 40 }, sourceStatus: 'running' });
+    // The funnel waits for the metrics it is made of; the holdout for its metrics.
+    const g = plan.steps.find((s) => s.op === 'upsert_metric_group');
+    expect(g?.op === 'upsert_metric_group' && g.deps.sort()).toEqual(['metric:legacy-checkout-completed', 'metric:legacy-cta-click']);
+    const h = plan.steps.find((s) => s.op === 'upsert_holdout');
+    expect(h?.op === 'upsert_holdout' && h.deps.sort()).toEqual(['metric:legacy-checkout-completed', 'metric:legacy-order-value']);
+    expect(plan.items.map((i) => [i.kind, i.entityId, i.dependency])).toEqual([
+      ['experiment', 'legacy-cta-copy-test', false],
+      ['flag', 'legacy-cta-copy', true],
+      ['holdout', 'legacy-q3-holdout', true],
+      ['metric', 'legacy-checkout-completed', true],
+      ['metric', 'legacy-order-value', true],
+      ['layer', 'legacy-checkout-layer', true],
+      ['metric_group', 'legacy-checkout-funnel', true],
+      ['metric', 'legacy-cta-click', true],
+    ]);
+  });
+
+  it('enables a custom randomization unit for an experiment on a custom kind, and metrics migrate on their own', () => {
+    const plan = planMigration(acceptAll(legacyRequest({ experiments: [uid('experiments', 'legacy-checkout-redesign-test')] })));
+    expect(plan.ready).toBe(true);
+    expect(plan.steps.map((s) => s.id)).toContain('randomization_unit:organization');
+    const x = plan.steps.find((s) => s.op === 'create_experiment');
+    expect(x?.op === 'create_experiment' && x.deps).toContain('randomization_unit:organization');
+    // A warehouse-native metric the experiment measures keeps its data source (the metric_data_source decision was accepted).
+    const wh = plan.steps.find((s) => s.id === 'metric:legacy-wh-revenue');
+    expect(wh?.op === 'upsert_metric' && wh.desired.dataSource).toEqual({ key: 'legacy-snowflake', environmentKey: 'production' });
+
+    const metricsOnly = planMigration(acceptAll(legacyRequest({ metrics: [uid('metrics', 'legacy-order-value'), uid('metrics', 'legacy-old-signup')], metricGroups: [uid('metricGroups', 'legacy-checkout-funnel')] })));
+    expect(metricsOnly.ready).toBe(true);
+    expect(metricsOnly.steps.map((s) => s.id)).toEqual(['randomization_unit:organization', 'metric:legacy-checkout-completed', 'metric:legacy-cta-click', 'metric:legacy-order-value', 'metric_group:legacy-checkout-funnel']);
+    expect(metricsOnly.items.find((i) => i.entityId === 'legacy-old-signup')).toMatchObject({ status: 'skipped' });
+    const m = metricsOnly.steps.find((s) => s.id === 'metric:legacy-order-value');
+    expect(m?.op === 'upsert_metric' && m.provenance).toMatchObject({ sourceKind: 'launchdarkly', statsigType: 'metric', statsigId: 'legacy-order-value' });
+  });
+
+  it('a draft in test runs on the flag rule, is skipped where it does not exist, and adopts or collides with an existing target experiment', () => {
+    const plan = planMigration(acceptAll(legacyRequest({ experiments: [uid('experiments', 'legacy-theme-test')], ldEnvs: ['test', 'production'] })));
+    expect(plan.ready).toBe(true);
+    expect(plan.items.filter((i) => i.kind === 'experiment').map((i) => [i.ldEnv, i.status])).toEqual([
+      ['test', 'ready'],
+      ['production', 'skipped'],
+    ]);
+    const x = plan.steps.find((s) => s.op === 'create_experiment');
+    expect(x?.op === 'create_experiment' && x.desired.flags[0]!.rule).toEqual({ kind: 'rule', index: 0, description: 'Dark mode opt-in', sourceRuleId: 'rule-dark' });
+
+    const foreign = planMigration(acceptAll(legacyRequest({ experiments: [uid('experiments', 'legacy-theme-test')], ldEnvs: ['test'], ld: { ...ldWithKinds, experiments: { test: new Map([['legacy-theme-test', { key: 'legacy-theme-test', tags: [] }]]) } } })));
+    expect(foreign.items.find((i) => i.kind === 'experiment')).toMatchObject({ status: 'blocked' });
+    expect(foreign.decisions.map((d) => d.type)).toEqual(['key_collision']);
+    const ours = planMigration(acceptAll(legacyRequest({ experiments: [uid('experiments', 'legacy-theme-test')], ldEnvs: ['test'], ld: { ...ldWithKinds, experiments: { test: new Map([['legacy-theme-test', { key: 'legacy-theme-test', tags: ['migrated-from-launchdarkly', 'migration-src-legacy'] }]]) } } })));
+    const step = ours.steps.find((s) => s.op === 'create_experiment');
+    expect(step?.op === 'create_experiment' && [step.exists, step.adopt]).toEqual([true, false]);
+  });
+
+  it('skips the archived experiment and the ended holdout; a layer migrates on its own', () => {
+    const plan = planMigration(acceptAll(legacyRequest({ experiments: [uid('experiments', 'legacy-old-banner-test')], holdouts: [uid('holdouts', 'legacy-q3-holdout')], layers: [uid('layers', 'legacy-checkout-layer')] })));
+    expect(plan.items.find((i) => i.kind === 'experiment')).toMatchObject({ status: 'skipped' });
+    expect(plan.items.find((i) => i.kind === 'holdout')).toMatchObject({ status: 'ready', dependency: false });
+    expect(plan.steps.map((s) => s.id)).toEqual(['randomization_unit:organization', 'metric:legacy-checkout-completed', 'metric:legacy-order-value', 'layer:legacy-checkout-layer', 'holdout:production:legacy-q3-holdout']);
+  });
+});

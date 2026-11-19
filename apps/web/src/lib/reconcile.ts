@@ -90,6 +90,10 @@ export interface LdListNeeds {
   aiConfigs: boolean;
   /** Experimentation settings (randomization units). */
   settings: boolean;
+  /** LD-source experimentation (PLAN §20.5). Optional: older callers and tests leave them out. */
+  metricGroups?: boolean;
+  layers?: boolean;
+  holdoutEnvs?: string[];
 }
 
 /**
@@ -104,11 +108,17 @@ export function listsTouchedByRun(run: RunRecord): LdListNeeds {
     const s = rec.step;
     if (s.op === 'ensure_context_kind') needs.contextKinds = true;
     else if (s.op === 'upsert_metric') needs.metrics = true;
-    else if (s.op === 'create_bandit' && !needs.experimentEnvs.includes(s.ldEnv)) needs.experimentEnvs.push(s.ldEnv);
+    else if ((s.op === 'create_bandit' || s.op === 'create_experiment') && !needs.experimentEnvs.includes(s.ldEnv)) needs.experimentEnvs.push(s.ldEnv);
     else if (s.op === 'upsert_ai_config') needs.aiConfigs = true;
     else if (s.op === 'ensure_randomization_unit') needs.settings = true;
+    else if (s.op === 'upsert_metric_group') needs.metricGroups = true;
+    else if (s.op === 'ensure_layer') needs.layers = true;
+    else if (s.op === 'upsert_holdout') {
+      needs.holdoutEnvs ??= [];
+      if (!needs.holdoutEnvs.includes(s.ldEnv)) needs.holdoutEnvs.push(s.ldEnv);
+    }
   }
   return needs;
 }
 
-export const needsNothing = (n: LdListNeeds): boolean => !n.contextKinds && !n.metrics && !n.experimentEnvs.length && !n.aiConfigs && !n.settings;
+export const needsNothing = (n: LdListNeeds): boolean => !n.contextKinds && !n.metrics && !n.experimentEnvs.length && !n.aiConfigs && !n.settings && !n.metricGroups && !n.layers && !n.holdoutEnvs?.length;

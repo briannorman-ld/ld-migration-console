@@ -7,17 +7,17 @@
  */
 import type { MigrationSelection } from './migration.ts';
 
-export type SelectionKind = 'gate' | 'config' | 'autotune' | 'flag' | 'segment' | 'prompt';
-const KINDS: ReadonlySet<string> = new Set<SelectionKind>(['gate', 'config', 'autotune', 'flag', 'segment', 'prompt']);
+export type SelectionKind = 'gate' | 'config' | 'autotune' | 'flag' | 'segment' | 'prompt' | 'metric' | 'metric_group' | 'experiment' | 'holdout' | 'layer';
+const KINDS: ReadonlySet<string> = new Set<SelectionKind>(['gate', 'config', 'autotune', 'flag', 'segment', 'prompt', 'metric', 'metric_group', 'experiment', 'holdout', 'layer']);
 
 export function kindOfUid(uid: string): SelectionKind | undefined {
   const k = uid.split('/')[1];
   return k && KINDS.has(k) ? (k as SelectionKind) : undefined;
 }
 
-/** The plan request for a set of uids; uids of other kinds (experiments, say) are left out. */
+/** The plan request for a set of uids; uids of other kinds (StatSig experiments, say) are left out. */
 export function toSelection(uids: Iterable<string>): MigrationSelection {
-  const sel: Required<Omit<MigrationSelection, 'contextKinds'>> = { gates: [], configs: [], autotunes: [], flags: [], segments: [], prompts: [] };
+  const sel: Required<Omit<MigrationSelection, 'contextKinds'>> = { gates: [], configs: [], autotunes: [], flags: [], segments: [], prompts: [], metrics: [], metricGroups: [], experiments: [], holdouts: [], layers: [] };
   for (const uid of uids) {
     switch (kindOfUid(uid)) {
       case 'gate':
@@ -38,6 +38,21 @@ export function toSelection(uids: Iterable<string>): MigrationSelection {
       case 'prompt':
         sel.prompts.push(uid);
         break;
+      case 'metric':
+        sel.metrics.push(uid);
+        break;
+      case 'metric_group':
+        sel.metricGroups.push(uid);
+        break;
+      case 'experiment':
+        sel.experiments.push(uid);
+        break;
+      case 'holdout':
+        sel.holdouts.push(uid);
+        break;
+      case 'layer':
+        sel.layers.push(uid);
+        break;
     }
   }
   return sel;
@@ -50,6 +65,11 @@ const NOUN: Record<SelectionKind, [string, string]> = {
   flag: ['flag', 'flags'],
   segment: ['segment', 'segments'],
   prompt: ['AI Config', 'AI Configs'],
+  metric: ['metric', 'metrics'],
+  metric_group: ['metric group', 'metric groups'],
+  experiment: ['experiment', 'experiments'],
+  holdout: ['holdout', 'holdouts'],
+  layer: ['layer', 'layers'],
 };
 
 /** "5 gates, 2 dynamic configs and 1 segment" (kinds in migration order). */
@@ -59,7 +79,7 @@ export function describeUids(uids: Iterable<string>): string {
     const k = kindOfUid(uid);
     if (k) counts.set(k, (counts.get(k) ?? 0) + 1);
   }
-  const parts = (['segment', 'gate', 'config', 'flag', 'autotune', 'prompt'] as SelectionKind[]).filter((k) => counts.get(k)).map((k) => `${counts.get(k)} ${NOUN[k][counts.get(k) === 1 ? 0 : 1]}`);
+  const parts = (['segment', 'gate', 'config', 'flag', 'autotune', 'prompt', 'metric', 'metric_group', 'layer', 'holdout', 'experiment'] as SelectionKind[]).filter((k) => counts.get(k)).map((k) => `${counts.get(k)} ${NOUN[k][counts.get(k) === 1 ? 0 : 1]}`);
   if (parts.length <= 1) return parts[0] ?? 'nothing';
   return `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}`;
 }

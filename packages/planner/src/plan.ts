@@ -4,7 +4,7 @@
  * metrics, randomization units), collision checks against what's already in LD, and an ordered
  * list of idempotent steps. Pure: LD state is an input.
  */
-import { hasMigratedTag, hasSourceTag, migrationKindOf, ownValue, PROP, readFlagProvenance, readSync, stableStringify, syncedEnvsOf, syncPropertyKey, type Autotune, type CanonicalSnapshot, type Config, type Gate, type MigrationSourceKind, type NeutralFlag, type Prompt } from '@sslm/canonical';
+import { hasMigratedTag, hasSourceTag, migrationKindOf, ownValue, parseFooter, PROP, readFlagProvenance, readSync, stableStringify, syncedEnvsOf, syncPropertyKey, type Autotune, type CanonicalSnapshot, type Config, type Gate, type MigrationSourceKind, type NeutralExperiment, type NeutralFlag, type NeutralHoldout, type NeutralLayer, type NeutralMetric, type NeutralMetricGroup, type Prompt } from '@sslm/canonical';
 import { gateById, neutralFlagByKey, neutralSegmentByKey, segmentById } from '@sslm/mapper';
 import { ldChange, type LdFlagEnvInfo } from './drift.ts';
 import {
@@ -13,7 +13,12 @@ import {
   mapAutotune,
   mapConfig,
   mapGate,
+  mapNeutralExperiment,
   mapNeutralFlag,
+  mapNeutralHoldout,
+  mapNeutralLayer,
+  mapNeutralMetric,
+  mapNeutralMetricGroup,
   mapNeutralSegment,
   mapPrompt,
   mapSegment,
@@ -22,9 +27,13 @@ import {
   type DecisionPoint,
   type DesiredAiConfig,
   type DesiredBandit,
+  type DesiredExperiment,
   type DesiredFlagEnv,
   type DesiredFlagShell,
+  type DesiredHoldout,
+  type DesiredLayer,
   type DesiredMetric,
+  type DesiredMetricGroup,
   type DesiredSegment,
   type FidelityReport,
   type GateMapResult,
@@ -73,6 +82,12 @@ export interface LdExperimentState {
   iterationStatus?: string | null;
 }
 
+/** Holdouts and layers have no tags: ownership is the provenance footer in the description (PLAN §20.5). */
+export interface LdFooteredState {
+  key: string;
+  description?: string | null;
+}
+
 /** What the planner needs to know about the LD project (read by the app before planning). */
 export interface LdProjectState {
   flags: ReadonlyMap<string, LdFlagState>;
@@ -89,6 +104,12 @@ export interface LdProjectState {
   randomizationUnits?: string[];
   /** AI Configs in the project; absent when the plan has none or they weren't read. Ownership is the pair of tags, like segments. */
   aiConfigs?: ReadonlyMap<string, LdSegmentState>;
+  /** Metric groups (project-level); absent when not readable. Ownership is the pair of tags. */
+  metricGroups?: ReadonlyMap<string, LdSegmentState>;
+  /** Holdouts per LD environment key; absent when not readable. */
+  holdouts?: Readonly<Record<string, ReadonlyMap<string, LdFooteredState>>>;
+  /** Layers (project-level); absent when not readable. */
+  layers?: ReadonlyMap<string, LdFooteredState>;
 }
 
 export interface PlanRequest {
@@ -104,6 +125,12 @@ export interface PlanRequest {
   prompts?: string[];
   /** Segment uids to migrate on their own (neutral or StatSig); segments a flag needs are pulled in regardless. */
   segments?: string[];
+  /** LD-source experimentation (PLAN §20.5): uids of metrics, metric groups and layers (project-level) and of experiments and holdouts (per `ldEnvs`). Dependencies are pulled in regardless. */
+  metrics?: string[];
+  metricGroups?: string[];
+  experiments?: string[];
+  holdouts?: string[];
+  layers?: string[];
   /**
    * Context kinds to create on their own (the guide's "create the kinds first"); kinds an item
    * needs are pulled in regardless. `availableForExperiments` also enables the kind as a
@@ -146,6 +173,11 @@ export interface PlanMappers {
   mapNeutralFlag: typeof mapNeutralFlag;
   mapNeutralSegment: typeof mapNeutralSegment;
   mapPrompt: typeof mapPrompt;
+  mapNeutralMetric: typeof mapNeutralMetric;
+  mapNeutralMetricGroup: typeof mapNeutralMetricGroup;
+  mapNeutralExperiment: typeof mapNeutralExperiment;
+  mapNeutralHoldout: typeof mapNeutralHoldout;
+  mapNeutralLayer: typeof mapNeutralLayer;
 }
 
 /**
@@ -170,6 +202,11 @@ export type PlanStep =
   | { id: string; deps: string[]; op: 'upsert_metric'; key: string; exists: boolean; adopt: boolean; desired: DesiredMetric; provenance: Omit<Provenance, 'statsigType'> & { statsigType: 'metric' } }
   | { id: string; deps: string[]; op: 'create_bandit'; key: string; ldEnv: string; statsigEnv: string; flagKey: string; exists: boolean; adopt: boolean; desired: DesiredBandit; provenance: Provenance }
   | { id: string; deps: string[]; op: 'upsert_ai_config'; key: string; exists: boolean; adopt: boolean; desired: DesiredAiConfig; provenance: Omit<Provenance, 'statsigType'> & { statsigType: 'prompt' } }
+  // LD-source experimentation (PLAN §20.5)
+  | { id: string; deps: string[]; op: 'upsert_metric_group'; key: string; exists: boolean; adopt: boolean; desired: DesiredMetricGroup; provenance: Omit<Provenance, 'statsigType'> & { statsigType: 'metric_group' } }
+  | { id: string; deps: string[]; op: 'create_experiment'; key: string; ldEnv: string; statsigEnv: string; exists: boolean; adopt: boolean; desired: DesiredExperiment; provenance: Omit<Provenance, 'statsigType'> & { statsigType: 'experiment' } }
+  | { id: string; deps: string[]; op: 'upsert_holdout'; key: string; ldEnv: string; statsigEnv: string; exists: boolean; adopt: boolean; desired: DesiredHoldout; provenance: Omit<Provenance, 'statsigType'> & { statsigType: 'holdout' } }
+  | { id: string; deps: string[]; op: 'ensure_layer'; key: string; exists: boolean; adopt: boolean; desired: DesiredLayer; provenance: Omit<Provenance, 'statsigType'> & { statsigType: 'layer' } }
   | {
       id: string;
       deps: string[];
@@ -190,7 +227,7 @@ export type ItemStatus = 'ready' | 'blocked' | 'skipped' | 'error';
 export interface PlanItem {
   uid: string;
   /** `flag`: a neutral (LD-source) flag, PLAN §20. `prompt`: a StatSig prompt → LD AI Config (project-level, `ldEnv` empty). */
-  kind: 'gate' | 'config' | 'segment' | 'autotune' | 'metric' | 'flag' | 'prompt';
+  kind: 'gate' | 'config' | 'segment' | 'autotune' | 'metric' | 'flag' | 'prompt' | 'metric_group' | 'experiment' | 'holdout' | 'layer';
   entityId: string;
   sourceId: string;
   ldKey: string;
@@ -350,19 +387,19 @@ export function planMigration(req: PlanRequest): Plan {
     for (const s of st) stale.set(s.decision.id, s);
   };
 
-  const collision = (item: PlanItem, subject: DecisionPoint['subject'], ldKey: string, what: 'flag' | 'segment' | 'metric' | 'bandit' | 'AI Config', where: string): 'adopt' | 'skip' | 'open' => {
-    const overwrites = what === 'flag' ? 'targeting in the migrated environments' : what === 'segment' ? 'rules and targets' : what === 'metric' ? 'event key, success criteria and tags' : what === 'AI Config' ? 'name, description, tags and maintainer (its variations are left alone)' : 'draft iteration';
+  const collision = (item: PlanItem, subject: DecisionPoint['subject'], ldKey: string, what: 'flag' | 'segment' | 'metric' | 'bandit' | 'AI Config' | 'metric group' | 'experiment' | 'holdout' | 'layer', where: string): 'adopt' | 'skip' | 'open' => {
+    const overwrites = what === 'flag' ? 'targeting in the migrated environments' : what === 'segment' ? 'rules and targets' : what === 'metric' ? 'definition (event key, success criteria, units, filters) and tags' : what === 'AI Config' ? 'name, description, tags and maintainer (its variations are left alone)' : what === 'metric group' ? 'name, description, metrics and tags' : what === 'holdout' ? 'name and description (a holdout that runs is never restarted)' : what === 'layer' ? 'name and description' : 'draft iteration';
     const dp = decisionPoint({
       type: 'key_collision',
       severity: 'blocking',
       subject: { ...subject, location: where },
-      path: `${what}:${ldKey}${what === 'segment' || what === 'bandit' ? `:${where}` : ''}`,
+      path: `${what}:${ldKey}${what === 'segment' || what === 'bandit' || what === 'experiment' || what === 'holdout' ? `:${where}` : ''}`,
       title: `LaunchDarkly ${what === 'bandit' ? 'experiment' : what} “${ldKey}” already exists`,
       explanation:
-        what === 'bandit'
-          ? `An experiment with this key exists in ${where} and wasn't created by this app. Adopting it replaces its draft iteration with the bandit's; an iteration that already ran is left alone.`
+        what === 'bandit' || what === 'experiment'
+          ? `An experiment with this key exists in ${where} and wasn't created by this app. Adopting it replaces its draft iteration with the ${what === 'bandit' ? "bandit's" : "copy's"}; an iteration that already ran is left alone.`
           : `A ${what} with this key exists in LaunchDarkly and wasn't created by this app. Adopting it overwrites its ${overwrites} on every sync; the current state is saved first so the run can be undone.`,
-      sourceFragment: { key: ldKey, kind: what === 'AI Config' ? 'ai_config' : what },
+      sourceFragment: { key: ldKey, kind: what === 'AI Config' ? 'ai_config' : what === 'metric group' ? 'metric_group' : what },
       options: [
         { key: 'adopt', label: 'Adopt it (link and overwrite on sync)', explanation: 'The existing LaunchDarkly resource becomes the migration target. A pre-image is kept for undo.', resultingFidelity: 'full' },
         { key: 'skip', label: 'Skip this item', explanation: 'Leave the LaunchDarkly resource alone and keep the item in StatSig.', resultingFidelity: 'skipped' },
@@ -787,7 +824,7 @@ export function planMigration(req: PlanRequest): Plan {
       return existing.status === 'ready' ? { ok: true, stepId } : { ok: false, reason: `metric “${desired.key}” is ${existing.status}` };
     }
     const ldMetric = req.ld.metrics?.get(desired.key);
-    const item: PlanItem = { uid: `${snapshot.source.sourceId}/metric/${desired.key}`, kind: 'metric', entityId: desired.eventKey, sourceId: snapshot.source.sourceId, ldKey: desired.key, ldEnv: '', status: 'ready', dependency: true, requiredBy: [requiredBy.uid], decisions: [], exists: !!ldMetric };
+    const item: PlanItem = { uid: `${snapshot.source.sourceId}/metric/${desired.key}`, kind: 'metric', entityId: desired.eventKey ?? desired.key, sourceId: snapshot.source.sourceId, ldKey: desired.key, ldEnv: '', status: 'ready', dependency: true, requiredBy: [requiredBy.uid], decisions: [], exists: !!ldMetric };
     items.set(itemKey, item);
     let adopt = false;
     if (ldMetric && !ownsSegment(ldMetric, snapshot.source.alias)) {
@@ -808,7 +845,7 @@ export function planMigration(req: PlanRequest): Plan {
       exists: !!ldMetric,
       adopt,
       desired,
-      provenance: { sourceKind: 'statsig', sourceAlias: snapshot.source.alias, statsigType: 'metric', statsigId: desired.eventKey, statsigFingerprint: owner.statsigFingerprint, decisionSetHash: owner.decisionSetHash },
+      provenance: { sourceKind: 'statsig', sourceAlias: snapshot.source.alias, statsigType: 'metric', statsigId: desired.eventKey ?? desired.key, statsigFingerprint: owner.statsigFingerprint, decisionSetHash: owner.decisionSetHash },
     });
     return { ok: true, stepId };
   };
@@ -1177,6 +1214,245 @@ export function planMigration(req: PlanRequest): Plan {
     return { ok: true, stepId };
   };
 
+  // --- LD-source experimentation (PLAN §20.5) --------------------------------------------------
+  // Metrics, metric groups and layers are project-level (one step per key, shared across
+  // environments); experiments and holdouts are per environment. Each pulls its dependencies in:
+  // an experiment its flag (planned like a prerequisite), metrics, metric groups, holdout and layer.
+  const neutralMetricsByUid = new Map(req.snapshots.flatMap((s) => (s.neutral?.metrics ?? []).map((m) => [m.uid, { metric: m, snapshot: s }] as const)));
+  const neutralMetricGroupsByUid = new Map(req.snapshots.flatMap((s) => (s.neutral?.metricGroups ?? []).map((g) => [g.uid, { group: g, snapshot: s }] as const)));
+  const neutralExperimentsByUid = new Map(req.snapshots.flatMap((s) => (s.neutral?.experiments ?? []).map((x) => [x.uid, { experiment: x, snapshot: s }] as const)));
+  const neutralHoldoutsByUid = new Map(req.snapshots.flatMap((s) => (s.neutral?.holdouts ?? []).map((h) => [h.uid, { holdout: h, snapshot: s }] as const)));
+  const neutralLayersByUid = new Map(req.snapshots.flatMap((s) => (s.neutral?.layers ?? []).map((l) => [l.uid, { layer: l, snapshot: s }] as const)));
+  const mapperArgs = (snapshot: CanonicalSnapshot, env: { statsig: string; ld: string }) => ({ canonical: { snapshot }, profile: req.profile, resolutions: req.resolutions, capabilities: req.capabilities, env, now: req.now, ...dir });
+  /** Holdouts and layers carry provenance in a description footer only. */
+  const ownsByFooter = (x: { description?: string | null } | undefined, alias: string): boolean => !!x && parseFooter(x.description ?? '')?.src === alias;
+  type Dep = { ok: boolean; stepId?: string; reason?: string };
+  /** Shared "already planned" handling for an item keyed by `itemKey`. */
+  const planned = (itemKey: string, requiredBy: string | null, stepId: string): Dep | null => {
+    const existing = items.get(itemKey);
+    if (!existing) return null;
+    if (requiredBy) existing.requiredBy.push(requiredBy);
+    if (existing.status === 'ready') return { ok: true, stepId };
+    return { ok: false, reason: `${existing.kind} “${existing.entityId}” is ${existing.status}` };
+  };
+  const experimentationProvenance = (snapshot: CanonicalSnapshot, id: string, r: { statsigFingerprint: string; decisionSetHash: string }, version?: number) => ({
+    sourceKind: migrationKindOf(snapshot.source.sourceKind),
+    sourceAlias: snapshot.source.alias,
+    statsigId: id,
+    ...(version !== undefined ? { statsigVersion: version } : {}),
+    statsigFingerprint: r.statsigFingerprint,
+    decisionSetHash: r.decisionSetHash,
+  });
+  /** Dependencies every experimentation item may have: context kinds, randomization units, metrics, metric groups, flags (in `ldEnv`), holdouts, layers. */
+  const planExperimentationDeps = (deps: { kind: string; key: string; entityId?: string }[], snapshot: CanonicalSnapshot, ldEnv: string | null, requiredBy: string, sourceEnv: string | null): { depSteps: string[]; problems: string[] } => {
+    const depSteps = ensureKinds(deps, migrationKindOf(snapshot.source.sourceKind));
+    const problems: string[] = [];
+    for (const d of deps) {
+      if (d.kind === 'randomization_unit') {
+        const id = ensureRandomizationUnit(d.key);
+        if (id) depSteps.push(id);
+      } else if (d.kind === 'metric') {
+        const m = (snapshot.neutral?.metrics ?? []).find((x) => x.key === d.key);
+        if (!m) {
+          problems.push(`metric “${d.key}” is not in the source snapshot`);
+          continue;
+        }
+        const r = planNeutralMetric(m, snapshot, requiredBy);
+        if (r.ok) {
+          if (r.stepId) depSteps.push(r.stepId);
+        } else problems.push(r.reason ?? `metric ${d.key}`);
+      } else if (d.kind === 'metric_group') {
+        const g = (snapshot.neutral?.metricGroups ?? []).find((x) => x.key === d.key);
+        if (!g) {
+          problems.push(`metric group “${d.key}” is not in the source snapshot`);
+          continue;
+        }
+        const r = planNeutralMetricGroup(g, snapshot, requiredBy);
+        if (r.ok) {
+          if (r.stepId) depSteps.push(r.stepId);
+        } else problems.push(r.reason ?? `metric group ${d.key}`);
+      } else if (d.kind === 'flag') {
+        if (!ldEnv) continue;
+        const f = neutralFlagByKey(snapshot).get(d.key);
+        if (!f) {
+          problems.push(`flag “${d.key}” is not in the source snapshot`);
+          continue;
+        }
+        const r = planNeutralFlag(f, snapshot, ldEnv, requiredBy, []);
+        if (r.ok) {
+          if (r.stepId) depSteps.push(r.stepId);
+        } else problems.push(r.reason ?? `flag ${d.key}`);
+      } else if (d.kind === 'holdout') {
+        if (!ldEnv || !sourceEnv) continue;
+        const h = (snapshot.neutral?.holdouts ?? []).find((x) => x.key === d.key);
+        if (!h) {
+          problems.push(`holdout “${d.key}” is not in the source snapshot`);
+          continue;
+        }
+        const r = planNeutralHoldout(h, snapshot, ldEnv, requiredBy);
+        if (r.ok) {
+          if (r.stepId) depSteps.push(r.stepId);
+        } else problems.push(r.reason ?? `holdout ${d.key}`);
+      } else if (d.kind === 'layer') {
+        const l = (snapshot.neutral?.layers ?? []).find((x) => x.key === d.key);
+        if (!l) {
+          problems.push(`layer “${d.key}” is not in the source snapshot`);
+          continue;
+        }
+        const r = planNeutralLayer(l, snapshot, requiredBy);
+        if (r.ok) {
+          if (r.stepId) depSteps.push(r.stepId);
+        } else problems.push(r.reason ?? `layer ${d.key}`);
+      }
+    }
+    return { depSteps, problems };
+  };
+
+  const planNeutralMetric = (m: NeutralMetric, snapshot: CanonicalSnapshot, requiredBy: string | null): Dep => {
+    const stepId = `metric:${m.key}`;
+    const already = planned(`metric:${m.key}`, requiredBy, stepId);
+    if (already) return already;
+    const item: PlanItem = { uid: m.uid, kind: 'metric', entityId: m.key, sourceId: snapshot.source.sourceId, ldKey: m.key, ldEnv: '', status: 'ready', dependency: requiredBy !== null, requiredBy: requiredBy ? [requiredBy] : [], decisions: [], exists: false };
+    items.set(`metric:${m.key}`, item);
+    const r = (req.mappers?.mapNeutralMetric ?? mapNeutralMetric)({ ...mapperArgs(snapshot, { statsig: '', ld: '' }), entity: m });
+    item.fidelity = r.fidelity;
+    addDecisions(item, r.unresolved, r.stale);
+    if (r.skipped || !r.desired) return finishItem(item, 'skipped', r.skipped ?? 'nothing to write');
+    const ldMetric = req.ld.metrics?.get(m.key);
+    item.exists = !!ldMetric;
+    const alias = snapshot.source.alias;
+    item.owned = !!ldMetric && ownsSegment(ldMetric, alias);
+    let adopt = false;
+    if (ldMetric && !item.owned) {
+      const c = collision(item, { sourceId: snapshot.source.sourceId, kind: 'metric', uid: m.uid, id: m.key }, m.key, 'metric', 'metric key');
+      if (c === 'skip') return finishItem(item, 'skipped', `LaunchDarkly metric “${m.key}” exists and was not adopted`);
+      if (c === 'open') return finishItem(item, 'blocked', `LaunchDarkly metric “${m.key}” already exists`);
+      adopt = true;
+    }
+    const { depSteps, problems } = planExperimentationDeps(r.dependencies, snapshot, null, m.uid, null);
+    if (r.unresolved.length) return finishItem(item, 'blocked', `${r.unresolved.length} open decision${r.unresolved.length === 1 ? '' : 's'}`);
+    if (problems.length) return finishItem(item, 'blocked', `depends on: ${problems.join('; ')}`);
+    steps.set(stepId, { id: stepId, deps: depSteps, op: 'upsert_metric', key: m.key, exists: !!ldMetric, adopt, desired: r.desired, provenance: { ...experimentationProvenance(snapshot, m.key, r, m.version), statsigType: 'metric' } });
+    return { ok: true, stepId };
+  };
+
+  const planNeutralMetricGroup = (g: NeutralMetricGroup, snapshot: CanonicalSnapshot, requiredBy: string | null): Dep => {
+    const stepId = `metric_group:${g.key}`;
+    const already = planned(`metric_group:${g.key}`, requiredBy, stepId);
+    if (already) return already;
+    const item: PlanItem = { uid: g.uid, kind: 'metric_group', entityId: g.key, sourceId: snapshot.source.sourceId, ldKey: g.key, ldEnv: '', status: 'ready', dependency: requiredBy !== null, requiredBy: requiredBy ? [requiredBy] : [], decisions: [], exists: false };
+    items.set(`metric_group:${g.key}`, item);
+    const r = (req.mappers?.mapNeutralMetricGroup ?? mapNeutralMetricGroup)({ ...mapperArgs(snapshot, { statsig: '', ld: '' }), entity: g });
+    item.fidelity = r.fidelity;
+    addDecisions(item, r.unresolved, r.stale);
+    if (r.skipped || !r.desired) return finishItem(item, 'skipped', r.skipped ?? 'nothing to write');
+    const existing = req.ld.metricGroups?.get(g.key);
+    item.exists = !!existing;
+    item.owned = !!existing && ownsSegment(existing, snapshot.source.alias);
+    let adopt = false;
+    if (existing && !item.owned) {
+      const c = collision(item, { sourceId: snapshot.source.sourceId, kind: 'metric', uid: g.uid, id: g.key }, g.key, 'metric group', 'metric group key');
+      if (c === 'skip') return finishItem(item, 'skipped', `LaunchDarkly metric group “${g.key}” exists and was not adopted`);
+      if (c === 'open') return finishItem(item, 'blocked', `LaunchDarkly metric group “${g.key}” already exists`);
+      adopt = true;
+    }
+    const { depSteps, problems } = planExperimentationDeps(r.dependencies, snapshot, null, g.uid, null);
+    if (r.unresolved.length) return finishItem(item, 'blocked', `${r.unresolved.length} open decision${r.unresolved.length === 1 ? '' : 's'}`);
+    if (problems.length) return finishItem(item, 'blocked', `depends on: ${problems.join('; ')}`);
+    steps.set(stepId, { id: stepId, deps: depSteps, op: 'upsert_metric_group', key: g.key, exists: !!existing, adopt, desired: r.desired, provenance: { ...experimentationProvenance(snapshot, g.key, r, g.version), statsigType: 'metric_group' } });
+    return { ok: true, stepId };
+  };
+
+  const planNeutralLayer = (l: NeutralLayer, snapshot: CanonicalSnapshot, requiredBy: string | null): Dep => {
+    const stepId = `layer:${l.key}`;
+    const already = planned(`layer:${l.key}`, requiredBy, stepId);
+    if (already) return already;
+    const item: PlanItem = { uid: l.uid, kind: 'layer', entityId: l.key, sourceId: snapshot.source.sourceId, ldKey: l.key, ldEnv: '', status: 'ready', dependency: requiredBy !== null, requiredBy: requiredBy ? [requiredBy] : [], decisions: [], exists: false };
+    items.set(`layer:${l.key}`, item);
+    const r = (req.mappers?.mapNeutralLayer ?? mapNeutralLayer)({ ...mapperArgs(snapshot, { statsig: '', ld: '' }), entity: l });
+    item.fidelity = r.fidelity;
+    addDecisions(item, r.unresolved, r.stale);
+    if (r.skipped || !r.desired) return finishItem(item, 'skipped', r.skipped ?? 'nothing to write');
+    const existing = req.ld.layers?.get(l.key);
+    item.exists = !!existing;
+    item.owned = ownsByFooter(existing, snapshot.source.alias);
+    let adopt = false;
+    if (existing && !item.owned) {
+      const c = collision(item, { sourceId: snapshot.source.sourceId, kind: 'layer', uid: l.uid, id: l.key }, l.key, 'layer', 'layer key');
+      if (c === 'skip') return finishItem(item, 'skipped', `LaunchDarkly layer “${l.key}” exists and was not adopted`);
+      if (c === 'open') return finishItem(item, 'blocked', `LaunchDarkly layer “${l.key}” already exists`);
+      adopt = true;
+    }
+    if (r.unresolved.length) return finishItem(item, 'blocked', `${r.unresolved.length} open decision${r.unresolved.length === 1 ? '' : 's'}`);
+    steps.set(stepId, { id: stepId, deps: [], op: 'ensure_layer', key: l.key, exists: !!existing, adopt, desired: r.desired, provenance: { ...experimentationProvenance(snapshot, l.key, r), statsigType: 'layer' } });
+    return { ok: true, stepId };
+  };
+
+  const planNeutralHoldout = (h: NeutralHoldout, snapshot: CanonicalSnapshot, ldEnv: string, requiredBy: string | null): Dep => {
+    const stepId = `holdout:${ldEnv}:${h.key}`;
+    const itemKey = `${h.uid}|${ldEnv}`;
+    const already = planned(itemKey, requiredBy, stepId);
+    if (already) return already;
+    const sourceEnv = envFor(snapshot.source.sourceId, ldEnv);
+    const item: PlanItem = { uid: h.uid, kind: 'holdout', entityId: h.key, sourceId: snapshot.source.sourceId, ldKey: h.key, ldEnv, status: 'ready', dependency: requiredBy !== null, requiredBy: requiredBy ? [requiredBy] : [], decisions: [], exists: false };
+    items.set(itemKey, item);
+    if (!sourceEnv) return finishItem(item, 'error', `no environment of ${snapshot.source.alias} is mapped to LaunchDarkly “${ldEnv}”`);
+    item.statsigEnv = sourceEnv;
+    const r = (req.mappers?.mapNeutralHoldout ?? mapNeutralHoldout)({ ...mapperArgs(snapshot, { statsig: sourceEnv, ld: ldEnv }), entity: h });
+    item.fidelity = r.fidelity;
+    addDecisions(item, r.unresolved, r.stale);
+    if (r.skipped || !r.desired) return finishItem(item, 'skipped', r.skipped ?? 'nothing to write');
+    const existing = req.ld.holdouts?.[ldEnv]?.get(h.key);
+    item.exists = !!existing;
+    item.owned = ownsByFooter(existing, snapshot.source.alias);
+    let adopt = false;
+    if (existing && !item.owned) {
+      const c = collision(item, { sourceId: snapshot.source.sourceId, kind: 'holdout', uid: h.uid, id: h.key }, h.key, 'holdout', ldEnv);
+      if (c === 'skip') return finishItem(item, 'skipped', `LaunchDarkly holdout “${h.key}” exists in ${ldEnv} and was not adopted`);
+      if (c === 'open') return finishItem(item, 'blocked', `LaunchDarkly holdout “${h.key}” already exists in ${ldEnv}`);
+      adopt = true;
+    }
+    const { depSteps, problems } = planExperimentationDeps(r.dependencies, snapshot, ldEnv, h.uid, sourceEnv);
+    if (r.unresolved.length) return finishItem(item, 'blocked', `${r.unresolved.length} open decision${r.unresolved.length === 1 ? '' : 's'}`);
+    if (problems.length) return finishItem(item, 'blocked', `depends on: ${problems.join('; ')}`);
+    steps.set(stepId, { id: stepId, deps: depSteps, op: 'upsert_holdout', key: h.key, ldEnv, statsigEnv: sourceEnv, exists: !!existing, adopt, desired: r.desired, provenance: { ...experimentationProvenance(snapshot, h.key, r), statsigType: 'holdout' } });
+    return { ok: true, stepId };
+  };
+
+  const planNeutralExperiment = (x: NeutralExperiment, snapshot: CanonicalSnapshot, ldEnv: string): void => {
+    const stepId = `experiment:${ldEnv}:${x.key}`;
+    const itemKey = `${x.uid}|${ldEnv}`;
+    if (items.has(itemKey)) return;
+    const sourceEnv = envFor(snapshot.source.sourceId, ldEnv);
+    const item: PlanItem = { uid: x.uid, kind: 'experiment', entityId: x.key, sourceId: snapshot.source.sourceId, ldKey: x.key, ldEnv, status: 'ready', dependency: false, requiredBy: [], decisions: [], exists: false };
+    items.set(itemKey, item);
+    if (!sourceEnv) return void finishItem(item, 'error', `no environment of ${snapshot.source.alias} is mapped to LaunchDarkly “${ldEnv}”`);
+    item.statsigEnv = sourceEnv;
+    const r = (req.mappers?.mapNeutralExperiment ?? mapNeutralExperiment)({ ...mapperArgs(snapshot, { statsig: sourceEnv, ld: ldEnv }), entity: x });
+    item.fidelity = r.fidelity;
+    addDecisions(item, r.unresolved, r.stale);
+    if (r.skipped || !r.desired) {
+      // A preview skipped by a recommended-but-unanswered decision is still a question (as for autotunes).
+      if (r.unresolved.length) return void finishItem(item, 'blocked', `${r.unresolved.length} open decision${r.unresolved.length === 1 ? '' : 's'}`);
+      return void finishItem(item, 'skipped', r.skipped ?? 'nothing to write');
+    }
+    const existing = req.ld.experiments?.[ldEnv]?.get(x.key);
+    item.exists = !!existing;
+    item.owned = !!existing && ownsSegment(existing, snapshot.source.alias);
+    let adopt = false;
+    if (existing && !item.owned) {
+      const c = collision(item, { sourceId: snapshot.source.sourceId, kind: 'experiment', uid: x.uid, id: x.key }, x.key, 'experiment', ldEnv);
+      if (c === 'skip') return void finishItem(item, 'skipped', `LaunchDarkly experiment “${x.key}” exists in ${ldEnv} and was not adopted`);
+      if (c === 'open') return void finishItem(item, 'blocked', `LaunchDarkly experiment “${x.key}” already exists in ${ldEnv}`);
+      adopt = true;
+    }
+    const { depSteps, problems } = planExperimentationDeps(r.dependencies, snapshot, ldEnv, x.uid, sourceEnv);
+    if (r.unresolved.length) return void finishItem(item, 'blocked', `${r.unresolved.length} open decision${r.unresolved.length === 1 ? '' : 's'}`);
+    if (problems.length) return void finishItem(item, 'blocked', `depends on: ${problems.join('; ')}`);
+    const version = x.environments.find((e) => e.env === sourceEnv)?.currentIteration?.flags[0]?.flagConfigVersion;
+    steps.set(stepId, { id: stepId, deps: depSteps, op: 'create_experiment', key: x.key, ldEnv, statsigEnv: sourceEnv, exists: !!existing, adopt, desired: r.desired, provenance: { ...experimentationProvenance(snapshot, x.key, r, version), statsigType: 'experiment' } });
+  };
+
   // Prompts are project-level, like flag shells: one AI Config per key, no environment part (PLAN §6).
   const planPrompt = (prompt: Prompt): void => {
     const itemKey = `${prompt.uid}|`;
@@ -1228,6 +1504,30 @@ export function planMigration(req: PlanRequest): Plan {
     const [, kind, ...rest] = uid.split('/');
     return `${kind ?? 'item'} “${rest.join('/') || uid}”`;
   };
+  for (const uid of req.metrics ?? []) {
+    const m = neutralMetricsByUid.get(uid);
+    if (!m) {
+      errors.push(`Metric ${uid} is not in the current snapshots.`);
+      continue;
+    }
+    planNeutralMetric(m.metric, m.snapshot, null);
+  }
+  for (const uid of req.metricGroups ?? []) {
+    const g = neutralMetricGroupsByUid.get(uid);
+    if (!g) {
+      errors.push(`Metric group ${uid} is not in the current snapshots.`);
+      continue;
+    }
+    planNeutralMetricGroup(g.group, g.snapshot, null);
+  }
+  for (const uid of req.layers ?? []) {
+    const l = neutralLayersByUid.get(uid);
+    if (!l) {
+      errors.push(`Layer ${uid} is not in the current snapshots.`);
+      continue;
+    }
+    planNeutralLayer(l.layer, l.snapshot, null);
+  }
   for (const ldEnv of req.ldEnvs) {
     for (const uid of req.gates) {
       const gate = gatesByUid.get(uid);
@@ -1280,6 +1580,24 @@ export function planMigration(req: PlanRequest): Plan {
       if (n) planNeutralSegment(snapshot, n.segment.key, sourceEnv, ldEnv, null);
       else if (st) planSegment(snapshot, st.segment.id, sourceEnv, ldEnv, null);
     }
+    for (const uid of req.holdouts ?? []) {
+      const h = neutralHoldoutsByUid.get(uid);
+      if (!h) {
+        errors.push(`Holdout ${uid} is not in the current snapshots.`);
+        continue;
+      }
+      if (plannedElsewhere(h.snapshot, ldEnv)) continue;
+      planNeutralHoldout(h.holdout, h.snapshot, ldEnv, null);
+    }
+    for (const uid of req.experiments ?? []) {
+      const x = neutralExperimentsByUid.get(uid);
+      if (!x) {
+        errors.push(`Experiment ${uid} is not in the current snapshots.`);
+        continue;
+      }
+      if (plannedElsewhere(x.snapshot, ldEnv)) continue;
+      planNeutralExperiment(x.experiment, x.snapshot, ldEnv);
+    }
   }
 
   // A step whose dependency was dropped (blocked item) can't run either. Dropping one step can
@@ -1304,7 +1622,9 @@ export function planMigration(req: PlanRequest): Plan {
   const requestedSegmentSteps = new Set([...items.values()].filter((i) => i.kind === 'segment' && !i.dependency && i.status === 'ready').map((i) => `segment:${i.ldEnv}:${i.ldKey}`));
   // Context kinds asked for on their own (guide step 3) are wanted even with nothing depending on them.
   const requestedKindSteps = new Set((req.contextKinds ?? []).flatMap((k) => [`context_kind:${k.key}`, ...(k.availableForExperiments ? [`randomization_unit:${k.key}`] : [])]));
-  const wanted = (s: PlanStep) => s.op === 'update_flag_env' || s.op === 'create_bandit' || s.op === 'upsert_ai_config' || requestedSegmentSteps.has(s.id) || requestedKindSteps.has(s.id);
+  // Metrics, metric groups and layers asked for on their own (PLAN §20.5) are wanted even with nothing depending on them.
+  const requestedProjectSteps = new Set([...items.values()].filter((i) => (i.kind === 'metric' || i.kind === 'metric_group' || i.kind === 'layer') && !i.dependency && i.status === 'ready').map((i) => `${i.kind}:${i.ldKey}`));
+  const wanted = (s: PlanStep) => s.op === 'update_flag_env' || s.op === 'create_bandit' || s.op === 'upsert_ai_config' || s.op === 'create_experiment' || s.op === 'upsert_holdout' || requestedSegmentSteps.has(s.id) || requestedKindSteps.has(s.id) || requestedProjectSteps.has(s.id);
   const dependentCount = new Map<string, number>();
   for (const s of steps.values()) for (const d of new Set(s.deps)) dependentCount.set(d, (dependentCount.get(d) ?? 0) + 1);
   const unneeded = [...steps.values()].filter((s) => !wanted(s) && !(dependentCount.get(s.id) ?? 0)).map((s) => s.id);
@@ -1375,7 +1695,7 @@ function rollUpFlags(items: PlanItem[], steps: PlanStep[], envOrder: string[]): 
 }
 
 /** Writes per step, including the read that captures the pre-image of an item that exists. */
-const REQUESTS: Record<PlanStep['op'], number> = { ensure_context_kind: 1, upsert_segment: 3, upsert_flag_shell: 2, update_flag_env: 2, ensure_randomization_unit: 2, upsert_metric: 2, create_bandit: 3, upsert_ai_config: 2 };
+const REQUESTS: Record<PlanStep['op'], number> = { ensure_context_kind: 1, upsert_segment: 3, upsert_flag_shell: 2, update_flag_env: 2, ensure_randomization_unit: 2, upsert_metric: 2, create_bandit: 3, upsert_ai_config: 2, upsert_metric_group: 2, create_experiment: 4, upsert_holdout: 2, ensure_layer: 2 };
 
 /**
  * A new item is created without reading it first (the plan's listing already said it is absent);
@@ -1392,9 +1712,9 @@ export function requestsFor(s: PlanStep): number {
 
 /**
  * Kahn's algorithm, stable by step id. Project-level steps come first (context kinds,
- * randomization units, metrics, every flag shell, AI Configs): a flag is created once and exists
- * in every environment. Then each environment in `envOrder` with its segments, targeting and
- * bandits, so a run reads "create the flags, then configure development, then staging". Steps in
+ * randomization units, metrics, metric groups, layers, every flag shell, AI Configs): a flag is
+ * created once and exists in every environment. Then each environment in `envOrder` with its
+ * segments, targeting, holdouts, experiments and bandits, so a run reads "create the flags, then configure development, then staging". Steps in
  * a cycle are reported and left out.
  */
 export function topoSort(steps: PlanStep[], errors: string[], envOrder: string[] = []): PlanStep[] {
@@ -1410,8 +1730,8 @@ export function topoSort(steps: PlanStep[], errors: string[], envOrder: string[]
       else dependents.set(d, [s.id]);
     }
   }
-  const PROJECT = ['context_kind', 'randomization_unit', 'metric', 'shell', 'ai_config'];
-  const PER_ENV = ['segment', 'env', 'bandit'];
+  const PROJECT = ['context_kind', 'randomization_unit', 'metric', 'metric_group', 'layer', 'shell', 'ai_config'];
+  const PER_ENV = ['segment', 'env', 'holdout', 'experiment', 'bandit'];
   const order = (id: string) => {
     const [op, env] = id.split(':') as [string, string?];
     const p = PROJECT.indexOf(op);

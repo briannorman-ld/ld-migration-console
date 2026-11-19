@@ -4,14 +4,19 @@
  * this module wires them to the store, the LD session and the StatSig source.
  */
 import { useSyncExternalStore } from "react";
-import { ownValue, type Autotune, type CanonicalSnapshot, type Config, type Gate, type NeutralFlag, type NeutralSegment, type Prompt, type Segment } from "@sslm/canonical";
+import { ownValue, type Autotune, type CanonicalSnapshot, type Config, type Gate, type NeutralExperiment, type NeutralFlag, type NeutralHoldout, type NeutralLayer, type NeutralMetric, type NeutralMetricGroup, type NeutralSegment, type Prompt, type Segment } from "@sslm/canonical";
 import { applySupersession, Executor, newRun, supersededSteps, undoHoldMessage, undoHolds, type ResourceChange, type RunRecord } from "@sslm/executor";
 import type { CapabilityMatrix, LdFlagSummary } from "@sslm/ld-client";
 import {
   mapAutotune,
   mapConfig,
   mapGate,
+  mapNeutralExperiment,
   mapNeutralFlag,
+  mapNeutralHoldout,
+  mapNeutralLayer,
+  mapNeutralMetric,
+  mapNeutralMetricGroup,
   mapNeutralSegment,
   mapPrompt,
   mapSegment,
@@ -26,7 +31,12 @@ import {
   type LdDirectory,
   type MapperCapabilities,
   type MappingProfile,
+  type NeutralExperimentMapResult,
   type NeutralFlagMapResult,
+  type NeutralHoldoutMapResult,
+  type NeutralLayerMapResult,
+  type NeutralMetricGroupMapResult,
+  type NeutralMetricMapResult,
   type NeutralSegmentMapResult,
   type PromptMapResult,
   type Resolution,
@@ -91,6 +101,11 @@ export function mapperCapabilities(
     contextKinds: cap("context_kinds"),
     bigSegments: cap("big_segments"),
     scheduledChanges: cap("scheduled_changes"),
+    experimentation: cap("experimentation"),
+    metrics: cap("metrics"),
+    metricGroups: cap("metric_groups"),
+    holdouts: cap("holdouts"),
+    layers: cap("layers"),
     existingContextKinds: contextKinds ?? ["user"],
   };
 }
@@ -127,6 +142,9 @@ export function ldProjectState(ld: LdSession): LdProjectState {
     experiments,
     ...(ld.randomizationUnits ? { randomizationUnits: ld.randomizationUnits } : {}),
     ...(ld.aiConfigs ? { aiConfigs: new Map(ld.aiConfigs.map((a) => [a.key, { key: a.key, tags: a.tags ?? [] }])) } : {}),
+    ...(ld.metricGroups ? { metricGroups: new Map(ld.metricGroups.map((g) => [g.key, { key: g.key, tags: g.tags ?? [] }])) } : {}),
+    ...(ld.holdouts ? { holdouts: Object.fromEntries(Object.entries(ld.holdouts).map(([env, list]) => [env, new Map(list.flatMap((h) => (h.key ? [[h.key, { key: h.key, description: h.description ?? h.baseExperiment?.description ?? null }] as const] : [])))])) } : {}),
+    ...(ld.layers ? { layers: new Map(ld.layers.map((l) => [l.key, { key: l.key, description: l.description ?? null }])) } : {}),
   };
 }
 
@@ -370,6 +388,24 @@ export function mapNeutralSegmentFor(snapshot: CanonicalSnapshot, segment: Neutr
   return memoized(i, snapshot, memoKey("nsegment", segment.uid, env), (_lists, profile) => mapNeutralSegment({ canonical: { snapshot }, entity: segment, profile, resolutions: i.resolutions, capabilities: i.capabilities, env, now: i.now, directory: i.directory }));
 }
 
+// LD-source experimentation (PLAN §20.5). Metrics, metric groups and layers are project-level: the environment only keys the memo.
+const PROJECT_ENV: EnvTarget = { statsig: "", ld: "" };
+export function mapNeutralMetricFor(snapshot: CanonicalSnapshot, metric: NeutralMetric, i: MappingInputs): NeutralMetricMapResult {
+  return memoized(i, snapshot, memoKey("nmetric", metric.uid, PROJECT_ENV), (_lists, profile) => mapNeutralMetric({ canonical: { snapshot }, entity: metric, profile, resolutions: i.resolutions, capabilities: i.capabilities, env: PROJECT_ENV, now: i.now, directory: i.directory }));
+}
+export function mapNeutralMetricGroupFor(snapshot: CanonicalSnapshot, group: NeutralMetricGroup, i: MappingInputs): NeutralMetricGroupMapResult {
+  return memoized(i, snapshot, memoKey("nmetricgroup", group.uid, PROJECT_ENV), (_lists, profile) => mapNeutralMetricGroup({ canonical: { snapshot }, entity: group, profile, resolutions: i.resolutions, capabilities: i.capabilities, env: PROJECT_ENV, now: i.now, directory: i.directory }));
+}
+export function mapNeutralLayerFor(snapshot: CanonicalSnapshot, layer: NeutralLayer, i: MappingInputs): NeutralLayerMapResult {
+  return memoized(i, snapshot, memoKey("nlayer", layer.uid, PROJECT_ENV), (_lists, profile) => mapNeutralLayer({ canonical: { snapshot }, entity: layer, profile, resolutions: i.resolutions, capabilities: i.capabilities, env: PROJECT_ENV, now: i.now, directory: i.directory }));
+}
+export function mapNeutralExperimentFor(snapshot: CanonicalSnapshot, experiment: NeutralExperiment, env: EnvTarget, i: MappingInputs): NeutralExperimentMapResult {
+  return memoized(i, snapshot, memoKey("nexperiment", experiment.uid, env), (_lists, profile) => mapNeutralExperiment({ canonical: { snapshot }, entity: experiment, profile, resolutions: i.resolutions, capabilities: i.capabilities, env, now: i.now, directory: i.directory }));
+}
+export function mapNeutralHoldoutFor(snapshot: CanonicalSnapshot, holdout: NeutralHoldout, env: EnvTarget, i: MappingInputs): NeutralHoldoutMapResult {
+  return memoized(i, snapshot, memoKey("nholdout", holdout.uid, env), (_lists, profile) => mapNeutralHoldout({ canonical: { snapshot }, entity: holdout, profile, resolutions: i.resolutions, capabilities: i.capabilities, env, now: i.now, directory: i.directory }));
+}
+
 export interface DecisionInstance {
   decision: DecisionPoint;
   /** Where it was raised: which entity and environments. */
@@ -416,6 +452,11 @@ export function collectDecisions(
         ...snap.autotunes.filter((a) => !a.archived).map((a) => mapAutotuneFor(snap, a, env, i)),
         ...(snap.neutral?.flags ?? []).filter((f) => !f.archived).map((f) => mapNeutralFlagFor(snap, f, env, i)),
         ...(snap.neutral?.segments ?? []).filter((s) => !s.archived).map((s) => mapNeutralSegmentFor(snap, s, env, i)),
+        ...(snap.neutral?.experiments ?? []).filter((x) => !x.archived).map((x) => mapNeutralExperimentFor(snap, x, env, i)),
+        ...(snap.neutral?.holdouts ?? []).filter((h) => !h.archived).map((h) => mapNeutralHoldoutFor(snap, h, env, i)),
+        ...(snap.neutral?.metrics ?? []).filter((m) => !m.archived).map((m) => mapNeutralMetricFor(snap, m, i)),
+        ...(snap.neutral?.metricGroups ?? []).filter((g) => !g.archived).map((g) => mapNeutralMetricGroupFor(snap, g, i)),
+        ...(snap.neutral?.layers ?? []).map((l) => mapNeutralLayerFor(snap, l, i)),
         ...(snap.prompts ?? []).filter((p) => !p.archived).map((p) => mapPromptFor(snap, p, i)),
       ];
       for (const r of results) {
@@ -566,11 +607,18 @@ export interface MigrationSelection {
   contextKinds?: { key: string; unitType: string; availableForExperiments?: boolean }[];
   /** Prompt uids → LD AI Configs (project-level). */
   prompts?: string[];
+  /** LD-source experimentation (PLAN §20.5): metrics, metric groups and layers are project-level; experiments and holdouts are per environment. */
+  metrics?: string[];
+  metricGroups?: string[];
+  experiments?: string[];
+  holdouts?: string[];
+  layers?: string[];
 }
 
-/** Only project-level steps (context kinds, AI Configs): the run needs no target environment. */
+/** Only project-level steps (context kinds, AI Configs, metrics, metric groups, layers): the run needs no target environment. */
 export function isProjectOnlySelection(sel: MigrationSelection): boolean {
-  return (!!sel.contextKinds?.length || !!sel.prompts?.length) && sel.gates.length === 0 && !sel.configs?.length && sel.autotunes.length === 0 && !sel.flags?.length && !sel.segments?.length;
+  const projectLevel = !!sel.contextKinds?.length || !!sel.prompts?.length || !!sel.metrics?.length || !!sel.metricGroups?.length || !!sel.layers?.length;
+  return projectLevel && sel.gates.length === 0 && !sel.configs?.length && sel.autotunes.length === 0 && !sel.flags?.length && !sel.segments?.length && !sel.experiments?.length && !sel.holdouts?.length;
 }
 
 export function describeSelection(sel: MigrationSelection): string {
@@ -579,6 +627,7 @@ export function describeSelection(sel: MigrationSelection): string {
   const segments = sel.segments ?? [];
   const kinds = sel.contextKinds ?? [];
   const prompts = sel.prompts ?? [];
+  const n = (xs: string[] | undefined, one: string, many = `${one}s`) => (xs?.length ? `${xs.length} ${xs.length === 1 ? one : many}` : "");
   const parts = [
     kinds.length ? `${kinds.length} context kind${kinds.length === 1 ? "" : "s"}` : "",
     prompts.length ? `${prompts.length} AI Config${prompts.length === 1 ? "" : "s"}` : "",
@@ -587,6 +636,11 @@ export function describeSelection(sel: MigrationSelection): string {
     sel.autotunes.length ? `${sel.autotunes.length} autotune${sel.autotunes.length === 1 ? "" : "s"}` : "",
     flags.length ? `${flags.length} flag${flags.length === 1 ? "" : "s"}` : "",
     segments.length ? `${segments.length} segment${segments.length === 1 ? "" : "s"}` : "",
+    n(sel.metrics, "metric"),
+    n(sel.metricGroups, "metric group"),
+    n(sel.layers, "layer"),
+    n(sel.holdouts, "holdout"),
+    n(sel.experiments, "experiment"),
   ].filter(Boolean);
   return parts.join(" and ") || "nothing";
 }
@@ -607,6 +661,11 @@ function planMappers(i: MappingInputs): PlanMappers {
     mapNeutralFlag: (a) => mapNeutralFlagFor(a.canonical.snapshot, a.entity, a.env, i),
     mapNeutralSegment: (a) => mapNeutralSegmentFor(a.canonical.snapshot, a.entity, a.env, i),
     mapPrompt: (a) => mapPromptFor(a.canonical.snapshot, a.entity, i),
+    mapNeutralMetric: (a) => mapNeutralMetricFor(a.canonical.snapshot, a.entity, i),
+    mapNeutralMetricGroup: (a) => mapNeutralMetricGroupFor(a.canonical.snapshot, a.entity, i),
+    mapNeutralLayer: (a) => mapNeutralLayerFor(a.canonical.snapshot, a.entity, i),
+    mapNeutralExperiment: (a) => mapNeutralExperimentFor(a.canonical.snapshot, a.entity, a.env, i),
+    mapNeutralHoldout: (a) => mapNeutralHoldoutFor(a.canonical.snapshot, a.entity, a.env, i),
   };
 }
 
@@ -621,6 +680,11 @@ export function buildPlan(input: { selection: MigrationSelection; ldEnvs: string
     segments: input.selection.segments ?? [],
     contextKinds: input.selection.contextKinds ?? [],
     prompts: input.selection.prompts ?? [],
+    metrics: input.selection.metrics ?? [],
+    metricGroups: input.selection.metricGroups ?? [],
+    experiments: input.selection.experiments ?? [],
+    holdouts: input.selection.holdouts ?? [],
+    layers: input.selection.layers ?? [],
     ldEnvs: input.ldEnvs,
     snapshots: input.snapshots,
     idLists: input.idLists,

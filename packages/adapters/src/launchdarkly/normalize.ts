@@ -7,6 +7,7 @@
 import { emptyNeutralProject, emptySnapshot, neutralUid, type CanonicalSnapshot, type NeutralClause, type NeutralFlag, type NeutralFlagEnv, type NeutralRule, type NeutralSegment, type NeutralSegmentEnv, type NeutralServe, type NeutralTarget, type SnapshotWarning, type SourceRef } from '@sslm/canonical';
 import type { LdFlag, LdFlagConfig, LdSegment } from '@sslm/ld-client';
 import type { RawLdSnapshot } from './read.ts';
+import { normalizeExperimentation } from './experiments.ts';
 
 export interface NormalizeLdOptions {
   source: SourceRef & { alias: string };
@@ -103,6 +104,13 @@ export function normalizeLdSnapshot(raw: RawLdSnapshot, opts: NormalizeLdOptions
       environments: envs,
     });
   }
+
+  // Experimentation (PLAN §20.5): metrics, metric groups, experiments, holdouts, layers.
+  normalizeExperimentation(raw, source.sourceId, neutral, warn);
+  // People the experimentation resources name as maintainers, for the explorer's owner line.
+  snap.users = Object.values(raw.members)
+    .map((m) => ({ id: m._id, email: m.email, ...(m.firstName || m.lastName ? { name: [m.firstName, m.lastName].filter(Boolean).join(' ') } : {}), ...(m.role ? { role: m.role } : {}) }))
+    .sort((a, b) => a.email.localeCompare(b.email));
 
   snap.neutral = neutral;
   snap.sourceTime = Math.max(0, ...raw.flags.flatMap((f) => Object.values(f.environments ?? {}).map((c) => c.lastModified ?? 0))) || undefined;

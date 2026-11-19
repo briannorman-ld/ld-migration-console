@@ -35,6 +35,14 @@ export function stepIdentity(s: PlanStep): string {
       return `ensure_context_kind:${s.key}`;
     case 'ensure_randomization_unit':
       return `ensure_randomization_unit:${s.key}`;
+    case 'upsert_metric_group':
+      return `upsert_metric_group:${s.key}`;
+    case 'create_experiment':
+      return `create_experiment:${s.ldEnv}:${s.key}`;
+    case 'upsert_holdout':
+      return `upsert_holdout:${s.ldEnv}:${s.key}`;
+    case 'ensure_layer':
+      return `ensure_layer:${s.key}`;
   }
 }
 
@@ -171,6 +179,14 @@ function resourceLabel(s: PlanStep): string {
       return `context kind “${s.key}”`;
     case 'ensure_randomization_unit':
       return 'the experimentation settings';
+    case 'upsert_metric_group':
+      return `metric group “${s.key}”`;
+    case 'create_experiment':
+      return `experiment “${s.key}” in ${s.ldEnv}`;
+    case 'upsert_holdout':
+      return `holdout “${s.key}” in ${s.ldEnv}`;
+    case 'ensure_layer':
+      return `layer “${s.key}”`;
   }
 }
 

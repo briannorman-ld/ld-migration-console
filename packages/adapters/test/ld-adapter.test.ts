@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { setupServer } from 'msw/node';
+import { http, HttpResponse } from 'msw';
 import { acmeLegacyProject, ACME_LEGACY_PROJECT_KEY, createLdApiHandlers } from '@sslm/demo-fixtures';
 import { LdClient } from '@sslm/ld-client';
 import { LdReadAuthError, normalizeLdSnapshot, readLdProject } from '../src/index.ts';
@@ -99,5 +100,72 @@ describe('LaunchDarkly source adapter (PLAN §20.2)', () => {
   it('reports a project the token cannot see', async () => {
     const { client: c } = client();
     await expect(readLdProject(c, 'someone-elses-project')).rejects.toThrow(/someone-elses-project/);
+  });
+});
+
+describe('LaunchDarkly source adapter: experimentation (PLAN §20.5)', () => {
+  it('reads metrics, metric groups, experiments, holdouts and layers, resolving ids to keys and indexes', async () => {
+    const { client: c } = client();
+    const raw = await readLdProject(c, ACME_LEGACY_PROJECT_KEY);
+    expect(raw.skipped).toEqual([]);
+    expect(raw.metrics.map((m) => m.key)).toContain('legacy-wh-revenue');
+    expect(raw.experiments.production!.map((x) => x.key)).toContain('legacy-old-banner-test'); // archived ones are listed too
+    expect(Object.keys(raw.members).sort()).toEqual(['mem-legacy-growth', 'mem-legacy-ops']);
+
+    const snap = normalizeLdSnapshot(raw, { source: SOURCE, takenAt: '2026-11-19T00:00:00.000Z' });
+    const n = snap.neutral!;
+    expect(n.metrics!.map((m) => m.key)).toEqual(['legacy-cart-conversion', 'legacy-checkout-completed', 'legacy-cta-click', 'legacy-old-signup', 'legacy-order-value', 'legacy-pricing-pageview', 'legacy-wh-revenue']);
+    const order = n.metrics!.find((m) => m.key === 'legacy-order-value')!;
+    expect(order).toMatchObject({ metricKind: 'custom', eventKey: 'order_placed', isNumeric: true, unit: 'USD', analysisType: 'percentile', percentileValue: 90, unitAggregationType: 'sum', winsorLowerPercentile: 1, maintainer: { id: 'mem-legacy-growth', email: 'growth@acme-legacy.example' } });
+    expect(order.filters).toEqual({ type: 'eventProperty', attribute: 'currency', op: 'in', values: ['USD'], negate: false });
+    expect(n.metrics!.find((m) => m.key === 'legacy-checkout-completed')!.dataSource).toBeUndefined(); // LaunchDarkly events: nothing to carry
+    expect(n.metrics!.find((m) => m.key === 'legacy-wh-revenue')!.dataSource).toEqual({ key: 'legacy-snowflake', environmentKey: 'production', name: 'Legacy Snowflake', integrationKey: 'snowflake' });
+    expect(n.metrics!.find((m) => m.key === 'legacy-old-signup')!.archived).toBe(true);
+    expect(n.metricGroups![0]).toMatchObject({ key: 'legacy-checkout-funnel', groupKind: 'funnel', metrics: [{ key: 'legacy-cta-click', nameInGroup: 'Clicked CTA' }, { key: 'legacy-checkout-completed', nameInGroup: 'Completed checkout' }], maintainer: { id: 'mem-legacy-growth', email: 'growth@acme-legacy.example' } });
+
+    // Experiments: the holdout's base experiment is not one; the rest group by key with one entry per environment.
+    expect(n.experiments!.map((x) => x.key)).toEqual(['legacy-checkout-redesign-test', 'legacy-cta-copy-test', 'legacy-old-banner-test', 'legacy-pricing-bandit', 'legacy-theme-test']);
+    const cta = n.experiments!.find((x) => x.key === 'legacy-cta-copy-test')!;
+    expect(cta.environments.map((e) => e.env)).toEqual(['production']);
+    const ctaProd = cta.environments[0]!;
+    expect(ctaProd).toMatchObject({ experimentType: 'experiment', methodology: 'bayesian', analysisConfig: { bayesianThreshold: '0.95' }, holdout: { id: 'hold-legacy-q3', key: 'legacy-q3-holdout' }, layer: { key: 'legacy-checkout-layer', reservationPercent: 40 }, maintainer: { id: 'mem-legacy-growth', email: 'growth@acme-legacy.example' } });
+    expect(ctaProd.currentIteration).toMatchObject({ status: 'running', randomizationUnit: 'user', primary: { key: 'legacy-checkout-funnel', isGroup: true } });
+    // Treatments point at variation *indexes*; the flag's rule and "not in experiment" variation too.
+    expect(ctaProd.currentIteration!.treatments).toEqual([
+      { id: 'v-buy', name: 'Buy now', baseline: true, allocationPercent: '50', parameters: [{ flagKey: 'legacy-cta-copy', variation: 0 }] },
+      { id: 'v-checkout', name: 'Checkout', baseline: false, allocationPercent: '50', parameters: [{ flagKey: 'legacy-cta-copy', variation: 1 }] },
+    ]);
+    expect(ctaProd.currentIteration!.flags).toEqual([{ flagKey: 'legacy-cta-copy', ruleId: 'fallthrough', flagConfigVersion: 3, notInExperimentVariation: 0 }]);
+    expect(ctaProd.currentIteration!.metrics.map((m) => `${m.key}${m.isGroup ? ' (group)' : ''}`)).toEqual(['legacy-checkout-funnel (group)', 'legacy-order-value', 'legacy-cta-click']);
+
+    const redesign = n.experiments!.find((x) => x.key === 'legacy-checkout-redesign-test')!.environments[0]!;
+    expect(redesign.currentIteration).toMatchObject({ status: 'stopped', winningTreatment: { id: 'v-true', name: 'Redesign' }, winningReason: 'Checkout completed +4.1%, credible.', randomizationUnit: 'organization', attributes: ['plan'] });
+    expect(redesign.previousIterations).toHaveLength(1);
+    const theme = n.experiments!.find((x) => x.key === 'legacy-theme-test')!.environments[0]!;
+    expect(theme.draftIteration!.flags[0]).toEqual({ flagKey: 'legacy-theme', ruleId: 'rule-dark', ruleDescription: 'Dark mode opt-in', flagConfigVersion: 3, notInExperimentVariation: 0 });
+    expect(n.experiments!.find((x) => x.key === 'legacy-old-banner-test')!.archived).toBe(true);
+    expect(n.experiments!.find((x) => x.key === 'legacy-pricing-bandit')!.environments[0]!.currentIteration!.reallocationFrequencyMillis).toBe(3_600_000);
+
+    expect(n.holdouts).toHaveLength(1);
+    expect(n.holdouts![0]!.environments[0]).toMatchObject({ env: 'production', status: 'running', holdoutAmount: '10', randomizationUnit: 'user', primaryMetricKey: 'legacy-checkout-completed', experiments: ['legacy-cta-copy-test'], maintainer: { email: 'growth@acme-legacy.example' } });
+    expect(n.layers![0]).toMatchObject({ key: 'legacy-checkout-layer', randomizationUnit: 'user', environments: [{ env: 'production', reservations: [{ experimentKey: 'legacy-cta-copy-test', flagKey: 'legacy-cta-copy', reservationPercent: 40 }] }, { env: 'test', reservations: [] }] });
+    expect(snap.users.map((u) => u.email)).toEqual(['growth@acme-legacy.example', 'ops@acme-legacy.example']);
+  });
+
+  it('skips experimentation routes a plan or token does not have, and still returns the flags', async () => {
+    const { client: c } = client();
+    server.use(
+      ...['/metrics/:p', '/projects/:p/metric-groups', '/projects/:p/layers', '/projects/:p/environments/:e/experiments', '/projects/:p/environments/:e/holdouts'].map((path) =>
+        http.get(`${ORIGIN}/api/v2${path}`, () => HttpResponse.json({ code: 'forbidden', message: 'Experimentation is not on this plan' }, { status: 403 })),
+      ),
+    );
+    const raw = await readLdProject(c, ACME_LEGACY_PROJECT_KEY);
+    expect(raw.flags.length).toBeGreaterThan(0);
+    expect(raw.metrics).toEqual([]);
+    expect(raw.experiments).toEqual({ test: [], production: [] });
+    expect(raw.skipped.map((s) => s.endpoint).sort()).toEqual(['/metrics/acme-legacy', '/projects/acme-legacy/environments/production/experiments', '/projects/acme-legacy/environments/production/holdouts', '/projects/acme-legacy/environments/test/experiments', '/projects/acme-legacy/environments/test/holdouts', '/projects/acme-legacy/layers', '/projects/acme-legacy/metric-groups']);
+    const snap = normalizeLdSnapshot(raw, { source: SOURCE });
+    expect(snap.neutral!.experiments).toEqual([]);
+    expect(snap.warnings.filter((w) => w.code === 'fetch_skipped')).toHaveLength(7);
   });
 });

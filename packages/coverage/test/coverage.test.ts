@@ -94,7 +94,8 @@ describe('inventory summary with neutral-model sources (PLAN §20, §22)', () =>
     expect(inv.archived).toBe(2);
     expect(inv.byStatus).toEqual({ migrates: 2, decisions: 1, guided: 0, planned: 0, none: 1 });
     expect(inv.byKind).toEqual({});
-    expect(inv.neutral).toEqual({ flags: { migrates: 1, decisions: 1, guided: 0, planned: 0, none: 1 }, segments: { migrates: 1, decisions: 0, guided: 0, planned: 0, none: 0 } });
+    const zero = { migrates: 0, decisions: 0, guided: 0, planned: 0, none: 0 };
+    expect(inv.neutral).toEqual({ flags: { migrates: 1, decisions: 1, guided: 0, planned: 0, none: 1 }, segments: { migrates: 1, decisions: 0, guided: 0, planned: 0, none: 0 }, metrics: zero, experiments: zero });
     // A workspace without a neutral source has no neutral block at all.
     expect(summarizeInventory([empty]).neutral).toBeUndefined();
     expect(summarizeInventory([{ ...empty, neutral: { flags: [], segments: [] } }]).neutral).toBeUndefined();

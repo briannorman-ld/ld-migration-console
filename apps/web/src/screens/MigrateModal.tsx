@@ -1092,7 +1092,7 @@ function StepRow({ s, run, ldBase }: { s: StepRecord; run: RunRecord; ldBase?: s
               {ldBase &&
                 s.status === "done" &&
                 !run.dryRun &&
-                s.step.op === "create_bandit" && (
+                (s.step.op === "create_bandit" || s.step.op === "create_experiment") && (
                   <a
                     className="ml-1 text-link hover:underline"
                     target="_blank"

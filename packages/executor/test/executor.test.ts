@@ -1233,3 +1233,148 @@ describe('parallel steps', () => {
     expect(out.steps.filter((s) => s.status === 'pending')).toHaveLength(3);
   });
 });
+
+// ---------------------------------------------------------------------------------------------
+// LD-source experimentation (PLAN §20.5)
+// ---------------------------------------------------------------------------------------------
+describe('Executor: copied experiments, holdouts, layers and metric groups (PLAN §20.5)', () => {
+  const prov = <T extends 'metric' | 'metric_group' | 'experiment' | 'holdout' | 'layer'>(type: T, id: string) => ({ sourceKind: 'launchdarkly' as const, sourceAlias: 'legacy', statsigType: type, statsigId: id, statsigFingerprint: 'fp', decisionSetHash: 'dh' });
+  const TAGS = ['migrated-from-launchdarkly', 'migration-src-legacy'];
+  const metric = (key: string, extra: Record<string, unknown> = {}): PlanStep => ({
+    id: `metric:${key}`,
+    deps: [],
+    op: 'upsert_metric',
+    key,
+    exists: false,
+    adopt: false,
+    desired: { key, name: key, description: 'd', kind: 'custom', eventKey: `${key}_event`, isNumeric: true, successCriteria: 'LowerThanBaseline', tags: TAGS, analysisUnits: ['user'], unit: 'ms', analysisType: 'percentile', percentileValue: 95, ...extra },
+    provenance: prov('metric', key),
+  });
+  const group: PlanStep = { id: 'metric_group:funnel', deps: ['metric:m1', 'metric:m2'], op: 'upsert_metric_group', key: 'funnel', exists: false, adopt: false, desired: { key: 'funnel', name: 'Funnel', description: 'f', kind: 'funnel', tags: TAGS, metrics: [{ key: 'm1', nameInGroup: 'One' }, { key: 'm2', nameInGroup: 'Two' }] }, provenance: prov('metric_group', 'funnel') };
+  const layer: PlanStep = { id: 'layer:checkout', deps: [], op: 'ensure_layer', key: 'checkout', exists: false, adopt: false, desired: { key: 'checkout', name: 'Checkout', description: 'layer' }, provenance: prov('layer', 'checkout') };
+  const holdout: PlanStep = { id: 'holdout:test:q3', deps: ['metric:m1'], op: 'upsert_holdout', key: 'q3', ldEnv: 'test', statsigEnv: 'test', exists: false, adopt: false, desired: { key: 'q3', ldEnv: 'test', statsigEnv: 'test', name: 'Q3', description: 'h', randomizationUnit: 'user', holdoutAmount: '10', metrics: [{ key: 'm1', isGroup: false }], primaryMetricKey: 'm1' }, provenance: prov('holdout', 'q3') };
+  const experiment = (over: Partial<Extract<PlanStep, { op: 'create_experiment' }>['desired']> = {}): PlanStep => ({
+    id: 'experiment:test:exp',
+    deps: ['env:test:theme', 'metric:m1', 'metric_group:funnel', 'holdout:test:q3', 'layer:checkout'],
+    op: 'create_experiment',
+    key: 'exp',
+    ldEnv: 'test',
+    statsigEnv: 'test',
+    exists: false,
+    adopt: false,
+    desired: {
+      key: 'exp',
+      ldEnv: 'test',
+      statsigEnv: 'test',
+      name: 'Exp',
+      description: 'copied',
+      type: 'experiment',
+      tags: TAGS,
+      maintainerId: 'mem-1',
+      methodology: 'frequentist',
+      analysisConfig: { significanceThreshold: '0.05' },
+      holdoutKey: 'q3',
+      layer: { key: 'checkout', reservationPercent: 40 },
+      hypothesis: 'h',
+      randomizationUnit: 'user',
+      canReshuffleTraffic: true,
+      metrics: [{ key: 'funnel', isGroup: true }, { key: 'm1', isGroup: false }],
+      primary: { key: 'funnel', isGroup: true },
+      treatments: [
+        { name: 'Light', baseline: true, allocationPercent: '50', parameters: [{ flagKey: 'theme', variation: 0 }] },
+        { name: 'Dark', baseline: false, allocationPercent: '50', parameters: [{ flagKey: 'theme', variation: 1 }] },
+      ],
+      flags: [{ flagKey: 'theme', rule: { kind: 'rule', index: 0, description: 'Dark mode opt-in', sourceRuleId: 'rule-dark' }, notInExperimentVariation: 0 }],
+      sourceStatus: 'not_started',
+      ...over,
+    },
+    provenance: prov('experiment', 'exp'),
+  });
+  /** The target flag as the targeting step left it: LD gave the rule its own id. */
+  const themeFlag = (ld: ReturnType<typeof fakeLd>): LdFlag => ({
+    ...ld.flag('theme', { tags: TAGS }),
+    variations: [
+      { _id: 'theme-light', value: 'light' },
+      { _id: 'theme-dark', value: 'dark' },
+    ],
+    environments: { test: { on: true, offVariation: 0, fallthrough: { variation: 0 }, rules: [{ _id: 'ld-rule-9f', description: 'Dark mode opt-in', clauses: [], variation: 1 }], targets: [], version: 4 } },
+  });
+
+  it('creates metrics, the funnel, the layer, the holdout and the experiment on the target rule, then reserves the layer', async () => {
+    const ld = fakeLd();
+    ld.flags.set('theme', themeFlag(ld));
+    const { ex, run } = setup(ld.client, [metric('m1'), metric('m2'), group, layer, holdout, experiment()], { concurrency: 1 });
+    const out = await ex.run(run);
+    expect(out.steps.map((s) => s.error ?? '')).toEqual(['', '', '', '', '', '']);
+    expect(out.status).toBe('done');
+    expect(ld.calls.filter((c) => !c.startsWith('get') && !c.startsWith('list'))).toEqual(['create metric m1', 'create metric m2', 'create metric group funnel', 'create layer checkout', 'create holdout test/q3', 'create experiment test/exp', 'semantic layer checkout test updateExperimentReservation:exp=40']);
+    // The metric carries every field it was given.
+    expect(ld.metrics.get('m1')).toMatchObject({ key: 'm1', kind: 'custom', eventKey: 'm1_event' });
+    // LaunchDarkly requires a metric group maintainer: the member behind the token stands in.
+    expect(ld.metricGroups.get('funnel')).toMatchObject({ kind: 'funnel', maintainer: { key: 'mem-token' }, metrics: [{ key: 'm1', nameInGroup: 'One' }, { key: 'm2', nameInGroup: 'Two' }] });
+    expect(out.steps[2]!.message).toMatch(/member behind the token/);
+    // The holdout is posted with LD's lower-case field names, created, never started.
+    expect(ld.holdouts.get('test/q3')!.body).toMatchObject({ randomizationunit: 'user', holdoutamount: '10', primarymetrickey: 'm1', metrics: [{ key: 'm1', isGroup: false }] });
+    expect(ld.holdouts.get('test/q3')!.description).toMatch(/\[ld-migration: from=launchdarkly; src=legacy; id=q3;/);
+    // The experiment runs on the rule LD created (found by description), with the target's variation ids, config version and holdout id.
+    const created = ld.experiments.get('test/exp')!;
+    expect(created.type).toBe('experiment');
+    expect(created.iteration).toMatchObject({
+      hypothesis: 'h',
+      primaryFunnelKey: 'funnel',
+      metrics: [{ key: 'funnel', isGroup: true }, { key: 'm1', isGroup: false }],
+      treatments: [
+        { name: 'Light', baseline: true, allocationPercent: '50', parameters: [{ flagKey: 'theme', variationId: 'theme-light' }] },
+        { name: 'Dark', baseline: false, allocationPercent: '50', parameters: [{ flagKey: 'theme', variationId: 'theme-dark' }] },
+      ],
+      flags: { theme: { ruleId: 'ld-rule-9f', flagConfigVersion: 4, notInExperimentVariationId: 'theme-light' } },
+      randomizationUnit: 'user',
+    });
+    expect(out.steps[5]!.message).toMatch(/Created experiment “exp” in test as a draft.*reserved 40% of layer “checkout”/);
+    expect(out.steps.map((s) => s.created ?? false)).toEqual([true, true, true, true, true, true]);
+  });
+
+  it('fails clearly when the experiment’s rule is not on the target flag, and refuses a foreign experiment that appeared', async () => {
+    const ld = fakeLd();
+    const flag = themeFlag(ld);
+    flag.environments!.test!.rules = [];
+    ld.flags.set('theme', flag);
+    const { ex, run } = setup(ld.client, [experiment({ holdoutKey: undefined, layer: undefined })]);
+    const out = await ex.run(run);
+    expect(out.steps[0]!.status).toBe('failed');
+    expect(out.steps[0]!.error).toMatch(/has no rule “Dark mode opt-in” \(position 1\)/);
+
+    ld.flags.set('theme', themeFlag(ld));
+    ld.experiments.set('test/exp', { key: 'exp', name: 'exp', tags: ['theirs'], draftIteration: { status: 'not_started', hypothesis: '' } });
+    const foreign = await ex.run(newRun({ id: 'run-f', workspaceId: 'w', projectKey: 'p', label: 't', dryRun: false, steps: [{ ...experiment({ holdoutKey: undefined, layer: undefined }), exists: true } as PlanStep], now: new Date() }));
+    expect(foreign.steps[0]!.error).toMatch(/wasn't created by this app/);
+  });
+
+  it('undo archives the experiment (out of its layer), deletes the metric group and metrics, and leaves the holdout and layer in place with a note', async () => {
+    const ld = fakeLd();
+    ld.flags.set('theme', themeFlag(ld));
+    const { ex, run } = setup(ld.client, [metric('m1'), metric('m2'), group, layer, holdout, experiment()], { concurrency: 1 });
+    const done = await ex.run(run);
+    ld.calls.length = 0;
+    const undone = await ex.undo(done);
+    expect(undone.status).toBe('undone');
+    expect(ld.calls.filter((c) => !c.startsWith('get') && !c.startsWith('list'))).toEqual(['semantic layer checkout test removeExperiment:exp', 'semantic experiment test/exp archiveExperiment', 'delete metric group funnel', 'delete metric m2', 'delete metric m1']);
+    expect(undone.steps.find((s) => s.step.op === 'upsert_holdout')!.message).toMatch(/^Undone: left holdout “q3” in test in place \(LaunchDarkly has no delete for holdouts/);
+    expect(undone.steps.find((s) => s.step.op === 'ensure_layer')!.message).toMatch(/no delete for layers/);
+  });
+
+  it('a re-sync of an LD-source metric patches its definition, and a dry run writes nothing', async () => {
+    const ld = fakeLd();
+    ld.metrics.set('m1', { key: 'm1', name: 'old', kind: 'custom', eventKey: 'm1_event', tags: TAGS, isNumeric: true, successCriteria: 'HigherThanBaseline', analysisUnits: ['user'] });
+    const { ex, run } = setup(ld.client, [{ ...metric('m1'), exists: true } as PlanStep]);
+    const out = await ex.run(run);
+    expect(out.status).toBe('done');
+    expect(ld.calls.filter((c) => !c.startsWith('get'))).toEqual(['json metric m1 /name,/description,/successCriteria,/unit,/analysisType,/percentileValue']);
+    ld.calls.length = 0;
+    ld.flags.set('theme', themeFlag(ld));
+    const dry = await ex.run(newRun({ id: 'run-dry', workspaceId: 'w', projectKey: 'p', label: 't', dryRun: true, steps: [metric('m2'), group, layer, holdout, experiment()], now: new Date() }));
+    expect(dry.status).toBe('done');
+    expect(dry.steps.map((s) => s.message)).toEqual([expect.stringMatching(/^Would create custom metric “m2”/), expect.stringMatching(/^Would create metric group “funnel”/), expect.stringMatching(/^Would create layer “checkout”/), expect.stringMatching(/^Would create holdout “q3” in test \(not started\)/), expect.stringMatching(/^Would create experiment “exp” in test as a draft/)]);
+    expect(ld.calls.filter((c) => !c.startsWith('get') && !c.startsWith('list'))).toEqual([]);
+  });
+});
