@@ -282,7 +282,7 @@ function LayerRow({ r, multi, open, onToggle, showArchived, onOpenCoverage }: { 
           {multi && <Badge>{s.alias}</Badge>}
           {l?.isImplicit && <Badge title="A one-experiment layer StatSig created implicitly">implicit</Badge>}
           {l?.archived && <Badge>archived</Badge>}
-          {l && <span className="text-xs text-fg-muted" title="Unit type the layer buckets on, and its owner">unit type {l.idType}{l.owner?.name ? ` · owner ${l.owner.name}` : ''}</span>}
+          {l && <span className="text-xs text-fg-muted" title="Unit type the layer buckets on, its owner and its StatSig team">unit type {l.idType}{l.owner?.name ? ` · owner ${l.owner.name}` : ''}{l.team ? ` · team ${l.team}` : ''}</span>}
         </div>
         <div className="text-xs tabular-nums text-fg-muted">{counts}</div>
         <div className="text-right text-xs tabular-nums text-fg-muted">{l ? l.parameters.length : '–'}</div>
@@ -354,6 +354,7 @@ function LayerRow({ r, multi, open, onToggle, showArchived, onOpenCoverage }: { 
                     <th className="py-0.5 pr-3 font-normal">Experiment</th>
                     <th className="py-0.5 pr-3 font-normal">Status</th>
                     <th className="py-0.5 pr-3 text-right font-normal">Alloc</th>
+                    <th className="py-0.5 pr-3 font-normal" title="The StatSig team set on the experiment">Team</th>
                     {l && <th className="py-0.5 pr-3 font-normal" title="Layer parameters this experiment sets, with the value per group">Overrides</th>}
                     <th className="py-0.5 pr-3 font-normal">Targeting</th>
                     <th className="py-0.5 font-normal">Migration</th>
@@ -392,6 +393,7 @@ function ExperimentRow({ x, inLayer }: { x: LayerReportExperiment; inLayer: bool
         <Badge tone={x.archived ? 'slate' : (STATUS_TONE[e.status] ?? 'slate')}>{x.archived ? 'archived' : e.status.replace(/_/g, ' ')}</Badge>
       </td>
       <td className="py-1 pr-3 text-right tabular-nums">{e.allocation}%</td>
+      <td className="py-1 pr-3">{e.team ? e.team : <span className="text-fg-muted">–</span>}</td>
       {inLayer && (
         <td className="py-1 pr-3">
           {overrides.length === 0 ? (

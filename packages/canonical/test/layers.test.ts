@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { describeCondition, describeOverride, describeRule, emptySnapshot, entityUid, layerReport, layerReportCsv, layerReportMarkdown, sortLayerRows, type Experiment, type Gate, type Layer, type Rule } from '../src/index.ts';
+import { describeCondition, describeOverride, describeRule, emptySnapshot, entityUid, layerReport, layerReportCsv, layerReportMarkdown, sortLayerRows, teamSummary, type Experiment, type Gate, type Layer, type Rule } from '../src/index.ts';
 
 const SRC = { sourceId: 's-web', sourceKind: 'console_api' as const, alias: 'web' };
 const base = { source: SRC, completeness: { missing: [] }, tags: [], targetApps: [], archived: false };
@@ -51,19 +51,19 @@ function snapshot() {
   const s = emptySnapshot(SRC, '2026-11-10T00:00:00Z');
   s.gates = [gate('us_only', [rule('US', [cond('country', 'any', ['US'])])])];
   s.layers = [
-    layer('checkout_layer', ['cta_copy', 'trust_badges', 'old_cta'], { parameters: [{ name: 'cta_text', type: 'string', defaultValue: 'Place order' }, { name: 'show_badges', type: 'boolean', defaultValue: false }] }),
+    layer('checkout_layer', ['cta_copy', 'trust_badges', 'old_cta'], { team: 'Cortex', parameters: [{ name: 'cta_text', type: 'string', defaultValue: 'Place order' }, { name: 'show_badges', type: 'boolean', defaultValue: false }] }),
     layer('pricing_layer', ['anchor', 'bundle'], { parameters: [{ name: 'anchor', type: 'number', defaultValue: 0 }, { name: 'bundle', type: 'boolean', defaultValue: false }, { name: 'tier', type: 'string', defaultValue: 'a' }] }),
     layer('button_color_layer', ['button_color'], { isImplicit: true }),
     layer('retired_layer', ['ghost_experiment'], { archived: true }),
   ];
   s.experiments = [
-    experiment('cta_copy', { status: 'active', allocation: 40, layerId: 'checkout_layer', groups: [{ name: 'Control', size: 50, parameterValues: { cta_text: 'Place order' } }, { name: 'Urgent', size: 50, parameterValues: { cta_text: 'Complete purchase now', urgency_banner: true } }] }),
+    experiment('cta_copy', { status: 'active', allocation: 40, layerId: 'checkout_layer', team: 'Cortex', groups: [{ name: 'Control', size: 50, parameterValues: { cta_text: 'Place order' } }, { name: 'Urgent', size: 50, parameterValues: { cta_text: 'Complete purchase now', urgency_banner: true } }] }),
     experiment('trust_badges', { status: 'setup', allocation: 30, layerId: 'checkout_layer', groups: [{ name: 'Control', size: 50, parameterValues: { show_badges: false } }, { name: 'Badges', size: 50, parameterValues: { show_badges: true } }] }),
     experiment('old_cta', { status: 'archived', layerId: 'checkout_layer', groups: [{ name: 'Control', size: 50, parameterValues: { cta_text: 'Buy' } }, { name: 'Test', size: 50, parameterValues: { cta_text: 'Buy now' } }] }),
     experiment('anchor', { status: 'decision_made', layerId: 'pricing_layer', launchedGroupId: 'Test' }),
     experiment('bundle', { status: 'abandoned', layerId: 'pricing_layer' }),
     experiment('button_color', { status: 'setup', layerId: 'button_color_layer' }),
-    experiment('search_v3', { status: 'active', allocation: 50, targetingGateId: 'us_only', targetingRules: [rule('Beta', [cond('email', 'str_contains_any', ['@acme.com'])], 50)], overrides: [{ unitType: 'userID', ids: ['u1', 'u2'], value: { kind: 'group', groupName: 'Test' }, environment: null }] }),
+    experiment('search_v3', { status: 'active', allocation: 50, team: 'Growth', targetingGateId: 'us_only', targetingRules: [rule('Beta', [cond('email', 'str_contains_any', ['@acme.com'])], 50)], overrides: [{ unitType: 'userID', ids: ['u1', 'u2'], value: { kind: 'group', groupName: 'Test' }, environment: null }] }),
     experiment('orphan', { status: 'setup', layerId: 'layer_not_synced', targetingGateId: 'gate_not_synced' }),
   ];
   return s;
@@ -173,9 +173,12 @@ describe('layerReport', () => {
   it('exports one CSV row per experiment plus one per empty layer, with layer defaults', () => {
     const csv = layerReportCsv(report);
     const lines = csv.trim().split('\n');
-    expect(lines[0]).toBe('layer,layer_fate,layer_implicit,layer_archived,layer_parameters,layer_defaults,experiment,status,experiment_archived,allocation_pct,groups,unit_type,parameters_overridden,targeting,experiment_fate,reason');
+    expect(lines[0]).toBe('layer,layer_fate,layer_implicit,layer_archived,layer_parameters,layer_defaults,layer_team,experiment,status,experiment_archived,allocation_pct,groups,unit_type,experiment_team,parameters_overridden,targeting,experiment_fate,reason');
     expect(lines).toHaveLength(1 + 8 + 1);
-    expect(lines.find((l) => l.startsWith('checkout_layer,') && l.includes(',cta_copy,'))).toContain('"cta_text=""Place order""; show_badges=false"');
+    expect(lines.find((l) => l.startsWith('checkout_layer,') && l.includes(',cta_copy,'))).toContain('"cta_text=""Place order""; show_badges=false",Cortex,cta_copy,active,false,40,Control 50%; Urgent 50%,userID,Cortex,');
+    // An experiment without a team keeps its layer's team in layer_team but an empty experiment_team.
+    expect(lines.find((l) => l.includes(',trust_badges,'))).toContain(',Cortex,trust_badges,setup,false,30,Control 50%; Badges 50%,userID,,');
+    expect(lines.find((l) => l.includes(',search_v3,'))).toContain(',userID,Growth,');
     expect(lines.find((l) => l.includes(',search_v3,'))).toContain('(not in a layer)');
     expect(lines.find((l) => l.startsWith('retired_layer,'))).toContain('Never migrated');
   });
@@ -202,8 +205,9 @@ describe('layerReportMarkdown', () => {
     expect(sections).toEqual(['## `checkout_layer` — Create LD layer', '## Not in a layer', '## Skipped layers (2)', '## Archived layers (1)']);
     // A horizontal rule separates every section from the next, and none sits before the first.
     expect(doc.split('\n').filter((l) => l === '---')).toHaveLength(3);
-    expect(doc.indexOf('---')).toBeGreaterThan(doc.indexOf('## `checkout_layer`'));
-    expect(doc.indexOf('---')).toBeLessThan(doc.indexOf('## Not in a layer'));
+    const firstRule = doc.indexOf('\n---\n');
+    expect(firstRule).toBeGreaterThan(doc.indexOf('## `checkout_layer`'));
+    expect(firstRule).toBeLessThan(doc.indexOf('## Not in a layer'));
     expect(doc).toContain('3 live layers (1 implicit, 1 archived) · 7 live experiments (2 running, 1 abandoned, 1 archived) · 2 layers could be skipped.');
     const skipped = doc.slice(doc.indexOf('## Skipped layers'), doc.indexOf('## Archived layers'));
     expect(skipped).toContain('**Implicit layers (1):**');
@@ -214,14 +218,31 @@ describe('layerReportMarkdown', () => {
     expect(doc.slice(doc.indexOf('## Archived layers'))).toContain('- `retired_layer` — `ghost_experiment` (not in this snapshot) · 1 parameter');
   });
 
+  it('summarises ownership by StatSig team, counting experiments under their own team and leaving the summary out when no team is set', () => {
+    expect(teamSummary(report)).toEqual([
+      { team: 'Cortex', layers: 1, layersToCreate: 1, experiments: 1, running: 1 },
+      { team: 'Growth', layers: 0, layersToCreate: 0, experiments: 1, running: 1 },
+      // trust_badges, anchor, bundle, button_color and orphan; retired_layer's ghost_experiment is not in the snapshot.
+      { team: null, layers: 1, layersToCreate: 0, experiments: 5, running: 0 },
+    ]);
+    const summary = doc.slice(doc.indexOf('**By team**'), doc.indexOf('## `checkout_layer`'));
+    expect(summary).toContain('| Team | Explicit layers | Layers to create | Live experiments | Running |');
+    expect(summary).toContain('| Cortex | 1 | 1 | 1 | 1 |');
+    expect(summary).toContain('| Growth | 0 | 0 | 1 | 1 |');
+    expect(summary).toContain('| *(no team)* | 1 | 0 | 5 | 0 |');
+    const s = snapshot();
+    for (const e of [...s.layers, ...s.experiments]) e.team = null;
+    expect(layerReportMarkdown(layerReport(s))).not.toContain('**By team**');
+  });
+
   it('keeps each layer with its defaults table and its experiments table', () => {
     const checkout = doc.slice(doc.indexOf('## `checkout_layer`'), doc.indexOf('## `button_color_layer`'));
-    expect(checkout).toContain('unit type: userID');
+    expect(checkout).toContain('unit type: userID · team: Cortex');
     expect(checkout).toContain('| `cta_text` | string | `"Place order"` | 1 of 2 experiments (1 keeps the default) |');
     expect(checkout).toContain('| `show_badges` | boolean | `false` | 1 of 2 experiments (1 keeps the default) |');
     expect(checkout).not.toContain('| `cta_copy` |\n');
-    expect(checkout).toContain('| `cta_copy` | active | 40% | userID | 1 of 2: `cta_text`, `urgency_banner`* | none | Wait until it ends |');
-    expect(checkout).toContain('| `old_cta` | archived | 100% | userID | 1 of 2: `cta_text` | none | Never migrated |');
+    expect(checkout).toContain('| `cta_copy` | active | 40% | userID | Cortex | 1 of 2: `cta_text`, `urgency_banner`* | none | Wait until it ends |');
+    expect(checkout).toContain('| `old_cta` | archived | 100% | userID | – | 1 of 2: `cta_text` | none | Never migrated |');
     expect(checkout).toContain('the values per group are in the CSV export');
     expect(checkout).not.toContain('Complete purchase now');
     const s = snapshot();
@@ -232,7 +253,7 @@ describe('layerReportMarkdown', () => {
     expect(checkout).toContain('> Becomes a LaunchDarkly layer reserving traffic for 2 experiments');
     expect(checkout).toContain('(2 live, 1 archived)');
     const loose = doc.slice(doc.indexOf('## Not in a layer'), doc.indexOf('## Archived layers'));
-    expect(loose).toContain('| `search_v3` | active | 50% | userID | gate us_only: country any [US] · rule: email str_contains_any [@acme.com] (50% pass) · 2 forced IDs | Wait until it ends |');
+    expect(loose).toContain('| `search_v3` | active | 50% | userID | Growth | gate us_only: country any [US] · rule: email str_contains_any [@acme.com] (50% pass) · 2 forced IDs | Wait until it ends |');
     expect(loose).toContain('`orphan` (layer `layer_not_synced` not synced)');
     expect(loose).toContain('gate gate_not_synced (not in this snapshot: not found in StatSig: deleted or renamed)');
     expect(doc).not.toContain('**Default parameters**\n\n**Experiments**');

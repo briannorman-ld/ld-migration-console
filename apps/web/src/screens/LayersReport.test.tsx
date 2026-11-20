@@ -83,7 +83,7 @@ describe('LayersReport', () => {
     expect(within(cta).getByText('Wait until it ends')).toBeTruthy();
     expect(within(cta).getByText('cta_text')).toBeTruthy();
     expect(within(cta).getByText('Complete purchase now')).toBeTruthy();
-    expect(within(within(exps).getByText('trust_badges').closest('tr')!).getByText('none', { selector: 'td:nth-child(4) *' })).toBeTruthy();
+    expect(within(within(exps).getByText('trust_badges').closest('tr')!).getByText('none', { selector: 'td:nth-child(5) *' })).toBeTruthy();
     const ctaRow = within(params).getByText('cta_text').closest('tr')!;
     const use = within(ctaRow).getByText('1 of 2 experiments (1 keeps the default)');
     expect(use.getAttribute('title')).toBe('cta_copy');
@@ -155,7 +155,7 @@ describe('LayersReport', () => {
     expect(md).toContain('# Layers and experiments — web');
     expect(md).toContain('Snapshot taken 2026-11-10T00:00:00Z.');
     expect(md).toContain('## `checkout_layer` — Create LD layer');
-    expect(md).toContain('| `cta_copy` | active | 40% | userID | 1 of 2: `cta_text` | none | Wait until it ends |');
+    expect(md).toContain('| `cta_copy` | active | 40% | userID | – | 1 of 2: `cta_text` | none | Wait until it ends |');
     expect(md).toContain('## Skipped layers (2)');
     expect(md).toContain('- `retired_layer` — no experiments in this snapshot · 1 parameter');
   });

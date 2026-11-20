@@ -312,6 +312,50 @@ export function sortLayerRows(rows: LayerReportRow[], key: LayerSortKey, dir: 'a
   return [...rows].sort((a, b) => (key === 'name' ? sign * byName(a, b) : sign * (metric(a) - metric(b)) || byName(a, b)));
 }
 
+export interface TeamSummaryRow {
+  /** StatSig team name; `null` groups the items with no team set. */
+  team: string | null;
+  /** Explicit (non-implicit), non-archived layers with this team. */
+  layers: number;
+  /** Of those, the ones the migration creates in LD. */
+  layersToCreate: number;
+  /** Non-archived experiments with this team, wherever they sit. */
+  experiments: number;
+  /** Of those, the ones still running (they end in StatSig first). */
+  running: number;
+}
+
+/**
+ * Who owns what, by the StatSig `team` field (Enterprise only, optional, so many rows may fall
+ * under `null`). Rows sort by live experiments, then layers, then name; the no-team row goes last.
+ */
+export function teamSummary(report: LayerReport): TeamSummaryRow[] {
+  const rows = new Map<string | null, TeamSummaryRow>();
+  const get = (team: string | null | undefined) => {
+    const key = team?.trim() || null;
+    let r = rows.get(key);
+    if (!r) rows.set(key, (r = { team: key, layers: 0, layersToCreate: 0, experiments: 0, running: 0 }));
+    return r;
+  };
+  for (const row of report.rows) {
+    const l = row.layer!;
+    if (!l.archived && !l.isImplicit) {
+      const r = get(l.team);
+      r.layers++;
+      if (row.fate === 'create') r.layersToCreate++;
+    }
+  }
+  for (const row of [...report.rows, report.unlayered]) {
+    for (const x of row.experiments) {
+      if (x.archived) continue;
+      const r = get(x.experiment.team);
+      r.experiments++;
+      if (x.fate === 'wait') r.running++;
+    }
+  }
+  return [...rows.values()].sort((a, b) => (a.team === null ? 1 : b.team === null ? -1 : 0) || b.experiments - a.experiments || b.layers - a.layers || (a.team ?? '').localeCompare(b.team ?? ''));
+}
+
 export const EXPERIMENT_FATE_LABEL: Record<ExperimentFate, string> = {
   draft: 'Draft experiment',
   wait: 'Wait until it ends',
@@ -330,18 +374,18 @@ export const LAYER_FATE_LABEL: Record<LayerFate, string> = {
 /** One CSV row per experiment, plus a row for every layer without experiments, so nothing is lost in the export. `source` adds a leading column (workspaces with several sources). */
 export function layerReportCsv(report: LayerReport, opts: { source?: string } = {}): string {
   const sourceCol = opts.source !== undefined ? [opts.source] : [];
-  const header = [...(opts.source !== undefined ? ['source'] : []), 'layer', 'layer_fate', 'layer_implicit', 'layer_archived', 'layer_parameters', 'layer_defaults', 'experiment', 'status', 'experiment_archived', 'allocation_pct', 'groups', 'unit_type', 'parameters_overridden', 'targeting', 'experiment_fate', 'reason'];
+  const header = [...(opts.source !== undefined ? ['source'] : []), 'layer', 'layer_fate', 'layer_implicit', 'layer_archived', 'layer_parameters', 'layer_defaults', 'layer_team', 'experiment', 'status', 'experiment_archived', 'allocation_pct', 'groups', 'unit_type', 'experiment_team', 'parameters_overridden', 'targeting', 'experiment_fate', 'reason'];
   const lines: string[][] = [];
   for (const row of [...report.rows, report.unlayered]) {
     const l = row.layer;
-    const layerCells = [...sourceCol, l?.id ?? '(not in a layer)', row.fate ? LAYER_FATE_LABEL[row.fate] : '', l ? String(l.isImplicit) : '', l ? String(l.archived) : '', l ? String(l.parameters.length) : '', l ? describeDefaults(l) : ''];
+    const layerCells = [...sourceCol, l?.id ?? '(not in a layer)', row.fate ? LAYER_FATE_LABEL[row.fate] : '', l ? String(l.isImplicit) : '', l ? String(l.archived) : '', l ? String(l.parameters.length) : '', l ? describeDefaults(l) : '', l?.team ?? ''];
     if (row.experiments.length === 0) {
-      lines.push([...layerCells, '', '', '', '', '', '', '', '', '', row.reason]);
+      lines.push([...layerCells, '', '', '', '', '', '', '', '', '', '', row.reason]);
       continue;
     }
     for (const x of row.experiments) {
       const e = x.experiment;
-      lines.push([...layerCells, e.id, e.status, String(x.archived), String(e.allocation), e.groups.map((g) => `${g.name} ${g.size}%`).join('; '), e.idType, (x.parameters ?? []).map(describeOverride).join('; '), x.targeting.text, EXPERIMENT_FATE_LABEL[x.fate], x.reason]);
+      lines.push([...layerCells, e.id, e.status, String(x.archived), String(e.allocation), e.groups.map((g) => `${g.name} ${g.size}%`).join('; '), e.idType, e.team ?? '', (x.parameters ?? []).map(describeOverride).join('; '), x.targeting.text, EXPERIMENT_FATE_LABEL[x.fate], x.reason]);
     }
   }
   return [header, ...lines].map((cells) => cells.map(csvCell).join(',')).join('\n') + '\n';
@@ -396,6 +440,13 @@ export function layerReportMarkdown(report: LayerReport, opts: LayerReportMarkdo
   if (report.missingGates) {
     const m = report.missingGates;
     out.push(`**${plural(m.experimentIds.length, 'experiment')} target ${plural(m.gateIds.length, 'gate')} not in this snapshot** (${MISSING_GATE_LABEL[m.reason]}): ${m.gateIds.map((id) => `\`${md(id)}\``).join(', ')}. ${MISSING_GATE_ADVICE[m.reason]}`, '');
+  }
+  const teams = teamSummary(report);
+  if (teams.some((t) => t.team !== null)) {
+    out.push('**By team** (the StatSig team set on each layer and experiment; an experiment counts under its own team, not its layer’s)', '');
+    out.push('| Team | Explicit layers | Layers to create | Live experiments | Running |', '|---|---|---|---|---|');
+    for (const t of teams) out.push(`| ${t.team === null ? '*(no team)*' : md(t.team)} | ${t.layers} | ${t.layersToCreate} | ${t.experiments} | ${t.running} |`);
+    out.push('');
   }
   // A rule between sections: in a long document the eye needs to see where one layer ends.
   let sectionCount = 0;
@@ -458,7 +509,7 @@ function layerSection(r: LayerReportRow, level = 2): string[] {
   const out: string[] = [];
   out.push(`${h} ${l ? `\`${l.id}\`` : 'Not in a layer'}${r.fate ? ` — ${LAYER_FATE_LABEL[r.fate]}` : ''}`, '');
   if (l) {
-    const meta = [l.isImplicit ? 'implicit layer' : '', `unit type: ${l.idType}`, l.owner?.name ? `owner: ${l.owner.name}` : '', l.description ?? ''].filter(Boolean).join(' · ');
+    const meta = [l.isImplicit ? 'implicit layer' : '', `unit type: ${l.idType}`, l.owner?.name ? `owner: ${l.owner.name}` : '', l.team ? `team: ${l.team}` : '', l.description ?? ''].filter(Boolean).join(' · ');
     if (meta) out.push(md(meta), '');
   }
   const counts = [`${r.counts.live} live`, r.counts.ended ? `${r.counts.ended} ended` : '', r.counts.archived ? `${r.counts.archived} archived` : ''].filter(Boolean).join(', ');
@@ -477,12 +528,12 @@ function layerSection(r: LayerReportRow, level = 2): string[] {
   if (r.experiments.length === 0) out.push('No experiments in this snapshot.', '');
   else {
     const withParams = !!l;
-    out.push(withParams ? '| Experiment | Status | Allocation | Unit | Overrides | Targeting | Migration |' : '| Experiment | Status | Allocation | Unit | Targeting | Migration |', withParams ? '|---|---|---|---|---|---|---|' : '|---|---|---|---|---|---|');
+    out.push(withParams ? '| Experiment | Status | Allocation | Unit | Team | Overrides | Targeting | Migration |' : '| Experiment | Status | Allocation | Unit | Team | Targeting | Migration |', withParams ? '|---|---|---|---|---|---|---|---|' : '|---|---|---|---|---|---|---|');
     for (const x of r.experiments) {
       const e = x.experiment;
       const name = `\`${md(e.id)}\`${x.missingLayerId ? ` (layer \`${md(x.missingLayerId)}\` not synced)` : ''}`;
       const overrides = withParams ? ` ${summarizeOverrides(x.parameters ?? [], l!.parameters.length)} |` : '';
-      out.push(`| ${name} | ${x.archived ? 'archived' : e.status.replace(/_/g, ' ')} | ${e.allocation}% | ${md(e.idType)} |${overrides} ${md(x.targeting.text)} | ${EXPERIMENT_FATE_LABEL[x.fate]} |`);
+      out.push(`| ${name} | ${x.archived ? 'archived' : e.status.replace(/_/g, ' ')} | ${e.allocation}% | ${md(e.idType)} | ${e.team ? md(e.team) : '–'} |${overrides} ${md(x.targeting.text)} | ${EXPERIMENT_FATE_LABEL[x.fate]} |`);
     }
     out.push('');
   }
