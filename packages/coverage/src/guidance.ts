@@ -4,7 +4,7 @@
  * bare list without a verdict (the user asked for "any feature of StatSig", so every item gets
  * an answer, even when the answer is "not yet" or "no equivalent").
  */
-import type { Config, Entity, EntityKind, Experiment, Holdout, Layer, Metric, NeutralExperiment, NeutralFlag, NeutralHoldout, NeutralLayer, NeutralMetric, NeutralMetricGroup, NeutralSegment, ParamStore } from '@sslm/canonical';
+import { migrationKindOf, type Config, type Entity, type EntityKind, type Experiment, type Holdout, type Layer, type Metric, type NeutralExperiment, type NeutralFlag, type NeutralHoldout, type NeutralLayer, type NeutralMetric, type NeutralMetricGroup, type NeutralSegment, type ParamStore, type SourceKind } from '@sslm/canonical';
 import { COVERAGE } from './matrix.ts';
 import type { CoverageEntry, CoverageStatus } from './types.ts';
 
@@ -113,38 +113,47 @@ export interface InventorySummary {
   archived: number;
 }
 
-/** What happens to a neutral-source metric or metric group (PLAN §20.5): a warehouse data source needs a decision; the rest copies. */
-export function neutralMetricStatus(m: Pick<NeutralMetric, 'metricKind' | 'dataSource'> | Pick<NeutralMetricGroup, 'groupKind'>): CoverageStatus {
+/**
+ * What happens to a neutral-source metric or metric group (PLAN §20.5): a warehouse data source
+ * needs a decision; the rest copies. `exact` is an LD source, which copies one to one and asks
+ * nothing (PLAN §20.3): its differences are notes, so every item that migrates at all `migrates`.
+ */
+export function neutralMetricStatus(m: Pick<NeutralMetric, 'metricKind' | 'dataSource'> | Pick<NeutralMetricGroup, 'groupKind'>, exact = false): CoverageStatus {
   if ('groupKind' in m) return m.groupKind === 'funnel' || m.groupKind === 'standard' ? 'migrates' : 'none';
   if (!['custom', 'pageview', 'click', 'trace'].includes(m.metricKind)) return 'none';
-  return m.dataSource ? 'decisions' : 'migrates';
+  return m.dataSource && !exact ? 'decisions' : 'migrates';
 }
 
-/** What happens to a neutral-source experiment, holdout or layer: a running or stopped one raises a decision; a draft copies as it is. */
-export function neutralExperimentStatus(x: Pick<NeutralExperiment, 'environments'> | Pick<NeutralHoldout, 'environments'> | Pick<NeutralLayer, 'kind'>): CoverageStatus {
+/** What happens to a neutral-source experiment, holdout or layer: a running or stopped one raises a decision (a note for an `exact` LD source); a draft copies as it is. */
+export function neutralExperimentStatus(x: Pick<NeutralExperiment, 'environments'> | Pick<NeutralHoldout, 'environments'> | Pick<NeutralLayer, 'kind'>, exact = false): CoverageStatus {
   if ('kind' in x) return 'migrates';
   const envs = x.environments as ({ status?: string; currentIteration?: { status: string }; draftIteration?: unknown; experimentType?: string })[];
   if (envs.some((e) => e.experimentType !== undefined && e.experimentType !== 'experiment' && e.experimentType !== 'mab')) return 'none';
+  if (exact) return 'migrates';
   if (envs.some((e) => e.status === 'running' || e.status === 'enabled' || e.currentIteration?.status === 'running' || e.currentIteration?.status === 'stopped')) return 'decisions';
   return 'migrates';
 }
 
-/** What happens to a neutral-source flag: every caveat and experiment allocation raises a decision; a purpose-marked flag (survey, …) is skipped. */
-export function neutralFlagStatus(f: Pick<NeutralFlag, 'purpose' | 'caveats' | 'experiments' | 'environments'>): CoverageStatus {
+/** What happens to a neutral-source flag: every caveat and experiment allocation raises a decision (none for an `exact` LD source); a purpose-marked flag (survey, …) is skipped. */
+export function neutralFlagStatus(f: Pick<NeutralFlag, 'purpose' | 'caveats' | 'experiments' | 'environments'>, exact = false): CoverageStatus {
   if (f.purpose) return 'none';
+  if (exact) return 'migrates';
   if ((f.caveats?.length ?? 0) > 0 || f.experiments.length > 0) return 'decisions';
   if (f.environments.some((e) => e.rules.some((r) => r.experiment || (r.coverage !== undefined && r.coverage < 1) || (r.prerequisites?.length ?? 0) > 0))) return 'decisions';
   return 'migrates';
 }
 
-/** What happens to a neutral-source segment: an unreadable or frozen membership and every other caveat raise a decision. */
-export function neutralSegmentStatus(s: Pick<NeutralSegment, 'caveats' | 'environments'>): CoverageStatus {
+/** What happens to a neutral-source segment: an unreadable or frozen membership and every other caveat raise a decision (an `exact` LD source creates a big segment empty, noted). */
+export function neutralSegmentStatus(s: Pick<NeutralSegment, 'caveats' | 'environments'>, exact = false): CoverageStatus {
+  if (exact) return 'migrates';
   if ((s.caveats?.length ?? 0) > 0) return 'decisions';
   if (s.environments.some((e) => e.unbounded)) return 'decisions';
   return 'migrates';
 }
 
 type InventorySnapshot = {
+  /** The snapshot's source; an LD source (PLAN §20) copies one to one and raises no decision. */
+  source?: { sourceKind: SourceKind };
   gates: Entity[];
   configs: Entity[];
   segments: Entity[];
@@ -177,13 +186,14 @@ export function summarizeInventory(snapshots: readonly InventorySnapshot[]): Inv
     }
     const experimentation = s.neutral ? [...(s.neutral.metrics ?? []), ...(s.neutral.metricGroups ?? []), ...(s.neutral.experiments ?? []), ...(s.neutral.holdouts ?? []), ...(s.neutral.layers ?? [])] : [];
     if (s.neutral && (s.neutral.flags.length > 0 || s.neutral.segments.length > 0 || experimentation.length > 0)) {
+      const exact = s.source ? migrationKindOf(s.source.sourceKind) === 'launchdarkly' : false;
       const n = (out.neutral ??= { flags: zero(), segments: zero(), metrics: zero(), experiments: zero() });
       for (const m of [...(s.neutral.metrics ?? []), ...(s.neutral.metricGroups ?? [])]) {
         if (m.archived) {
           out.archived++;
           continue;
         }
-        const st = neutralMetricStatus(m);
+        const st = neutralMetricStatus(m, exact);
         out.total++;
         out.byStatus[st]++;
         n.metrics[st]++;
@@ -193,7 +203,7 @@ export function summarizeInventory(snapshots: readonly InventorySnapshot[]): Inv
           out.archived++;
           continue;
         }
-        const st = neutralExperimentStatus(x);
+        const st = neutralExperimentStatus(x, exact);
         out.total++;
         out.byStatus[st]++;
         n.experiments[st]++;
@@ -203,7 +213,7 @@ export function summarizeInventory(snapshots: readonly InventorySnapshot[]): Inv
           out.archived++;
           continue;
         }
-        const st = neutralFlagStatus(f);
+        const st = neutralFlagStatus(f, exact);
         out.total++;
         out.byStatus[st]++;
         n.flags[st]++;
@@ -213,7 +223,7 @@ export function summarizeInventory(snapshots: readonly InventorySnapshot[]): Inv
           out.archived++;
           continue;
         }
-        const st = neutralSegmentStatus(g);
+        const st = neutralSegmentStatus(g, exact);
         out.total++;
         out.byStatus[st]++;
         n.segments[st]++;

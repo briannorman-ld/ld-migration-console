@@ -1,8 +1,9 @@
 /**
  * Neutral model → desired LD state (PLAN §20.3, §22.3). The LaunchDarkly source adapter fills the
- * neutral block with LD's own vocabulary, so for it this is a near-identity mapping: what is copied
- * verbatim is copied verbatim, and every real difference between the source and the target project
- * is a decision or a fidelity note. The PostHog adapter (PLAN §22) uses the same model plus the
+ * neutral block with LD's own vocabulary, so for it this is a one-to-one copy that raises no
+ * decision (`exact`): what is copied verbatim is copied verbatim, a difference the target cannot
+ * take (a new salt, an unreadable big-segment membership, a running experiment) is a fidelity
+ * note, and what cannot be written at all skips the item with a reason. The PostHog adapter (PLAN §22) uses the same model plus the
  * optional fields LD lacks (`coverage`, `payload`, `synthetic`, rule `prerequisites`, `caveats`,
  * `caseInsensitive`); each of those becomes a decision here (CLAUDE.md: never silently drop or
  * approximate). Pure and deterministic, like the StatSig mappers.
@@ -95,6 +96,14 @@ const SOURCE_KIND_WORD: Record<MigrationSourceKind, string> = { launchdarkly: 'L
 export const sourceLabel = (ctx: Ctx) => SOURCE_WORD[ctx.kind] ?? 'the source';
 /** Clauses from an LD source already carry LD semantics; other sources' negations, regexes and versions are checked. */
 const foreign = (ctx: Ctx) => ctx.kind !== 'launchdarkly';
+/**
+ * An LD source copies one to one (PLAN §20.3): the console asks nothing. Where another source
+ * would raise a decision, the LD path takes the one faithful answer (create the kind, copy the
+ * property, import the list, copy the design as a draft) and says so in a note, or, when the
+ * target cannot take the item at all (no prerequisites on the plan, a reference the snapshot
+ * lacks), skips it with a reason. `key_collision` stays with the planner: it is about the target.
+ */
+export const exact = (ctx: Ctx) => ctx.kind === 'launchdarkly';
 
 export function makeCtx(args: MapArgs<{ uid: string; key: string }>, kind: DecisionSubject['kind']): Ctx {
   const snapshot = args.canonical.snapshot;
@@ -128,6 +137,13 @@ export function resolveSourceKind(ctx: Ctx, kindKey: string): string {
   if (proposed !== 'user' && !configured && !caps.existingContextKinds.includes(proposed)) {
     const existing = caps.existingContextKinds.filter((k) => k !== proposed);
     const canCreate = caps.contextKinds !== 'not_permitted' && caps.contextKinds !== 'unavailable';
+    if (exact(ctx)) {
+      // One to one: the kind is created with the same key (an ensure_context_kind step); a token that cannot is noted.
+      if (!canCreate) ctx.fidelity.push({ fidelity: 'manual', message: `Context kind “${proposed}” is missing in the target project and this token cannot create it; ask a LaunchDarkly admin to create it before the run (SDK evaluations also auto-create kinds).`, location: 'context kinds' });
+      ctx.kindCache.set(kindKey, kind);
+      ctx.deps.set(`context_kind:${kind}`, { kind: 'context_kind', key: kind, entityId: kindKey });
+      return kind;
+    }
     const options: DecisionOption[] = [
       {
         key: `create:${proposed}`,
@@ -174,6 +190,7 @@ function translateClause(ctx: Ctx, c: NeutralClause, loc: Loc, env: string, inSe
   if (PRESENCE_OPS.has(c.op)) return presenceCheck(ctx, c, where, path, subject);
   if (!LD_OPERATORS.has(c.op) || (inSegment && c.op === 'segmentMatch')) {
     const native = c.op.startsWith('posthog:') ? c.op.slice('posthog:'.length) : c.op;
+    if (exact(ctx)) throw new SkipItem(inSegment && c.op === 'segmentMatch' ? `${where} matches another segment, which a LaunchDarkly segment rule cannot do` : `the console cannot write the operator “${native}” of ${where} yet`);
     const choice = ctx.decisions.choose(
       {
         type: 'unsupported_condition',
@@ -195,6 +212,7 @@ function translateClause(ctx: Ctx, c: NeutralClause, loc: Loc, env: string, inSe
       return !seg || !neutralSegmentEnvOf(seg, env);
     });
     if (missing.length) {
+      if (exact(ctx)) throw new SkipItem(`segment${missing.length === 1 ? '' : 's'} ${missing.map((m) => `“${m}”`).join(', ')} matched by ${where} ${missing.length === 1 ? 'is' : 'are'} not in the source snapshot for environment “${env}” (deleted, or not readable with this token)`);
       const choice = ctx.decisions.choose(
         {
           type: 'missing_reference',
@@ -467,8 +485,9 @@ function skipOrDrop(ctx: Ctx, choice: string, where: string, what: string): Clau
   return { kind: 'drop_rule' };
 }
 
-/** A rollout in the target re-buckets: the new flag has its own salt (PLAN §20.3). */
+/** A rollout in the target re-buckets: the new flag has its own salt (PLAN §20.3). An LD source only notes it (the callers push the note). */
 function rebucket(ctx: Ctx, path: string, location: string, pct: string): 'acknowledge' | 'skip' {
+  if (exact(ctx)) return 'acknowledge';
   const choice = ctx.decisions.choose(
     {
       type: 'partial_rollout_rebucket',
@@ -905,6 +924,7 @@ function translatePrerequisites(ctx: Ctx, source: NeutralFlagEnv, env: string): 
   const caps = ctx.args.capabilities.prerequisites;
   const names = source.prerequisites.map((p) => `“${p.key}”`).join(', ');
   if (caps === 'unavailable' || caps === 'not_permitted') {
+    if (exact(ctx)) throw new SkipItem(`prerequisites ${names} can't be written: ${caps === 'not_permitted' ? 'the target token may not set prerequisites' : 'the target plan has no flag prerequisites (Enterprise)'}`);
     const choice = ctx.decisions.choose(
       {
         type: 'prerequisite_unsupported',
@@ -929,6 +949,7 @@ function translatePrerequisites(ctx: Ctx, source: NeutralFlagEnv, env: string): 
   for (const p of source.prerequisites) {
     const ref = neutralFlagByKey(ctx.snapshot).get(p.key);
     if (!ref || ref.archived || !neutralEnvOf(ref, env)) {
+      if (exact(ctx)) throw new SkipItem(`prerequisite “${p.key}” is ${ref?.archived ? `archived in ${sourceLabel(ctx)} (nothing archived is migrated)` : !ref ? 'not in the source snapshot (deleted, or not readable with this token)' : `not configured in source environment “${env}”`}`);
       const choice = ctx.decisions.choose(
         {
           type: 'missing_reference',
@@ -1128,7 +1149,9 @@ const noteKey = (n: FidelityNote) => `${n.fidelity}|${n.location ?? ''}|${n.mess
  */
 function scheduledChanges(ctx: Ctx, c: Extract<NeutralCaveat, { kind: 'scheduled_changes' }>, flag: NeutralFlag, source: NeutralFlagEnv, desired: DesiredFlagEnv, rewrite: (s: VariationOrRollout) => VariationOrRollout): DesiredFlagEnv {
   const nowMs = Date.parse(ctx.args.now);
-  const changes = c.detail.changes;
+  // An LD source schedules per environment (PLAN §20.6): only this environment's changes apply here.
+  const changes = c.detail.changes.filter((x) => !x.env || x.env === source.env);
+  if (changes.length === 0) return desired;
   const plural = (k: number, word: string) => `${k} ${word}${k === 1 ? '' : 's'}`;
   /** "scheduled change" / "3 scheduled changes": the count only when there are several. */
   const some = (k: number, word: string) => (k === 1 ? word : `${k} ${word}s`);
@@ -1164,7 +1187,8 @@ function scheduledChanges(ctx: Ctx, c: Extract<NeutralCaveat, { kind: 'scheduled
     { key: 'acknowledge', label: 'Migrate the current state only', explanation: `The pending changes stay in ${sourceLabel(ctx)}.`, resultingFidelity: 'partial' },
     SKIP,
   ];
-  const choice = ctx.decisions.choose(
+  // An LD source (exact) takes the one faithful answer: schedule what can be scheduled, note the rest.
+  const choice = exact(ctx) ? (canSchedule ? 'schedule' : 'acknowledge') : ctx.decisions.choose(
     {
       type: 'scheduled_rule',
       severity: canSchedule ? 'choice' : 'acknowledge',
@@ -1233,7 +1257,10 @@ function flagShell(ctx: Ctx, flag: NeutralFlag, alias: string, tagMigrated: stri
   const early = flag.caveats?.find((c): c is Extract<NeutralCaveat, { kind: 'early_access_enrollment' }> => c.kind === 'early_access_enrollment');
   if (early && (early.detail.name || early.detail.stage)) props[EARLY_ACCESS_PROPERTY] = { name: `${SOURCE_KIND_WORD[ctx.kind]} early access feature`, value: [early.detail.name, early.detail.stage].filter((v): v is string => !!v) };
   const own = Object.entries(flag.customProperties).filter(([k]) => !PROVENANCE_PROPERTY_RE.test(k) && k !== EARLY_ACCESS_PROPERTY);
-  if (own.length) {
+  if (own.length && exact(ctx)) {
+    // One to one: the flag's own properties come along.
+    for (const [k, v] of own) props[k] = { name: v.name, value: [...v.value] };
+  } else if (own.length) {
     const choice = ctx.decisions.choose(
       {
         type: 'copy_custom_properties',
@@ -1257,7 +1284,7 @@ function flagShell(ctx: Ctx, flag: NeutralFlag, alias: string, tagMigrated: stri
   }
   // Member IDs belong to the source account; the maintainer is matched by email (and the team by key) in the target, like a StatSig owner.
   const maintainer = flag.maintainer
-    ? chooseMaintainer({ profile: ctx.args.profile, ...(ctx.args.directory ? { directory: ctx.args.directory } : {}), decisions: ctx.decisions, subject: ctx.subject, fidelity: ctx.fidelity }, { ...(flag.maintainer.email ? { owner: { id: flag.maintainer.id, email: flag.maintainer.email } } : {}), team: flag.maintainer.teamKey ?? null })
+    ? chooseMaintainer({ profile: ctx.args.profile, ...(ctx.args.directory ? { directory: ctx.args.directory } : {}), decisions: ctx.decisions, subject: ctx.subject, fidelity: ctx.fidelity, exact: exact(ctx) }, { ...(flag.maintainer.email ? { owner: { id: flag.maintainer.id, email: flag.maintainer.email } } : {}), team: flag.maintainer.teamKey ?? null })
     : {};
   if (flag.maintainer?.id && !flag.maintainer.email && !flag.maintainer.teamKey) ctx.fidelity.push({ fidelity: 'full', message: `Maintainer not carried: ${sourceLabel(ctx)} gave only a member ID, which belongs to the source account.`, location: 'flag settings' });
   if (!flag.clientSideAvailability) ctx.fidelity.push({ fidelity: 'full', message: `${sourceLabel(ctx)} did not report client-side availability; the target flag is server-side only until changed.`, location: 'flag settings' });
@@ -1324,7 +1351,8 @@ export function mapNeutralSegment(args: MapArgs<NeutralSegment>): NeutralSegment
       const caps = ctx.args.capabilities.bigSegments;
       if (caps === 'unavailable' || caps === 'not_permitted') throw new SkipItem(`it is a big segment and the target ${caps === 'not_permitted' ? 'token may not create' : 'plan has no'} big segments`);
       const unreadable = seg.caveats?.find((c) => c.kind === 'membership_unreadable');
-      const choice = ctx.decisions.choose(
+      // An LD source creates it empty for a manual import, the one way to carry a membership the API does not give.
+      const choice = exact(ctx) ? 'create_empty' : ctx.decisions.choose(
         {
           type: 'big_segment',
           severity: 'blocking',
@@ -1425,7 +1453,7 @@ function bigSegmentImport(ctx: Ctx, seg: NeutralSegment, kind: string, values: s
       : []),
     SKIP,
   ];
-  const choice = ctx.decisions.choose(
+  const choice = exact(ctx) ? (canImport ? 'import' : 'skip') : ctx.decisions.choose(
     {
       type: 'big_segment',
       severity: canImport ? 'choice' : 'blocking',

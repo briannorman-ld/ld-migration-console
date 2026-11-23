@@ -416,6 +416,29 @@ export const TeamSchema = z.looseObject({
 export const TeamsSchema = z.looseObject({ items: z.array(TeamSchema), totalCount: optNum });
 export type LdTeam = z.infer<typeof TeamSchema>;
 
+/** One AI Config variation (AIConfigVariation): the model, the messages and the tools it is wired to. */
+export const AiConfigVariationSchema = z.looseObject({
+  key: z.string(),
+  name: optStr,
+  _id: optStr,
+  description: optStr,
+  comment: optStr,
+  instructions: optStr,
+  state: optStr,
+  version: optNum,
+  model: z.record(z.string(), z.unknown()).nullish(),
+  modelConfigKey: optStr,
+  modelConfigVersion: optNum,
+  messages: z.array(z.looseObject({ role: optStr, content: optStr })).nullish(),
+  tools: z.array(z.unknown()).nullish(),
+  skills: z.array(z.unknown()).nullish(),
+  outputFormat: z.record(z.string(), z.unknown()).nullish(),
+  createdAt: optNum,
+  _publishedAt: optNum,
+  _archivedAt: optNum,
+});
+export type LdAiConfigVariation = z.infer<typeof AiConfigVariationSchema>;
+
 /** AI Config (GET /projects/{p}/ai-configs). The description carries the migration footer, like segments. */
 export const AiConfigSchema = z.looseObject({
   key: z.string(),
@@ -424,10 +447,12 @@ export const AiConfigSchema = z.looseObject({
   mode: optStr,
   tags: z.array(z.string()).nullish(),
   version: optNum,
-  variations: z.array(z.looseObject({ key: z.string(), name: optStr, _id: optStr })).nullish(),
+  variations: z.array(AiConfigVariationSchema).nullish(),
   _maintainer: z.looseObject({ kind: optStr, member: z.looseObject({ _id: optStr, email: optStr }).nullish(), team: z.looseObject({ key: optStr, name: optStr }).nullish() }).nullish(),
   createdAt: optNum,
   updatedAt: optNum,
+  evaluationMetricKey: optStr,
+  evaluationMetricKeys: z.array(z.string()).nullish(),
 });
 export const AiConfigsSchema = z.looseObject({ items: z.array(AiConfigSchema), totalCount: optNum });
 export type LdAiConfig = z.infer<typeof AiConfigSchema>;
@@ -437,3 +462,272 @@ export type LdToken = z.infer<typeof TokenSchema>;
 export type LdProject = z.infer<typeof ProjectSchema>;
 export type LdEnvironment = z.infer<typeof EnvironmentSchema>;
 export type LdAccess = z.infer<typeof AccessSchema>;
+
+// ---------------------------------------------------------------------------------------------
+// Everything else a source project exposes (PLAN §20.6). Lenient; credentials stripped in a
+// transform so they never enter app state: a webhook's `secret`, a Relay Proxy configuration's
+// `fullKey`, a trigger's `triggerURL` (the URL is the credential), a Data Export destination's
+// `config` (write keys, role ARNs).
+// ---------------------------------------------------------------------------------------------
+
+const maintainerSummary = z.looseObject({ _id: optStr, email: optStr, firstName: optStr, lastName: optStr, role: optStr }).nullish();
+
+/** Custom model configuration (ModelConfig, GET /projects/{p}/ai-configs/model-configs). */
+export const ModelConfigSchema = z.looseObject({
+  key: z.string(),
+  name: optStr,
+  id: optStr,
+  provider: optStr,
+  icon: optStr,
+  global: optBool,
+  params: z.record(z.string(), z.unknown()).nullish(),
+  customParams: z.record(z.string(), z.unknown()).nullish(),
+  tags: z.array(z.string()).nullish(),
+  version: optNum,
+  isRestricted: optBool,
+  usedInCount: optNum,
+  _maintainer: z.looseObject({ kind: optStr, member: z.looseObject({ _id: optStr, email: optStr }).nullish(), team: z.looseObject({ key: optStr, name: optStr }).nullish() }).nullish(),
+});
+export const ModelConfigsSchema = z.looseObject({ items: z.array(ModelConfigSchema), totalCount: optNum });
+export type LdModelConfig = z.infer<typeof ModelConfigSchema>;
+
+/** Release pipeline (ReleasePipeline, beta GET /projects/{p}/release-pipelines). */
+export const ReleasePipelineSchema = z.looseObject({
+  key: z.string(),
+  name: optStr,
+  description: optStr,
+  tags: z.array(z.string()).nullish(),
+  createdAt: optStr,
+  _version: optNum,
+  isProjectDefault: optBool,
+  _isLegacy: optBool,
+  phases: z
+    .array(
+      z.looseObject({
+        id: optStr,
+        name: optStr,
+        audiences: z
+          .array(
+            z.looseObject({
+              name: optStr,
+              environment: z.looseObject({ key: optStr, name: optStr, color: optStr }).nullish(),
+              segmentKeys: z.array(z.string()).nullish(),
+              configuration: z.looseObject({ releaseStrategy: optStr, requireApproval: optBool, notifyMemberIds: z.array(z.string()).nullish(), notifyTeamKeys: z.array(z.string()).nullish(), releaseGuardianConfiguration: z.record(z.string(), z.unknown()).nullish() }).nullish(),
+            }),
+          )
+          .nullish(),
+        configuration: z.record(z.string(), z.unknown()).nullish(),
+      }),
+    )
+    .nullish(),
+});
+export const ReleasePipelinesSchema = z.looseObject({ items: z.array(ReleasePipelineSchema), totalCount: optNum });
+export type LdReleasePipeline = z.infer<typeof ReleasePipelineSchema>;
+
+/** Release policy (ReleasePolicy, beta GET /projects/{p}/release-policies). */
+export const ReleasePolicySchema = z.looseObject({
+  key: z.string(),
+  name: optStr,
+  _id: optStr,
+  rank: optNum,
+  scope: z.looseObject({ environmentKeys: z.array(z.string()).nullish(), flagTagKeys: z.array(z.string()).nullish() }).nullish(),
+  releaseMethod: z.unknown().optional(),
+  guardedReleaseConfig: z.record(z.string(), z.unknown()).nullish(),
+  progressiveReleaseConfig: z.record(z.string(), z.unknown()).nullish(),
+});
+export const ReleasePoliciesSchema = z.looseObject({ items: z.array(ReleasePolicySchema).nullish(), totalCount: optNum });
+export type LdReleasePolicy = z.infer<typeof ReleasePolicySchema>;
+
+/** View (View, beta GET /projects/{p}/views). The summaries say how many resources it groups. */
+export const ViewSchema = z.looseObject({
+  key: z.string(),
+  name: optStr,
+  description: optStr,
+  id: optStr,
+  tags: z.array(z.string()).nullish(),
+  version: optNum,
+  generateSdkKeys: optBool,
+  _affectsSdkPayload: optBool,
+  deleted: optBool,
+  createdAt: optNum,
+  updatedAt: optNum,
+  maintainer: z.looseObject({ kind: optStr, member: z.looseObject({ _id: optStr, email: optStr }).nullish(), team: z.looseObject({ key: optStr, name: optStr }).nullish() }).nullish(),
+  flagsSummary: z.looseObject({ count: optNum }).nullish(),
+  segmentsSummary: z.looseObject({ count: optNum }).nullish(),
+  metricsSummary: z.looseObject({ count: optNum }).nullish(),
+  aiConfigsSummary: z.looseObject({ count: optNum }).nullish(),
+});
+export const ViewsSchema = z.looseObject({ items: z.array(ViewSchema), totalCount: optNum });
+export type LdView = z.infer<typeof ViewSchema>;
+
+/** Flag trigger (TriggerWorkflowRep, GET /flags/{p}/{f}/triggers/{e}). `triggerURL` is the credential and is dropped. */
+export const FlagTriggerSchema = z
+  .looseObject({
+    _id: z.string(),
+    _version: optNum,
+    _creationDate: optNum,
+    _maintainerId: optStr,
+    _maintainer: maintainerSummary,
+    enabled: optBool,
+    _status: optStr,
+    _integrationKey: optStr,
+    instructions: z.array(z.unknown()).nullish(),
+    _lastTriggeredAt: optNum,
+    _triggerCount: optNum,
+    triggerURL: z.unknown().optional(),
+  })
+  .transform(({ triggerURL: _t, ...rest }) => rest);
+export const FlagTriggersSchema = z.looseObject({ items: z.array(FlagTriggerSchema).nullish() });
+export type LdFlagTrigger = z.infer<typeof FlagTriggerSchema>;
+
+/** Custom workflow (CustomWorkflowOutput, GET /projects/{p}/flags/{f}/environments/{e}/workflows). */
+export const WorkflowSchema = z.looseObject({
+  _id: z.string(),
+  _version: optNum,
+  _creationDate: optNum,
+  _maintainerId: optStr,
+  name: optStr,
+  description: optStr,
+  kind: optStr,
+  templateKey: optStr,
+  stages: z.array(z.looseObject({ _id: optStr, name: optStr, conditions: z.array(z.unknown()).nullish(), action: z.record(z.string(), z.unknown()).nullish(), _execution: z.looseObject({ status: optStr }).nullish() })).nullish(),
+  _execution: z.looseObject({ status: optStr, stopDate: optNum }).nullish(),
+});
+export const WorkflowsSchema = z.looseObject({ items: z.array(WorkflowSchema).nullish(), totalCount: optNum });
+export type LdWorkflow = z.infer<typeof WorkflowSchema>;
+
+/** Flag link (FlagLinkRep, beta GET /flag-links/projects/{p}/flags/{f}). */
+export const FlagLinkSchema = z.looseObject({
+  _id: optStr,
+  _key: optStr,
+  _integrationKey: optStr,
+  _deepLink: optStr,
+  title: optStr,
+  description: optStr,
+  _createdAt: optNum,
+  _member: maintainerSummary,
+  _metadata: z.record(z.string(), z.unknown()).nullish(),
+});
+export const FlagLinksSchema = z.looseObject({ items: z.array(FlagLinkSchema).nullish() });
+export type LdFlagLink = z.infer<typeof FlagLinkSchema>;
+
+/** Data Export destination (Destination, GET /destinations). `config` holds the credentials and is dropped; the `_links.self` href names project and environment. */
+export const DestinationSchema = z
+  .looseObject({
+    _id: z.string(),
+    name: optStr,
+    kind: optStr,
+    version: optNum,
+    on: optBool,
+    createdAt: optNum,
+    maintainerId: optStr,
+    _links: z.looseObject({ self: z.looseObject({ href: optStr }).nullish() }).nullish(),
+    config: z.unknown().optional(),
+  })
+  .transform(({ config: _c, ...rest }) => rest);
+export const DestinationsSchema = z.looseObject({ items: z.array(DestinationSchema).nullish() });
+export type LdDestination = z.infer<typeof DestinationSchema>;
+
+/** Adaptive trigger (AdaptiveTrigger, GET /projects/{p}/environments/{e}/adaptive-triggers). */
+export const AdaptiveTriggerSchema = z.looseObject({
+  id: z.string(),
+  name: optStr,
+  resourceKind: optStr,
+  resourceKey: optStr,
+  enabled: optBool,
+  triggerSource: z.record(z.string(), z.unknown()).nullish(),
+  task: z.record(z.string(), z.unknown()).nullish(),
+  createdAt: optNum,
+  updatedAt: optNum,
+});
+export const AdaptiveTriggersSchema = z.looseObject({ items: z.array(AdaptiveTriggerSchema).nullish(), totalCount: optNum });
+export type LdAdaptiveTrigger = z.infer<typeof AdaptiveTriggerSchema>;
+
+/** Custom role (CustomRole, GET /roles). */
+export const CustomRoleSchema = z.looseObject({
+  key: z.string(),
+  name: optStr,
+  description: optStr,
+  _id: optStr,
+  basePermissions: optStr,
+  resourceCategory: optStr,
+  policy: z.array(z.looseObject({ effect: optStr, resources: z.array(z.string()).nullish(), notResources: z.array(z.string()).nullish(), actions: z.array(z.string()).nullish(), notActions: z.array(z.string()).nullish() })).nullish(),
+  assignedTo: z.looseObject({ membersCount: optNum, teamsCount: optNum }).nullish(),
+});
+export const CustomRolesSchema = z.looseObject({ items: z.array(CustomRoleSchema), totalCount: optNum });
+export type LdCustomRole = z.infer<typeof CustomRoleSchema>;
+
+/** Webhook (Webhook, GET /webhooks). `secret` is the signing secret and is dropped. */
+export const WebhookSchema = z
+  .looseObject({
+    _id: z.string(),
+    name: optStr,
+    url: optStr,
+    on: optBool,
+    tags: z.array(z.string()).nullish(),
+    statements: z.array(z.looseObject({ effect: optStr, resources: z.array(z.string()).nullish(), notResources: z.array(z.string()).nullish(), actions: z.array(z.string()).nullish(), notActions: z.array(z.string()).nullish() })).nullish(),
+    secret: z.unknown().optional(),
+  })
+  .transform(({ secret: _s, ...rest }) => rest);
+export const WebhooksSchema = z.looseObject({ items: z.array(WebhookSchema).nullish() });
+export type LdWebhook = z.infer<typeof WebhookSchema>;
+
+/** Relay Proxy automatic configuration (RelayAutoConfigRep, GET /account/relay-auto-configs). `fullKey` is the credential and is dropped. */
+export const RelayProxyConfigSchema = z
+  .looseObject({
+    _id: z.string(),
+    name: optStr,
+    displayKey: optStr,
+    creationDate: optNum,
+    lastModified: optNum,
+    _creator: maintainerSummary,
+    policy: z.array(z.looseObject({ effect: optStr, resources: z.array(z.string()).nullish(), notResources: z.array(z.string()).nullish(), actions: z.array(z.string()).nullish(), notActions: z.array(z.string()).nullish() })).nullish(),
+    fullKey: z.unknown().optional(),
+  })
+  .transform(({ fullKey: _k, ...rest }) => rest);
+export const RelayProxyConfigsSchema = z.looseObject({ items: z.array(RelayProxyConfigSchema).nullish() });
+export type LdRelayProxyConfig = z.infer<typeof RelayProxyConfigSchema>;
+
+/** Code references repository (RepositoryRep, GET /code-refs/repositories). */
+export const RepositorySchema = z.looseObject({
+  name: z.string(),
+  sourceLink: optStr,
+  commitUrlTemplate: optStr,
+  hunkUrlTemplate: optStr,
+  type: optStr,
+  defaultBranch: optStr,
+  enabled: optBool,
+  version: optNum,
+  branches: z.array(z.looseObject({ name: optStr, head: optStr, updateSequenceId: optNum, syncTime: optNum })).nullish(),
+});
+export const RepositoriesSchema = z.looseObject({ items: z.array(RepositorySchema).nullish() });
+export type LdRepository = z.infer<typeof RepositorySchema>;
+
+/** Workflow template (WorkflowTemplateOutput, GET /templates). */
+export const WorkflowTemplateSchema = z.looseObject({
+  _id: z.string(),
+  _key: optStr,
+  name: optStr,
+  description: optStr,
+  _creationDate: optNum,
+  _ownerId: optStr,
+  _maintainerId: optStr,
+  stages: z.array(z.looseObject({ name: optStr, conditions: z.array(z.unknown()).nullish(), action: z.record(z.string(), z.unknown()).nullish() })).nullish(),
+});
+export const WorkflowTemplatesSchema = z.looseObject({ items: z.array(WorkflowTemplateSchema).nullish() });
+export type LdWorkflowTemplate = z.infer<typeof WorkflowTemplateSchema>;
+
+/** Application (ApplicationRep, beta GET /applications). */
+export const ApplicationSchema = z.looseObject({
+  key: z.string(),
+  name: optStr,
+  description: optStr,
+  kind: optStr,
+  autoAdded: optBool,
+  creationDate: optNum,
+  _version: optNum,
+  _maintainer: z.looseObject({ _id: optStr, email: optStr, firstName: optStr, lastName: optStr }).nullish(),
+  flags: z.looseObject({ totalCount: optNum }).nullish(),
+});
+export const ApplicationsSchema = z.looseObject({ items: z.array(ApplicationSchema), totalCount: optNum });
+export type LdApplication = z.infer<typeof ApplicationSchema>;

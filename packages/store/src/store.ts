@@ -246,6 +246,14 @@ export class WorkspaceStore {
     await this.db.sources.update(sourceId, { resources });
   }
 
+  /** LaunchDarkly sources (PLAN §20.6): the LD resource kinds the next sync reads (undefined = the default scope). */
+  async setSourceLdScope(sourceId: string, resources: string[] | undefined): Promise<void> {
+    const cur = await this.db.sources.get(sourceId);
+    if (!cur?.ld) throw new Error("Not a LaunchDarkly source.");
+    const { resources: _drop, ...rest } = cur.ld;
+    await this.db.sources.update(sourceId, { ld: resources ? { ...rest, resources } : rest });
+  }
+
   listSources(workspaceId: string): Promise<SourceRecord[]> {
     return this.db.sources
       .where("workspaceId")

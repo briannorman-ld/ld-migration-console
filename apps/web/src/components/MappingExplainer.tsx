@@ -30,7 +30,7 @@ export function MappingExplainer({ resource, onOpenCoverage, className }: { reso
           <span className="sr-only">becomes</span> <span className="font-medium">{headline.ld}</span>. {headline.how}
         </span>
         <span className="ml-auto whitespace-nowrap text-xs text-fg-muted">
-          {open ? 'Hide' : 'Show'} {count} {count === 1 ? 'caveat' : 'caveats'} <span aria-hidden="true">{open ? '▴' : '▾'}</span>
+          {count === 0 ? `${open ? 'Hide' : 'Show'} details` : `${open ? 'Hide' : 'Show'} ${count} ${count === 1 ? 'caveat' : 'caveats'}`} <span aria-hidden="true">{open ? '▴' : '▾'}</span>
         </span>
       </button>
       {open && (
@@ -46,6 +46,7 @@ export function MappingExplainer({ resource, onOpenCoverage, className }: { reso
               {onOpenCoverage && <CoverageLink id={headline.id} onOpenCoverage={onOpenCoverage} label="Full row on What migrates" />}
             </p>
           )}
+          {count === 0 && <p className="text-fg-muted">Nothing to decide: everything maps one to one. What differs between the two projects is noted on each item.</p>}
           {caveats.map(({ area, rows }) => (
             <section key={area.area}>
               <h4 className="mb-1 text-xs font-semibold tracking-wide text-fg-muted uppercase">{area.area === headline.area ? `${area.title}: what does not map cleanly` : area.title}</h4>

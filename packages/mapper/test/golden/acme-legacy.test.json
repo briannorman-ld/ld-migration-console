@@ -16,9 +16,7 @@
       "flagKind": "boolean",
       "fidelity": "full",
       "notes": [],
-      "decisions": [
-        "choice copy_custom_properties (custom properties) → copy"
-      ],
+      "decisions": [],
       "dependencies": [
         "segment:legacy-beta-orgs"
       ],
@@ -168,64 +166,20 @@
     {
       "flag": "legacy-fraud-shield",
       "flagKind": "boolean",
-      "fidelity": "partial",
+      "skipped": "segment “legacy-fraud-blocklist” matched by rule “Blocklisted users” › clause 1 is not in the source snapshot for environment “test” (deleted, or not readable with this token)",
+      "fidelity": "skipped",
       "notes": [
-        "partial: Dropped the rule because of its clause on missing segment legacy-fraud-blocklist. [rule “Blocklisted users” › clause 1]"
+        "skipped: Not migrated: segment “legacy-fraud-blocklist” matched by rule “Blocklisted users” › clause 1 is not in the source snapshot for environment “test” (deleted, or not readable with this token)."
       ],
-      "decisions": [
-        "blocking missing_reference (rule “Blocklisted users” › clause 1) → no default"
-      ],
-      "dependencies": [],
-      "shell": {
-        "tags": [
-          "migrated-from-launchdarkly",
-          "migration-src-legacy",
-          "risk"
-        ],
-        "variations": [
-          {
-            "value": true,
-            "name": "Allow"
-          },
-          {
-            "value": false,
-            "name": "Block"
-          }
-        ],
-        "customProperties": [
-          "migration.id",
-          "migration.kind",
-          "migration.source",
-          "migration.type",
-          "migration.version"
-        ],
-        "clientSideAvailability": {
-          "usingEnvironmentId": false,
-          "usingMobileKey": false
-        },
-        "temporary": false
-      },
-      "env": {
-        "ldEnv": "test",
-        "statsigEnv": "test",
-        "on": true,
-        "offVariation": 0,
-        "fallthrough": {
-          "variation": 0
-        },
-        "rules": [],
-        "targets": [],
-        "prerequisites": []
-      }
+      "decisions": [],
+      "dependencies": []
     },
     {
       "flag": "legacy-ios-min-version",
       "flagKind": "boolean",
       "fidelity": "full",
       "notes": [],
-      "decisions": [
-        "choice unit_type_kind (device) → create:device"
-      ],
+      "decisions": [],
       "dependencies": [
         "context_kind:device"
       ],
@@ -353,9 +307,7 @@
         "partial: 50% / 50% rollout re-buckets contexts (new flag, new salt). [default rule]",
         "full: Prerequisites need an Enterprise plan; the target's plan is checked on the first write. [prerequisites]"
       ],
-      "decisions": [
-        "acknowledge partial_rollout_rebucket (default rule) → acknowledge"
-      ],
+      "decisions": [],
       "dependencies": [
         "flag:legacy-checkout-redesign"
       ],
@@ -442,55 +394,13 @@
     {
       "flag": "legacy-receipt-emails",
       "flagKind": "boolean",
-      "fidelity": "partial",
+      "skipped": "prerequisite “legacy-retired-gate” is not in the source snapshot (deleted, or not readable with this token)",
+      "fidelity": "skipped",
       "notes": [
-        "partial: Prerequisite “legacy-retired-gate” dropped (missing in the source project). [prerequisite “legacy-retired-gate”]"
+        "skipped: Not migrated: prerequisite “legacy-retired-gate” is not in the source snapshot (deleted, or not readable with this token)."
       ],
-      "decisions": [
-        "blocking missing_reference (prerequisite “legacy-retired-gate”) → no default"
-      ],
-      "dependencies": [],
-      "shell": {
-        "tags": [
-          "migrated-from-launchdarkly",
-          "migration-src-legacy",
-          "email"
-        ],
-        "variations": [
-          {
-            "value": true,
-            "name": "On"
-          },
-          {
-            "value": false,
-            "name": "Off"
-          }
-        ],
-        "customProperties": [
-          "migration.id",
-          "migration.kind",
-          "migration.source",
-          "migration.type",
-          "migration.version"
-        ],
-        "clientSideAvailability": {
-          "usingEnvironmentId": false,
-          "usingMobileKey": false
-        },
-        "temporary": true
-      },
-      "env": {
-        "ldEnv": "test",
-        "statsigEnv": "test",
-        "on": true,
-        "offVariation": 1,
-        "fallthrough": {
-          "variation": 0
-        },
-        "rules": [],
-        "targets": [],
-        "prerequisites": []
-      }
+      "decisions": [],
+      "dependencies": []
     },
     {
       "flag": "legacy-theme",
@@ -620,9 +530,7 @@
     {
       "segment": "legacy-internal-users",
       "fidelity": "partial",
-      "decisions": [
-        "acknowledge partial_rollout_rebucket (rule “Half of acme.example”)"
-      ],
+      "decisions": [],
       "desired": {
         "key": "legacy-internal-users",
         "ldEnv": "test",
@@ -775,12 +683,10 @@
       "metric": "legacy-order-value",
       "fidelity": "partial",
       "notes": [
-        "partial: Owner growth@acme-legacy.example is not a LaunchDarkly member: no maintainer (kept in migration.owner). [flag settings]",
+        "partial: Maintainer growth@acme-legacy.example is not a member of the target account: no maintainer. Invite them (People step) and re-sync; they are assigned once they are a member. [flag settings]",
         "full: Event “order_placed” must be sent to the target project by the SDK (track()) for the metric to have data; events already recorded in the source project do not carry over. [event]"
       ],
-      "decisions": [
-        "choice maintainer_unknown (flag settings) → unassigned"
-      ],
+      "decisions": [],
       "dependencies": [],
       "desired": {
         "key": "legacy-order-value",
@@ -857,12 +763,9 @@
       "fidelity": "manual",
       "notes": [
         "manual: Warehouse-native: set up the data source “legacy-snowflake” in the target project before the run, with the same key. [data source]",
-        "partial: Owner growth@acme-legacy.example is not a LaunchDarkly member: no maintainer (kept in migration.owner). [flag settings]"
+        "partial: Maintainer growth@acme-legacy.example is not a member of the target account: no maintainer. Invite them (People step) and re-sync; they are assigned once they are a member. [flag settings]"
       ],
-      "decisions": [
-        "choice metric_data_source (data source) → same_key",
-        "choice maintainer_unknown (flag settings) → unassigned"
-      ],
+      "decisions": [],
       "dependencies": [],
       "desired": {
         "key": "legacy-wh-revenue",
@@ -895,12 +798,10 @@
       "metricGroup": "legacy-checkout-funnel",
       "fidelity": "partial",
       "notes": [
-        "partial: Owner growth@acme-legacy.example is not a LaunchDarkly member: no maintainer (kept in migration.owner). [flag settings]",
+        "partial: Maintainer growth@acme-legacy.example is not a member of the target account: no maintainer. Invite them (People step) and re-sync; they are assigned once they are a member. [flag settings]",
         "partial: LaunchDarkly requires a metric group maintainer: the member behind the API token is assigned. [metric group settings]"
       ],
-      "decisions": [
-        "choice maintainer_unknown (flag settings) → unassigned"
-      ],
+      "decisions": [],
       "dependencies": [
         "metric:legacy-checkout-completed",
         "metric:legacy-cta-click"

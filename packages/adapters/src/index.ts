@@ -7,6 +7,7 @@ export * from './spec/idlists.ts';
 export * from './spec/schemas.ts';
 export * from './launchdarkly/read.ts';
 export * from './launchdarkly/normalize.ts';
+export * from './launchdarkly/inventory.ts';
 export * from './posthog/client.ts';
 export * from './posthog/read.ts';
 export * from './posthog/conditions.ts';

@@ -178,6 +178,33 @@ describe('AddSource', () => {
     expect(syncLdSource).toHaveBeenCalledTimes(1);
   });
 
+  it('offers every LaunchDarkly resource type and stores the scope only when it differs from the default', async () => {
+    const onDone = vi.fn();
+    render(<AddSource workspaceId="w1" onDone={onDone} />);
+    fireEvent.click(screen.getByRole('button', { name: 'LaunchDarkly project' }));
+    // The picker is there with the default ticked: everything but the per-flag reads.
+    expect((screen.getByRole('checkbox', { name: /^Members/ }) as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByRole('checkbox', { name: /^Scheduled changes/ }) as HTMLInputElement).checked).toBe(false);
+    fireEvent.click(screen.getByRole('checkbox', { name: /^Members/ }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /^Scheduled changes/ }));
+
+    fireEvent.change(screen.getByLabelText(/Access token/), { target: { value: 'api-reader-token' } });
+    fireEvent.click(screen.getByRole('button', { name: 'List projects' }));
+    const picker = screen.getByLabelText('Project to read') as HTMLInputElement;
+    await waitFor(() => expect(picker.disabled).toBe(false));
+    fireEvent.focus(picker);
+    fireEvent.click(screen.getByRole('option', { name: /Legacy Storefront/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add source' }));
+    await waitFor(() => expect(onDone).toHaveBeenCalled());
+    const source = addSource.mock.calls[0]![1];
+    const resources = source.ld?.resources ?? [];
+    expect(resources).toContain('scheduled_changes');
+    expect(resources).toContain('flags');
+    expect(resources).not.toContain('members');
+    // The sync reads with that scope: the source handed to it carries it.
+    expect((syncLdSource.mock.calls[0]![1] as typeof source).ld?.resources).toEqual(resources);
+  });
+
   it('picks the project itself when the token reads only one', async () => {
     listProjects.mockResolvedValueOnce(projects.filter((p) => p.key === 'legacy-storefront'));
     render(<AddSource workspaceId="w1" onDone={() => undefined} />);

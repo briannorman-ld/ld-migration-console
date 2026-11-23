@@ -8,6 +8,7 @@ import { emptyNeutralProject, emptySnapshot, neutralUid, type CanonicalSnapshot,
 import type { LdFlag, LdFlagConfig, LdSegment } from '@sslm/ld-client';
 import type { RawLdSnapshot } from './read.ts';
 import { normalizeExperimentation } from './experiments.ts';
+import { normalizeInventory } from './inventory.ts';
 
 export interface NormalizeLdOptions {
   source: SourceRef & { alias: string };
@@ -111,6 +112,9 @@ export function normalizeLdSnapshot(raw: RawLdSnapshot, opts: NormalizeLdOptions
   snap.users = Object.values(raw.members)
     .map((m) => ({ id: m._id, email: m.email, ...(m.firstName || m.lastName ? { name: [m.firstName, m.lastName].filter(Boolean).join(' ') } : {}), ...(m.role ? { role: m.role } : {}) }))
     .sort((a, b) => a.email.localeCompare(b.email));
+
+  // Everything else (PLAN §20.6): inventory items, scheduled-change caveats on the flags, the account's teams.
+  normalizeInventory(raw, source.sourceId, neutral, snap, warn);
 
   snap.neutral = neutral;
   snap.sourceTime = Math.max(0, ...raw.flags.flatMap((f) => Object.values(f.environments ?? {}).map((c) => c.lastModified ?? 0))) || undefined;

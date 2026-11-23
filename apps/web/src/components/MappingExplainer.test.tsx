@@ -36,11 +36,13 @@ describe('MappingExplainer', () => {
     expect(onOpenCoverage).toHaveBeenCalledWith('segments.rule_based');
   });
 
-  it('describes a LaunchDarkly-source resource in LaunchDarkly words', () => {
+  it('describes a LaunchDarkly-source resource in LaunchDarkly words, with nothing to decide', () => {
     render(<MappingExplainer resource="ld_flag" />);
     expect(screen.getByText('Flag with the same key and settings')).toBeTruthy();
     expect(screen.getByText('Migrates')).toBeTruthy();
-    fireEvent.click(screen.getByText(/Show \d+ caveats/));
-    expect(screen.getByText('Prerequisites (Enterprise)')).toBeTruthy();
+    expect(screen.queryByText(/caveats?$/)).toBeNull();
+    fireEvent.click(screen.getByText('Show details'));
+    expect(screen.getByText(/^Nothing to decide/)).toBeTruthy();
+    expect(screen.getByText(/^Maps cleanly:/).closest('p')!.textContent).toContain('Prerequisites (Enterprise)');
   });
 });

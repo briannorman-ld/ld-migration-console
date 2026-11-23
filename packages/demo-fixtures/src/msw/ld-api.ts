@@ -12,10 +12,13 @@ export interface MockLdApiOptions {
 }
 
 /**
- * A simulated LaunchDarkly REST API, enough for the LD *source* adapter (PLAN §20.2, §20.5):
- * project, environments, context kinds, flags (list + full), segments, experiments and holdouts
- * per environment, metrics, metric groups, layers, members by id. Read-only; any write method is
- * answered 405 so a bug that wrote to a source would show up in tests.
+ * A simulated LaunchDarkly REST API, enough for the LD *source* adapter (PLAN §20.2, §20.5,
+ * §20.6): project, environments, context kinds, flags (list + full), segments, experiments and
+ * holdouts per environment, metrics, metric groups, layers, members (by id and listed), and every
+ * other resource type the scope can ask for (AI Configs, releases, views, scheduled changes,
+ * triggers, workflows, flag links, destinations, adaptive triggers, teams, roles, webhooks, Relay
+ * configs, code reference repositories, workflow templates, applications). Read-only; any write
+ * method is answered 405 so a bug that wrote to a source would show up in tests.
  */
 export function createLdApiHandlers(opts: MockLdApiOptions): HttpHandler[] {
   const base = `${opts.baseUrl.replace(/\/+$/, '')}/api/v2`;
@@ -96,7 +99,33 @@ export function createLdApiHandlers(opts: MockLdApiOptions): HttpHandler[] {
       return { items: pg.items, total_count: pg.totalCount, _links: {} };
     }),
     route('/projects/:projectKey/environments/:envKey/holdouts/:key', ({ params, p }) => (inProject(params, p) ? ((p.holdouts[params.envKey!] ?? []).find((h) => h.key === params.key) ?? NOT_FOUND) : NOT_FOUND)),
+    route('/members', ({ p, url }) => page(Object.values(p.members), url)),
     route('/members/:id', ({ params, p }) => p.members[params.id!] ?? NOT_FOUND),
+    // Everything else (PLAN §20.6). Beta routes are served whatever the LD-API-Version header says.
+    route('/projects/:projectKey/experimentation-settings', ({ params, p }) => (inProject(params, p) ? p.experimentationSettings : NOT_FOUND)),
+    route('/projects/:projectKey/ai-configs', ({ params, p, url }) => (inProject(params, p) ? page(p.aiConfigs, url) : NOT_FOUND)),
+    route('/projects/:projectKey/ai-configs/model-configs', ({ params, p, url }) => (inProject(params, p) ? page(p.modelConfigs, url) : NOT_FOUND)),
+    route('/projects/:projectKey/ai-configs/:key', ({ params, p }) => (inProject(params, p) ? (p.aiConfigs.find((c) => c.key === params.key) ?? NOT_FOUND) : NOT_FOUND)),
+    route('/projects/:projectKey/release-pipelines', ({ params, p, url }) => (inProject(params, p) ? page(p.releasePipelines, url) : NOT_FOUND)),
+    route('/projects/:projectKey/release-policies', ({ params, p }) => (inProject(params, p) ? { items: p.releasePolicies, totalCount: p.releasePolicies.length } : NOT_FOUND)),
+    route('/projects/:projectKey/views', ({ params, p, url }) => (inProject(params, p) ? page(p.views, url) : NOT_FOUND)),
+    route('/projects/:projectKey/flags/:flagKey/environments/:envKey/scheduled-changes', ({ params, p }) => (inProject(params, p) ? { items: p.scheduledChanges[params.envKey!]?.[params.flagKey!] ?? [], _links: {} } : NOT_FOUND)),
+    route('/projects/:projectKey/flags/:flagKey/environments/:envKey/workflows', ({ params, p }) => {
+      if (!inProject(params, p)) return NOT_FOUND;
+      const items = p.workflows[params.envKey!]?.[params.flagKey!] ?? [];
+      return { items, totalCount: items.length, _links: {} };
+    }),
+    route('/flags/:projectKey/:flagKey/triggers/:envKey', ({ params, p }) => (inProject(params, p) ? { items: p.flagTriggers[params.envKey!]?.[params.flagKey!] ?? [], _links: {} } : NOT_FOUND)),
+    route('/flag-links/projects/:projectKey/flags/:flagKey', ({ params, p }) => (inProject(params, p) ? { items: p.flagLinks[params.flagKey!] ?? [], _links: {} } : NOT_FOUND)),
+    route('/destinations', ({ p }) => ({ items: p.destinations, _links: {} })),
+    route('/projects/:projectKey/environments/:envKey/adaptive-triggers', ({ params, p, url }) => (inProject(params, p) ? page(p.adaptiveTriggers[params.envKey!] ?? [], url) : NOT_FOUND)),
+    route('/teams', ({ p, url }) => page(p.teams, url)),
+    route('/roles', ({ p, url }) => page(p.customRoles, url)),
+    route('/webhooks', ({ p }) => ({ items: p.webhooks, _links: {} })),
+    route('/account/relay-auto-configs', ({ p }) => ({ items: p.relayProxyConfigs })),
+    route('/code-refs/repositories', ({ p }) => ({ items: p.repositories, _links: {} })),
+    route('/templates', ({ p }) => ({ items: p.workflowTemplates })),
+    route('/applications', ({ p, url }) => page(p.applications, url)),
     ...writes.map((m) => http[m](`${base}/*`, () => HttpResponse.json({ code: 'method_not_allowed', message: 'The demo LaunchDarkly source is read-only.' }, { status: 405 }))),
   ];
 }

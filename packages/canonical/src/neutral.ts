@@ -128,6 +128,14 @@ export interface NeutralVariation {
 export interface NeutralScheduledChange {
   /** ISO instant the source applies the change (empty when the source gave none). */
   at: string;
+  /**
+   * Source environment the change belongs to, when the source schedules per environment (an LD
+   * source, PLAN §20.6). Absent on sources with one environment per flag (PostHog), where the
+   * change applies to the flag's only environment.
+   */
+  env?: string;
+  /** The source's own id of the change, for the inventory and diffs. */
+  id?: string;
   /** The source's operation name, verbatim. */
   operation: string;
   /** A cron or interval schedule; LD scheduled changes are one-off. */
@@ -494,6 +502,45 @@ export interface NeutralLayer {
   createdAt?: number;
 }
 
+// ---------------------------------------------------------------------------------------------
+// Inventory (PLAN §20.6): every other resource type of an LD source. Read so the cut-over
+// checklist is complete and nothing in the source is a surprise; listed with its facts, not yet
+// written by the mapper (the coverage row of each kind says what to do instead). The raw LD
+// representation is kept, with every credential stripped at the client's schema boundary, so a
+// later mapper has what it needs without a new read.
+// ---------------------------------------------------------------------------------------------
+
+/** One fact the explorer shows for an inventory item ("Phases: 3", "Enabled: yes"). */
+export interface NeutralFact {
+  label: string;
+  value: string;
+}
+
+export interface NeutralInventoryItem {
+  kind: 'inventory';
+  /** `<sourceId>/<resourceKind>/<key>`; the key is prefixed with the environment and flag for per-environment and per-flag kinds. */
+  uid: string;
+  /** The LD resource type (`packages/canonical/src/ldResources.ts`). */
+  resourceKind: string;
+  /** The item's key or id in the source. */
+  key: string;
+  name: string;
+  description: string;
+  tags: string[];
+  archived: boolean;
+  /** Source environment, for per-environment and per-flag-per-environment kinds. */
+  env?: string;
+  /** The flag the item belongs to, for per-flag kinds. */
+  flagKey?: string;
+  /** Short facts in display order. */
+  facts: NeutralFact[];
+  maintainer?: NeutralMaintainer;
+  /** The LD response as read (credentials stripped), for the detail view and future mappers. */
+  raw: unknown;
+  createdAt?: number;
+  lastModified?: number;
+}
+
 /** The neutral block of a snapshot (PLAN §20.1 "How it plugs in"). */
 export interface NeutralProject {
   flags: NeutralFlag[];
@@ -507,6 +554,14 @@ export interface NeutralProject {
   experiments?: NeutralExperiment[];
   holdouts?: NeutralHoldout[];
   layers?: NeutralLayer[];
+  /**
+   * PLAN §20.6: the resource kinds (`LdResourceKind`) this snapshot was read with. Absent on
+   * snapshots taken before 2026-11-23, which read flags, segments and experimentation only; the
+   * UI treats that as the default scope of the time.
+   */
+  readScope?: string[];
+  /** PLAN §20.6: every other resource type read from the source, listed for the cut-over checklist. */
+  inventory?: NeutralInventoryItem[];
 }
 
 export function emptyNeutralProject(): NeutralProject {

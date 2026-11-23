@@ -125,7 +125,8 @@ export async function syncLdSource(workspaceId: string, source: SourceDescriptor
   const mock = demoBaseUrl(source, source.ld.baseUrl);
   const instance = mock ? { ...LD_INSTANCES[source.ld.instance], origin: mock } : source.ld.instance;
   const client = new LdClient({ instance, token, transport: { onEvent: (e) => h.onTransport?.(e) } });
-  const raw = await readLdProject(client, source.ld.projectKey, { onProgress: h.onProgress });
+  // The read scope (PLAN §20.6) is the source's; undefined means the default set of kinds.
+  const raw = await readLdProject(client, source.ld.projectKey, { onProgress: h.onProgress, ...(source.ld.resources ? { resources: source.ld.resources } : {}) });
   const snapshot = normalizeLdSnapshot(raw, { source: { sourceId: source.id, sourceKind: "launchdarkly", alias: source.alias } });
   await store.saveSnapshot(workspaceId, snapshot);
   await pruneAfterSync(workspaceId, source.id);

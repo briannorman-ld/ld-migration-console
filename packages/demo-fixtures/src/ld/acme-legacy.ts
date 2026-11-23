@@ -21,14 +21,48 @@ export interface LdProjectFixture {
   experiments: Record<string, JsonObject[]>;
   holdouts: Record<string, JsonObject[]>;
   layers: JsonObject[];
-  /** Account members by id (GET /members/{id}), for the maintainers the experimentation resources name. */
+  /** Account members by id (GET /members/{id} and the /members listing), for the maintainers the experimentation resources name and the People step. */
   members: Record<string, JsonObject>;
+  /** Everything else (PLAN §20.6), in the shapes of reference/launchdarkly/openapi.json. */
+  experimentationSettings: JsonObject;
+  aiConfigs: JsonObject[];
+  modelConfigs: JsonObject[];
+  releasePipelines: JsonObject[];
+  releasePolicies: JsonObject[];
+  views: JsonObject[];
+  /** Per environment key, per flag key. */
+  scheduledChanges: Record<string, Record<string, JsonObject[]>>;
+  flagTriggers: Record<string, Record<string, JsonObject[]>>;
+  workflows: Record<string, Record<string, JsonObject[]>>;
+  /** Per flag key. */
+  flagLinks: Record<string, JsonObject[]>;
+  /** The whole account's destinations (GET /destinations); the self link names project and environment. */
+  destinations: JsonObject[];
+  adaptiveTriggers: Record<string, JsonObject[]>;
+  teams: JsonObject[];
+  customRoles: JsonObject[];
+  webhooks: JsonObject[];
+  relayProxyConfigs: JsonObject[];
+  repositories: JsonObject[];
+  workflowTemplates: JsonObject[];
+  applications: JsonObject[];
 }
 
 export const ACME_LEGACY_PROJECT_KEY = 'acme-legacy';
 
 const T0 = Date.UTC(2025, 2, 3, 9, 0, 0);
-const env = (key: string, name: string, color: string, critical: boolean): JsonObject => ({ _id: `env-${key}`, key, name, color, critical, tags: [], requireComments: critical, confirmChanges: critical });
+const env = (key: string, name: string, color: string, critical: boolean): JsonObject => ({
+  _id: `env-${key}`,
+  key,
+  name,
+  color,
+  critical,
+  tags: [],
+  requireComments: critical,
+  confirmChanges: critical,
+  // Production requires one approval on flag changes (ApprovalSettings); segments are exempt.
+  ...(critical ? { approvalSettings: { required: true, bypassApprovalsForPendingChanges: false, minNumApprovals: 1, canReviewOwnRequest: false, canApplyDeclinedChanges: true, autoApplyApprovedChanges: false, serviceKind: 'launchdarkly', serviceConfig: {}, requiredApprovalTags: [] }, resourceApprovalSettings: { segment: { required: false, minNumApprovals: 1, serviceKind: 'launchdarkly' } } } : {}),
+});
 const variation = (id: string, value: Json, name?: string, description?: string): JsonObject => ({ _id: id, value, ...(name ? { name } : {}), ...(description ? { description } : {}) });
 const clause = (contextKind: string, attribute: string, op: string, values: Json[], negate = false): JsonObject => ({ _id: `cl-${attribute}-${op}`, contextKind, attribute, op, values, negate });
 
@@ -127,8 +161,10 @@ const segment = (s: { key: string; name: string; description?: string; tags?: st
 // --- Experimentation builders (reference/launchdarkly/openapi.json) ----------------------------
 
 const MEMBERS: Record<string, JsonObject> = {
-  'mem-legacy-ops': { _id: 'mem-legacy-ops', email: 'ops@acme-legacy.example', firstName: 'Legacy', lastName: 'Maintainer', role: 'writer' },
-  'mem-legacy-growth': { _id: 'mem-legacy-growth', email: 'growth@acme-legacy.example', firstName: 'Gwen', lastName: 'Growth', role: 'writer' },
+  'mem-legacy-ops': { _id: 'mem-legacy-ops', email: 'ops@acme-legacy.example', firstName: 'Legacy', lastName: 'Maintainer', role: 'writer', teams: [{ key: 'legacy-platform-ops', name: 'Platform ops' }], customRoles: ['legacy-release-manager'] },
+  'mem-legacy-growth': { _id: 'mem-legacy-growth', email: 'growth@acme-legacy.example', firstName: 'Gwen', lastName: 'Growth', role: 'writer', teams: [{ key: 'legacy-growth', name: 'Growth' }] },
+  // Not a maintainer of anything: listed only through GET /members (PLAN §20.6), for the People step.
+  'mem-legacy-pm': { _id: 'mem-legacy-pm', email: 'pm@acme-legacy.example', firstName: 'Priya', lastName: 'Mehta', role: 'reader', teams: [{ key: 'legacy-growth', name: 'Growth' }], _pendingInvite: false },
 };
 
 interface MetricSeed {
@@ -636,5 +672,116 @@ export function acmeLegacyProject(): LdProjectFixture {
       },
     ],
     members: MEMBERS,
+    // --- Everything else (PLAN §20.6) ---------------------------------------------------------------
+    experimentationSettings: { _projectId: 'proj-legacy', _projectKey: ACME_LEGACY_PROJECT_KEY, randomizationUnits: [{ randomizationUnit: 'user', default: true, _hidden: false, _displayName: 'User' }, { randomizationUnit: 'organization', default: false, _hidden: false, _displayName: 'Organization' }], _creationDate: T0 },
+    aiConfigs: [
+      {
+        key: 'legacy-support-assistant',
+        name: 'Support assistant',
+        description: 'System prompt and model for the in-app support assistant.',
+        mode: 'completion',
+        tags: ['support'],
+        version: 4,
+        _maintainer: { kind: 'member', member: { _id: 'mem-legacy-growth', email: 'growth@acme-legacy.example' } },
+        evaluationMetricKey: 'legacy-checkout-completed',
+        createdAt: T0,
+        updatedAt: T0 + 86_400_000,
+        variations: [
+          { _id: 'aiv-1', key: 'concise', name: 'Concise', state: 'published', version: 2, modelConfigKey: 'gpt-4o-mini', model: { name: 'gpt-4o-mini', parameters: { temperature: 0.2 } }, messages: [{ role: 'system', content: 'You are a concise support assistant for Acme Legacy.' }], createdAt: T0 },
+          { _id: 'aiv-2', key: 'friendly-claude', name: 'Friendly (Claude)', state: 'published', version: 1, modelConfigKey: 'legacy-claude-haiku', model: { name: 'claude-haiku', parameters: { temperature: 0.7 } }, messages: [{ role: 'system', content: 'You are a warm, friendly support assistant.' }], tools: [{ key: 'lookup-order' }], createdAt: T0 },
+        ],
+      },
+    ],
+    modelConfigs: [
+      { key: 'legacy-claude-haiku', name: 'Claude Haiku (legacy account)', id: 'mc-1', provider: 'anthropic', global: false, params: { temperature: 0.7, maxTokens: 1024 }, customParams: { region: 'us-east-1' }, tags: ['support'], version: 1, isRestricted: false, usedInCount: 1, _maintainer: { kind: 'member', member: { _id: 'mem-legacy-growth', email: 'growth@acme-legacy.example' } } },
+    ],
+    releasePipelines: [
+      {
+        key: 'legacy-standard-release',
+        name: 'Standard release',
+        description: 'Test first, then production with an approval.',
+        tags: [],
+        createdAt: new Date(T0).toISOString(),
+        _version: 2,
+        isProjectDefault: true,
+        phases: [
+          { id: 'ph-test', name: 'Test', audiences: [{ name: 'Test', environment: { key: 'test', name: 'Test', color: '417505' }, configuration: { releaseStrategy: 'immediate-rollout', requireApproval: false, notifyMemberIds: [], notifyTeamKeys: [] } }] },
+          { id: 'ph-prod', name: 'Production', audiences: [{ name: 'Production', environment: { key: 'production', name: 'Production', color: 'F5A623' }, configuration: { releaseStrategy: 'immediate-rollout', requireApproval: true, notifyMemberIds: ['mem-legacy-ops'], notifyTeamKeys: ['legacy-platform-ops'] } }] },
+        ],
+      },
+    ],
+    releasePolicies: [
+      { _id: 'rp-1', key: 'legacy-guarded-checkout', name: 'Guarded checkout releases', rank: 1, scope: { environmentKeys: ['production'], flagTagKeys: ['checkout'] }, releaseMethod: 'guarded-release', guardedReleaseConfig: { monitoringWindowMilliseconds: 3_600_000, rollbackOnRegression: true, randomizationUnit: 'user', rolloutWeight: 10_000 } },
+    ],
+    views: [
+      { id: 'view-1', key: 'legacy-checkout', name: 'Checkout', description: 'Everything the checkout squad owns.', tags: ['checkout'], version: 3, generateSdkKeys: false, _affectsSdkPayload: false, deleted: false, createdAt: T0, updatedAt: T0 + 86_400_000, maintainer: { kind: 'team', team: { key: 'legacy-growth', name: 'Growth' } }, flagsSummary: { count: 3 }, segmentsSummary: { count: 1 }, metricsSummary: { count: 2 }, aiConfigsSummary: { count: 0 } },
+    ],
+    scheduledChanges: {
+      production: {
+        // A plain flip the console can carry as an LD scheduled change (dated well ahead so the demo offers to schedule it).
+        'legacy-theme': [{ _id: 'sc-theme-on', _version: 1, _creationDate: T0, _maintainerId: 'mem-legacy-growth', executionDate: Date.UTC(2027, 5, 1, 9, 0, 0), instructions: [{ kind: 'turnFlagOn' }], conflicts: {} }],
+        // A fallthrough change the console does not translate: noted on the flag, listed in the inventory.
+        'legacy-kill-switch': [{ _id: 'sc-kill-fallthrough', _version: 1, _creationDate: T0, _maintainerId: 'mem-legacy-ops', executionDate: Date.UTC(2027, 0, 15, 9, 0, 0), instructions: [{ kind: 'updateFallthroughVariationOrRollout', variationId: 'v-false' }], conflicts: {} }],
+      },
+      test: {
+        // An added rule: variation id resolved against the flag's variations.
+        'legacy-pricing-tiers': [{ _id: 'sc-pricing-rule', _version: 1, _creationDate: T0, _maintainerId: 'mem-legacy-growth', executionDate: Date.UTC(2027, 2, 1, 9, 0, 0), instructions: [{ kind: 'addRule', description: 'Plus for design partners', variationId: 'v-plus', clauses: [{ contextKind: 'organization', attribute: 'tier', op: 'in', values: ['design-partner'], negate: false }] }], conflicts: {} }],
+      },
+    },
+    flagTriggers: {
+      production: {
+        'legacy-kill-switch': [{ _id: 'trig-kill', _version: 1, _creationDate: T0, _maintainerId: 'mem-legacy-ops', _maintainer: MEMBERS['mem-legacy-ops']!, enabled: true, _status: 'active', _integrationKey: 'datadog', instructions: [{ kind: 'turnFlagOff' }], _triggerCount: 2, _lastTriggeredAt: T0 + 86_400_000, triggerURL: 'https://app.launchdarkly.com/webhook/triggers/SECRET-PATH-DO-NOT-STORE' }],
+      },
+      test: {},
+    },
+    workflows: {
+      production: {
+        'legacy-checkout-redesign': [
+          {
+            _id: 'wf-checkout',
+            _version: 1,
+            _creationDate: T0,
+            _maintainerId: 'mem-legacy-growth',
+            name: 'Checkout gradual rollout',
+            description: 'Approval, then 10% → 50% → 100% a day apart.',
+            kind: 'custom',
+            templateKey: 'legacy-progressive',
+            stages: [
+              { _id: 'st-1', name: 'Approve', conditions: [{ kind: 'ld-approval', notifyMemberIds: ['mem-legacy-ops'] }], action: { instructions: [{ kind: 'turnFlagOn' }] }, _execution: { status: 'completed' } },
+              { _id: 'st-2', name: '10%', conditions: [{ kind: 'schedule', waitDuration: 1, waitDurationUnit: 'calendarDay' }], action: { instructions: [{ kind: 'updateFallthroughVariationOrRollout', rolloutWeights: { 'v-true': 10_000, 'v-false': 90_000 } }] }, _execution: { status: 'active' } },
+              { _id: 'st-3', name: '100%', conditions: [{ kind: 'schedule', waitDuration: 1, waitDurationUnit: 'calendarDay' }], action: { instructions: [{ kind: 'updateFallthroughVariationOrRollout', variationId: 'v-true' }] }, _execution: { status: 'pending' } },
+            ],
+            _execution: { status: 'active' },
+          },
+        ],
+      },
+      test: {},
+    },
+    flagLinks: {
+      'legacy-checkout-redesign': [{ _id: 'fl-1', _key: 'jira-ACME-412', _integrationKey: 'jira', _deepLink: 'https://acme-legacy.atlassian.net/browse/ACME-412', title: 'ACME-412: New checkout', description: 'Tracking issue.', _createdAt: T0, _member: MEMBERS['mem-legacy-growth']! }],
+    },
+    destinations: [
+      { _id: 'dest-prod-segment', name: 'Segment (production)', kind: 'segment', version: 1, on: true, createdAt: T0, maintainerId: 'mem-legacy-ops', config: { writeKey: 'SEGMENT-WRITE-KEY-DO-NOT-STORE' }, _links: { self: { href: `/api/v2/destinations/${ACME_LEGACY_PROJECT_KEY}/production/dest-prod-segment`, type: 'application/json' } } },
+      // Another project's destination in the same account: the adapter leaves it out.
+      { _id: 'dest-other', name: 'Kinesis (other project)', kind: 'kinesis', version: 1, on: false, createdAt: T0, config: { roleArn: 'arn:aws:iam::123:role/x' }, _links: { self: { href: '/api/v2/destinations/other-project/production/dest-other', type: 'application/json' } } },
+    ],
+    adaptiveTriggers: {
+      production: [{ id: 'at-fraud', name: 'Roll back fraud shield on error spike', resourceKind: 'flag', resourceKey: 'legacy-fraud-shield', enabled: true, triggerSource: { kind: 'observability-alert', alertId: 'alert-9' }, task: { kind: 'flag-off' }, createdAt: T0, updatedAt: T0 }],
+      test: [],
+    },
+    teams: [
+      { key: 'legacy-growth', name: 'Growth', description: 'Experimentation and pricing.', _creationDate: T0, _lastModified: T0, _version: 3, _idpSynced: false, members: { totalCount: 2 }, projects: { totalCount: 1, items: [{ key: ACME_LEGACY_PROJECT_KEY, name: 'Acme Legacy (acquired)' }] }, roles: { totalCount: 0, items: [] } },
+      { key: 'legacy-platform-ops', name: 'Platform ops', description: 'Kill switches and releases.', _creationDate: T0, _lastModified: T0, _version: 1, _idpSynced: true, members: { totalCount: 1 }, projects: { totalCount: 1, items: [{ key: ACME_LEGACY_PROJECT_KEY, name: 'Acme Legacy (acquired)' }] }, roles: { totalCount: 1, items: [{ key: 'legacy-release-manager', name: 'Release manager' }] } },
+    ],
+    customRoles: [
+      { _id: 'role-1', key: 'legacy-release-manager', name: 'Release manager', description: 'May flip production flags of the legacy project, nothing else.', basePermissions: 'reader', resourceCategory: 'project', policy: [{ effect: 'allow', resources: [`proj/${ACME_LEGACY_PROJECT_KEY}:env/production:flag/*`], actions: ['updateOn', 'updateFallthrough'] }], assignedTo: { membersCount: 1, teamsCount: 1 } },
+    ],
+    webhooks: [
+      { _id: 'wh-slack', name: 'Slack #legacy-flags', url: 'https://hooks.example/legacy-flags', on: true, tags: ['legacy'], statements: [{ effect: 'allow', resources: [`proj/${ACME_LEGACY_PROJECT_KEY}:env/production:flag/*`], actions: ['*'] }], secret: 'WEBHOOK-SIGNING-SECRET-DO-NOT-STORE' },
+    ],
+    relayProxyConfigs: [{ _id: 'relay-1', name: 'Legacy relay', policy: [{ effect: 'allow', resources: [`proj/${ACME_LEGACY_PROJECT_KEY}:env/*`], actions: ['*'] }], fullKey: 'rel-FULL-KEY-DO-NOT-STORE', displayKey: 'a1b2', creationDate: T0, lastModified: T0, _creator: MEMBERS['mem-legacy-ops']! }],
+    repositories: [{ name: 'acme-legacy/storefront', sourceLink: 'https://github.com/acme-legacy/storefront', commitUrlTemplate: 'https://github.com/acme-legacy/storefront/commit/${sha}', hunkUrlTemplate: 'https://github.com/acme-legacy/storefront/blob/${sha}/${filePath}#L${lineNumber}', type: 'github', defaultBranch: 'main', enabled: true, version: 12, branches: [{ name: 'main', head: 'abc123', updateSequenceId: 12, syncTime: T0 + 86_400_000 }] }],
+    workflowTemplates: [{ _id: 'tpl-1', _key: 'legacy-progressive', name: 'Progressive rollout', description: 'Approval, then 10% → 100%.', _creationDate: T0, _ownerId: 'mem-legacy-growth', _maintainerId: 'mem-legacy-growth', stages: [{ name: 'Approve', conditions: [{ kind: 'ld-approval' }], action: { instructions: [{ kind: 'turnFlagOn' }] } }, { name: '10%', conditions: [{ kind: 'schedule', waitDuration: 1, waitDurationUnit: 'calendarDay' }], action: { instructions: [] } }, { name: '100%', conditions: [], action: { instructions: [] } }] }],
+    applications: [{ key: 'legacy-ios', name: 'Legacy iOS app', description: 'Reported by the iOS SDK.', kind: 'mobile', autoAdded: true, creationDate: T0, _version: 1, _maintainer: MEMBERS['mem-legacy-ops']!, flags: { totalCount: 2 } }],
   };
 }

@@ -23,6 +23,12 @@ export interface MaintainerContext {
   decisions: DecisionCollector;
   subject: DecisionSubject;
   fidelity: FidelityNote[];
+  /**
+   * An LD source copies one to one and asks nothing (PLAN §20.3): an owner who matches no member
+   * of the target account is noted (the team, when it exists there, is the maintainer) instead of
+   * raising `maintainer_unknown`.
+   */
+  exact?: boolean;
 }
 
 /** An LD team key for a StatSig team name: lower-cased, LD key characters only. */
@@ -85,6 +91,14 @@ function pickMaintainer(ctx: MaintainerContext, entity: { owner?: Owner; team?: 
   const member = ctx.directory ? memberByEmail(ctx.directory).get(email) : undefined;
   if (member) return { maintainerId: member.id };
 
+  if (ctx.exact) {
+    if (teamKey) {
+      ctx.fidelity.push({ fidelity: 'full', message: `Maintainer ${email} is not a member of the target account; the team “${teamKey}” is the maintainer.`, location: loc });
+      return { maintainerTeamKey: teamKey };
+    }
+    ctx.fidelity.push({ fidelity: 'partial', message: `Maintainer ${email} is not a member of the target account: no maintainer. Invite them (People step) and re-sync; they are assigned once they are a member.`, location: loc });
+    return {};
+  }
   const readable = ctx.directory?.membersReadable ?? false;
   const options: DecisionOption[] = [
     { key: 'unassigned', label: 'No maintainer', explanation: 'The flag is created without a maintainer. The owner email stays in the migration.owner custom property, so it can be assigned later.', resultingFidelity: 'partial' },

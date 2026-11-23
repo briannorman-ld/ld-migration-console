@@ -2,8 +2,38 @@ import { HttpError, Transport, UnreachableError, type TransportOptions } from '@
 import type { z } from 'zod';
 import { LD_API_VERSION, LD_INSTANCES, type LdInstance, type LdInstanceId } from './instances.ts';
 import {
+  AdaptiveTriggersSchema,
   AiConfigSchema,
   AiConfigsSchema,
+  ApplicationsSchema,
+  CustomRolesSchema,
+  DestinationsSchema,
+  FlagLinksSchema,
+  FlagTriggersSchema,
+  ModelConfigsSchema,
+  ReleasePipelinesSchema,
+  ReleasePoliciesSchema,
+  RelayProxyConfigsSchema,
+  RepositoriesSchema,
+  ViewsSchema,
+  WebhooksSchema,
+  WorkflowsSchema,
+  WorkflowTemplatesSchema,
+  type LdAdaptiveTrigger,
+  type LdApplication,
+  type LdCustomRole,
+  type LdDestination,
+  type LdFlagLink,
+  type LdFlagTrigger,
+  type LdModelConfig,
+  type LdReleasePipeline,
+  type LdReleasePolicy,
+  type LdRelayProxyConfig,
+  type LdRepository,
+  type LdView,
+  type LdWebhook,
+  type LdWorkflow,
+  type LdWorkflowTemplate,
   ApprovalRequestSchema,
   CallerIdentitySchema,
   MemberSchema,
@@ -348,6 +378,98 @@ export class LdClient {
 
   getExperimentationSettings(projectKey: string, signal?: AbortSignal): Promise<LdExperimentationSettings> {
     return this.get(`/projects/${encodeURIComponent(projectKey)}/experimentation-settings`, ExperimentationSettingsSchema, { signal });
+  }
+
+  // --- Everything else a source project exposes (PLAN §20.6) -------------------------------------
+  // Read-only inventory routes. Field names from reference/launchdarkly/openapi.json; the beta ones
+  // send the beta header. Credentials (webhook secret, Relay key, trigger URL, destination config)
+  // are stripped by the schemas before anything is returned.
+
+  /** Custom model configurations (GET /projects/{p}/ai-configs/model-configs), every page. */
+  listModelConfigs(projectKey: string, signal?: AbortSignal): Promise<LdModelConfig[]> {
+    return allPages((offset) => this.get(`/projects/${encodeURIComponent(projectKey)}/ai-configs/model-configs`, ModelConfigsSchema, { query: { limit: String(MEMBER_PAGE), offset: String(offset) }, signal }), MEMBER_PAGE, { max: 10_000 });
+  }
+
+  /** Release pipelines (beta GET /projects/{p}/release-pipelines), every page. */
+  listReleasePipelines(projectKey: string, signal?: AbortSignal): Promise<LdReleasePipeline[]> {
+    return allPages((offset) => this.get(`/projects/${encodeURIComponent(projectKey)}/release-pipelines`, ReleasePipelinesSchema, { beta: true, query: { limit: String(MEMBER_PAGE), offset: String(offset) }, signal }), MEMBER_PAGE, { max: 10_000 });
+  }
+
+  /** Release policies (beta GET /projects/{p}/release-policies); one page, the route has no paging. */
+  async listReleasePolicies(projectKey: string, signal?: AbortSignal): Promise<LdReleasePolicy[]> {
+    const page = await this.get(`/projects/${encodeURIComponent(projectKey)}/release-policies`, ReleasePoliciesSchema, { beta: true, signal });
+    return page.items ?? [];
+  }
+
+  /** Views (beta GET /projects/{p}/views), every page. */
+  listViews(projectKey: string, signal?: AbortSignal): Promise<LdView[]> {
+    return allPages((offset) => this.get(`/projects/${encodeURIComponent(projectKey)}/views`, ViewsSchema, { beta: true, query: { limit: String(MEMBER_PAGE), offset: String(offset) }, signal }), MEMBER_PAGE, { max: 10_000 });
+  }
+
+  /** Flag triggers of one flag in one environment (GET /flags/{p}/{f}/triggers/{e}); one page. */
+  async listFlagTriggers(projectKey: string, flagKey: string, envKey: string, signal?: AbortSignal): Promise<LdFlagTrigger[]> {
+    const page = await this.get(`/flags/${encodeURIComponent(projectKey)}/${encodeURIComponent(flagKey)}/triggers/${encodeURIComponent(envKey)}`, FlagTriggersSchema, { signal });
+    return page.items ?? [];
+  }
+
+  /** Custom workflows of one flag in one environment (GET /projects/{p}/flags/{f}/environments/{e}/workflows); one page. */
+  async listWorkflows(projectKey: string, flagKey: string, envKey: string, signal?: AbortSignal): Promise<LdWorkflow[]> {
+    const page = await this.get(`/projects/${encodeURIComponent(projectKey)}/flags/${encodeURIComponent(flagKey)}/environments/${encodeURIComponent(envKey)}/workflows`, WorkflowsSchema, { signal });
+    return page.items ?? [];
+  }
+
+  /** Flag links of one flag (beta GET /flag-links/projects/{p}/flags/{f}); one page. */
+  async listFlagLinks(projectKey: string, flagKey: string, signal?: AbortSignal): Promise<LdFlagLink[]> {
+    const page = await this.get(`/flag-links/projects/${encodeURIComponent(projectKey)}/flags/${encodeURIComponent(flagKey)}`, FlagLinksSchema, { beta: true, signal });
+    return page.items ?? [];
+  }
+
+  /** Every Data Export destination of the account (GET /destinations); the adapter keeps the source project's. */
+  async listDestinations(signal?: AbortSignal): Promise<LdDestination[]> {
+    const page = await this.get('/destinations', DestinationsSchema, { signal });
+    return page.items ?? [];
+  }
+
+  /** Adaptive triggers of one environment (GET /projects/{p}/environments/{e}/adaptive-triggers), every page. */
+  listAdaptiveTriggers(projectKey: string, envKey: string, signal?: AbortSignal): Promise<LdAdaptiveTrigger[]> {
+    return allPages(async (offset) => {
+      const page = await this.get(`/projects/${encodeURIComponent(projectKey)}/environments/${encodeURIComponent(envKey)}/adaptive-triggers`, AdaptiveTriggersSchema, { query: { limit: String(MEMBER_PAGE), offset: String(offset) }, signal });
+      return { items: page.items ?? [], totalCount: page.totalCount };
+    }, MEMBER_PAGE, { max: 10_000 });
+  }
+
+  /** Custom roles (GET /roles), every page. */
+  listCustomRoles(signal?: AbortSignal): Promise<LdCustomRole[]> {
+    return allPages((offset) => this.get('/roles', CustomRolesSchema, { query: { limit: String(MEMBER_PAGE), offset: String(offset) }, signal }), MEMBER_PAGE, { max: 10_000 });
+  }
+
+  /** Webhooks (GET /webhooks); one page, secrets stripped. */
+  async listWebhooks(signal?: AbortSignal): Promise<LdWebhook[]> {
+    const page = await this.get('/webhooks', WebhooksSchema, { signal });
+    return page.items ?? [];
+  }
+
+  /** Relay Proxy automatic configurations (GET /account/relay-auto-configs); one page, keys stripped. */
+  async listRelayProxyConfigs(signal?: AbortSignal): Promise<LdRelayProxyConfig[]> {
+    const page = await this.get('/account/relay-auto-configs', RelayProxyConfigsSchema, { signal });
+    return page.items ?? [];
+  }
+
+  /** Code reference repositories (GET /code-refs/repositories); one page. */
+  async listRepositories(signal?: AbortSignal): Promise<LdRepository[]> {
+    const page = await this.get('/code-refs/repositories', RepositoriesSchema, { signal });
+    return page.items ?? [];
+  }
+
+  /** Workflow templates (GET /templates); one page. */
+  async listWorkflowTemplates(signal?: AbortSignal): Promise<LdWorkflowTemplate[]> {
+    const page = await this.get('/templates', WorkflowTemplatesSchema, { signal });
+    return page.items ?? [];
+  }
+
+  /** Applications (beta GET /applications), every page. */
+  listApplications(signal?: AbortSignal): Promise<LdApplication[]> {
+    return allPages((offset) => this.get('/applications', ApplicationsSchema, { beta: true, query: { limit: String(MEMBER_PAGE), offset: String(offset) }, signal }), MEMBER_PAGE, { max: 10_000 });
   }
 
   // --- Writes ---------------------------------------------------------------------------------

@@ -7,6 +7,7 @@ import { Badge, Button, Card, cx, Dot, PageTitle, Spinner, type Tone } from '../
 import { useFlag } from '../lib/flags.ts';
 import type { LdSession } from '../lib/ld.ts';
 import { SOURCE_BADGE, uploadable } from '../lib/kinds.ts';
+import { describeLdScope } from '@sslm/canonical';
 import { timeAgo } from '../lib/time.ts';
 
 /**
@@ -98,6 +99,11 @@ export function ConnectionsView({
                         )}
                         {sn ? <span title={new Date(sn.takenAt).toLocaleString()}>synced {timeAgo(sn.takenAt)}</span> : <span>not synced yet</span>}
                       </div>
+                      {s.kind === 'launchdarkly' && (
+                        <div className="mt-1 truncate text-xs text-fg-muted" title={describeLdScope(s.ld?.resources)}>
+                          Reads: {describeLdScope(s.ld?.resources)}
+                        </div>
+                      )}
                     </div>
                     {uploadable(s) && onReuploadSource && (
                       <label className="shrink-0 cursor-pointer rounded-md px-2 py-1 text-xs text-fg-muted hover:bg-surface-hover hover:text-fg" title={`Replace the ${SOURCE_BADGE[s.kind].label.toLowerCase()} with a newer export`}>

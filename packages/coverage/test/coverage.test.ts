@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { ENTITY_KINDS, MIGRATION_SOURCE_KINDS, type NeutralFlag, type NeutralSegment } from '@sslm/canonical';
-import { AREAS, areaSource, BLOCK_END, BLOCK_START, COVERAGE, coverageFor, guidanceFor, neutralFlagStatus, neutralSegmentStatus, renderCoverageMarkdown, spliceCoverageBlock, summarizeInventory } from '../src/index.ts';
+import { AREAS, areaSource, BLOCK_END, BLOCK_START, COVERAGE, coverageFor, guidanceFor, neutralMetricStatus, neutralExperimentStatus, neutralFlagStatus, neutralSegmentStatus, renderCoverageMarkdown, spliceCoverageBlock, summarizeInventory } from '../src/index.ts';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
@@ -81,6 +81,19 @@ describe('inventory summary with neutral-model sources (PLAN §20, §22)', () =>
     expect(neutralFlagStatus(flag('survey', { purpose: 'survey' }))).toBe('none');
   });
 
+  it('an LD source (exact) copies one to one: the same differences are notes, so nothing is counted as a decision', () => {
+    expect(neutralFlagStatus(flag('exp', { experiments: ['checkout-exp'] }), true)).toBe('migrates');
+    expect(neutralFlagStatus(flag('survey', { purpose: 'migration' }), true)).toBe('none');
+    expect(neutralSegmentStatus(segment('big', { environments: [{ env: 'production', rules: [], included: [], excluded: [], unbounded: { contextKind: 'user' } }] }), true)).toBe('migrates');
+    expect(neutralMetricStatus({ metricKind: 'custom', dataSource: { key: 'snowflake' } }, true)).toBe('migrates');
+    expect(neutralMetricStatus({ metricKind: 'custom', dataSource: { key: 'snowflake' } })).toBe('decisions');
+    expect(neutralExperimentStatus({ environments: [{ status: 'running' }] } as never, true)).toBe('migrates');
+    expect(neutralExperimentStatus({ environments: [{ status: 'running' }] } as never)).toBe('decisions');
+    // The inventory reads the source kind off the snapshot.
+    const ld = { ...empty, source: { sourceKind: 'launchdarkly' as const }, neutral: { flags: [flag('a', { experiments: ['x'] })], segments: [segment('s', { environments: [{ env: 'production', rules: [], included: [], excluded: [], unbounded: { contextKind: 'user' } }] })] } };
+    expect(summarizeInventory([ld]).byStatus).toEqual({ migrates: 2, decisions: 0, guided: 0, planned: 0, none: 0 });
+  });
+
   it('a list segment migrates, an unreadable or frozen membership needs a decision', () => {
     expect(neutralSegmentStatus(segment('static'))).toBe('migrates');
     expect(neutralSegmentStatus(segment('big', { environments: [{ env: 'Acme Hog', rules: [], included: [], excluded: [], unbounded: { contextKind: 'user' } }] }))).toBe('decisions');
@@ -123,14 +136,15 @@ describe('per-item guidance', () => {
 });
 
 describe('mapping explainer (resource pages)', () => {
-  it('has a headline and caveats for every entity kind and both LaunchDarkly-source resources', async () => {
+  it('has a headline and caveats for every entity kind; a LaunchDarkly-source page may have none (one to one), but then says what maps cleanly', async () => {
     const { EXPLAINER_KEYS, explainMapping } = await import('../src/explainer.ts');
     for (const k of ENTITY_KINDS) expect(EXPLAINER_KEYS).toContain(k);
     for (const k of EXPLAINER_KEYS) {
       const x = explainMapping(k);
       expect(x.headline.id).toBeTruthy();
       if (!k.startsWith('ld_') && !k.startsWith('ph_')) expect(x.headline.kind, `${k}: headline row should count that kind`).toBe(k);
-      expect(x.caveats.length, `${k}: a page with no caveats hides something`).toBeGreaterThan(0);
+      if (k.startsWith('ld_')) expect(x.caveats.length + x.clean.length, `${k}: an empty page says nothing`).toBeGreaterThan(0);
+      else expect(x.caveats.length, `${k}: a page with no caveats hides something`).toBeGreaterThan(0);
       const all = [...x.clean, ...x.caveats.flatMap((c) => c.rows)];
       expect(all.map((e) => e.id)).not.toContain(x.headline.id);
       expect(new Set(all.map((e) => e.id)).size).toBe(all.length);

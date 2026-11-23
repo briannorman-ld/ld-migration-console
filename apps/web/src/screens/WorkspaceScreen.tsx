@@ -5,6 +5,7 @@ import {
   ENTITY_KINDS,
   type CanonicalSnapshot,
   type EntityKind,
+  type LdResourceKind,
 } from "@sslm/canonical";
 import type { RunJournalRecord, SourceRecord } from "@sslm/store";
 import { LdMark } from "../components/Brand.tsx";
@@ -63,6 +64,7 @@ const FlagSideBySide = lazyNamed(() => import("./GatesSideBySide.tsx"), "FlagSid
 const SegmentsSideBySide = lazyNamed(() => import("./SegmentsSideBySide.tsx"), "SegmentsSideBySide");
 const AutotunesSideBySide = lazyNamed(() => import("./AutotunesSideBySide.tsx"), "AutotunesSideBySide");
 const LdSourceSideBySide = lazyNamed(() => import("./LdSourceSideBySide.tsx"), "LdSourceSideBySide");
+const LdInventory = lazyNamed(() => import("./LdInventory.tsx"), "LdInventory");
 const LayersReport = lazyNamed(() => import("./LayersReport.tsx"), "LayersReport");
 const DecisionsView = lazyNamed(() => import("./DecisionsView.tsx"), "DecisionsView");
 const RunsView = lazyNamed(() => import("./RunsView.tsx"), "RunsView");
@@ -77,6 +79,8 @@ export type View =
   | { kind: "resource"; resource: EntityKind }
   /** Flags or segments of an LD project attached as a source (PLAN §20). */
   | { kind: "ld-source"; resource: LdSourceResource }
+  /** Every other resource type of an LD source (PLAN §20.6). */
+  | { kind: "ld-inventory"; resource?: LdResourceKind }
   | { kind: "connections" }
   | { kind: "ld" }
   | { kind: "warnings" }
@@ -329,8 +333,9 @@ export function WorkspaceScreen({
           segment: acc.segment + (s.neutral?.segments.length ?? 0),
           metric: acc.metric + (s.neutral?.metrics?.length ?? 0) + (s.neutral?.metricGroups?.length ?? 0),
           experiment: acc.experiment + (s.neutral?.experiments?.length ?? 0) + (s.neutral?.holdouts?.length ?? 0) + (s.neutral?.layers?.length ?? 0),
+          inventory: acc.inventory + (s.neutral?.inventory?.length ?? 0),
         }),
-        { flag: 0, segment: 0, metric: 0, experiment: 0 },
+        { flag: 0, segment: 0, metric: 0, experiment: 0, inventory: 0 },
       ),
     [visibleSnaps],
   );
@@ -338,6 +343,7 @@ export function WorkspaceScreen({
   // sidebar section is named after them when they agree, "Source flags" when they mix.
   const neutralKinds = useMemo(() => new Set(visibleSnaps.filter((s) => s.neutral).map((s) => s.source.sourceKind)), [visibleSnaps]);
   const hasNeutralSource = neutralKinds.size > 0;
+  const hasLdSource = neutralKinds.has("launchdarkly");
   const neutralTitle = [...neutralKinds].every((k) => k === "launchdarkly") ? "LaunchDarkly source" : [...neutralKinds].every((k) => k === "posthog" || k === "posthog_payload") ? "PostHog source" : "Source flags";
   const m = useMigration(workspaceId, visibleSnaps);
   // The walks below map every entity (through the memo in lib/migration.ts) and key on the
@@ -746,8 +752,8 @@ export function WorkspaceScreen({
               <SectionTitle>{neutralTitle}</SectionTitle>
               <ul>
                 {(["flag", "segment", "metric", "experiment"] as const)
-                  // Metrics and experiments are read from LaunchDarkly sources only (PLAN §20.5); the entries show once a source has some.
-                  .filter((k) => k === "flag" || k === "segment" || neutralCounts[k] > 0)
+                  // Metrics and experiments are read from LaunchDarkly sources (PLAN §20.5): always offered for one, and for other sources once a snapshot has some.
+                  .filter((k) => k === "flag" || k === "segment" || hasLdSource || neutralCounts[k] > 0)
                   .map((k) => (
                     <li key={k}>
                       <NavItem
@@ -759,6 +765,17 @@ export function WorkspaceScreen({
                       </NavItem>
                     </li>
                   ))}
+                {hasLdSource && (
+                  <li>
+                    <NavItem
+                      active={view.kind === "ld-inventory"}
+                      onClick={() => setView({ kind: "ld-inventory" })}
+                    >
+                      <span>Other resources</span>
+                      <span className="text-fg-muted tabular-nums">{neutralCounts.inventory}</span>
+                    </NavItem>
+                  </li>
+                )}
               </ul>
             </>
           )}
@@ -890,6 +907,7 @@ export function WorkspaceScreen({
           {visible.length === 0 &&
             (view.kind === "resource" ||
               view.kind === "ld-source" ||
+              view.kind === "ld-inventory" ||
               view.kind === "decisions" ||
               view.kind === "monitoring") && (
               <Callout tone="blue">
@@ -1019,6 +1037,21 @@ export function WorkspaceScreen({
               nav={explorerNav}
               selected={selected}
               setSelected={setSelected}
+            />
+          )}
+          {view.kind === "ld-inventory" && visible.length > 0 && (
+            <LdInventory
+              sources={visible}
+              snapshots={snapshots ?? {}}
+              focus={view.resource}
+              readOnly={viewingPast}
+              syncing={new Set(Object.entries(sync).filter(([, st]) => st.running).map(([id]) => id))}
+              onOpenCoverage={(focus) => setView({ kind: "coverage", focus })}
+              onChangeScope={async (s, resources) => {
+                // PLAN §20.6: the scope is saved on the source, then the project is read again with it.
+                await store.setSourceLdScope(s.id, resources);
+                await runSync({ ...s, ld: { ...s.ld!, resources } });
+              }}
             />
           )}
           {viewingPast &&

@@ -484,12 +484,9 @@ describe('planMigration with a LaunchDarkly source (PLAN §20)', () => {
     };
   }
 
-  it('plans a flag with its segment and prerequisite, writing LaunchDarkly provenance', () => {
-    const blocked = planMigration(legacyRequest({ flags: [fuid('legacy-pricing-tiers')] }));
-    expect(blocked.ready).toBe(false);
-    expect(blocked.decisions.map((d) => d.type).sort()).toEqual(['copy_custom_properties', 'partial_rollout_rebucket', 'partial_rollout_rebucket']);
-
-    const plan = planMigration(acceptAll(legacyRequest({ flags: [fuid('legacy-pricing-tiers')] })));
+  it('plans a flag with its segment and prerequisite, writing LaunchDarkly provenance, with nothing to decide (LD → LD is one to one)', () => {
+    const plan = planMigration(legacyRequest({ flags: [fuid('legacy-pricing-tiers')] }));
+    expect(plan.decisions).toEqual([]);
     expect(plan.errors).toEqual([]);
     expect(plan.ready).toBe(true);
     expect(plan.steps.map((s) => s.id)).toEqual([
@@ -529,12 +526,9 @@ describe('planMigration with a LaunchDarkly source (PLAN §20)', () => {
     expect(step?.op === 'upsert_segment' && step.desired.excluded).toEqual(['u-contractor-9']);
   });
 
-  it('a flag on a big segment is blocked until the big_segment decision is answered, then carries the empty segment', () => {
-    const blocked = planMigration(legacyRequest({ flags: [fuid('legacy-fraud-shield')] }));
-    expect(blocked.ready).toBe(false);
-    expect(blocked.decisions.map((d) => d.type)).toEqual(['big_segment']);
-    const d = blocked.decisions[0]!;
-    const plan = planMigration(legacyRequest({ flags: [fuid('legacy-fraud-shield')], resolutions: new Map([[d.id, { id: d.id, type: d.type, optionKey: 'create_empty', scope: 'resource', fingerprint: d.fingerprint, decidedAt: NOW }]]) }));
+  it('a flag on a big segment carries the segment, created empty for a manual import, without a decision', () => {
+    const plan = planMigration(legacyRequest({ flags: [fuid('legacy-fraud-shield')] }));
+    expect(plan.decisions).toEqual([]);
     expect(plan.ready).toBe(true);
     const seg = plan.steps.find((s) => s.op === 'upsert_segment');
     expect(seg?.op === 'upsert_segment' && seg.desired.unbounded).toEqual({ contextKind: 'user', ids: [], manual: true });
@@ -892,14 +886,10 @@ describe('planMigration with LaunchDarkly-source experimentation (PLAN §20.5)',
     };
   }
 
-  it('plans a running experiment with its flag, metrics, funnel, holdout and layer, in dependency order', () => {
-    const blocked = planMigration(legacyRequest({ experiments: [uid('experiments', 'legacy-cta-copy-test')] }));
-    expect(blocked.ready).toBe(false);
-    // The experiment's own question, plus those of what it pulls in (the flag's rollout, the holdout, the maintainers nobody here matches).
-    expect([...new Set(blocked.decisions.map((d) => d.type))].sort()).toEqual(['experiment_running', 'holdout_running', 'maintainer_unknown', 'partial_rollout_rebucket']);
-    expect(blocked.items.find((i) => i.kind === 'experiment')).toMatchObject({ status: 'blocked' });
-
-    const plan = planMigration(acceptAll(legacyRequest({ experiments: [uid('experiments', 'legacy-cta-copy-test')] })));
+  it('plans a running experiment with its flag, metrics, funnel, holdout and layer, in dependency order, asking nothing', () => {
+    // LD → LD is one to one: the running experiment, the holdout, the flag's rollout and the unmatched maintainers are notes, not questions.
+    const plan = planMigration(legacyRequest({ experiments: [uid('experiments', 'legacy-cta-copy-test')] }));
+    expect(plan.decisions).toEqual([]);
     expect(plan.errors).toEqual([]);
     expect(plan.ready).toBe(true);
     // legacy-checkout-completed is analyzed by organization too, so that kind is enabled as a randomization unit first.

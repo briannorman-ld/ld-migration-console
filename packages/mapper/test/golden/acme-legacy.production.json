@@ -18,10 +18,7 @@
       "notes": [
         "partial: 30% / 70% rollout re-buckets contexts (new flag, new salt). [default rule]"
       ],
-      "decisions": [
-        "choice copy_custom_properties (custom properties) → copy",
-        "acknowledge partial_rollout_rebucket (default rule) → acknowledge"
-      ],
+      "decisions": [],
       "dependencies": [
         "segment:legacy-beta-orgs"
       ],
@@ -107,9 +104,7 @@
         "full: Deprecated in the source project. Consider retiring it instead of migrating.",
         "full: 1 experiment runs on this flag in the source project (legacy-cta-copy-test); select it under Experiments to copy its design as a draft (the targeting here is copied as it is)."
       ],
-      "decisions": [
-        "acknowledge partial_rollout_rebucket (default rule) → acknowledge"
-      ],
+      "decisions": [],
       "dependencies": [],
       "shell": {
         "tags": [
@@ -237,9 +232,7 @@
       "flagKind": "boolean",
       "fidelity": "full",
       "notes": [],
-      "decisions": [
-        "choice unit_type_kind (device) → create:device"
-      ],
+      "decisions": [],
       "dependencies": [
         "context_kind:device"
       ],
@@ -368,9 +361,7 @@
         "full: Rule “Enterprise plan” tracks evaluation events in the source project (experimentation); event tracking is not copied. [rule “Enterprise plan”]",
         "full: Prerequisites need an Enterprise plan; the target's plan is checked on the first write. [prerequisites]"
       ],
-      "decisions": [
-        "acknowledge partial_rollout_rebucket (default rule) → acknowledge"
-      ],
+      "decisions": [],
       "dependencies": [
         "flag:legacy-checkout-redesign"
       ],
@@ -457,55 +448,13 @@
     {
       "flag": "legacy-receipt-emails",
       "flagKind": "boolean",
-      "fidelity": "partial",
+      "skipped": "prerequisite “legacy-retired-gate” is not in the source snapshot (deleted, or not readable with this token)",
+      "fidelity": "skipped",
       "notes": [
-        "partial: Prerequisite “legacy-retired-gate” dropped (missing in the source project). [prerequisite “legacy-retired-gate”]"
+        "skipped: Not migrated: prerequisite “legacy-retired-gate” is not in the source snapshot (deleted, or not readable with this token)."
       ],
-      "decisions": [
-        "blocking missing_reference (prerequisite “legacy-retired-gate”) → no default"
-      ],
-      "dependencies": [],
-      "shell": {
-        "tags": [
-          "migrated-from-launchdarkly",
-          "migration-src-legacy",
-          "email"
-        ],
-        "variations": [
-          {
-            "value": true,
-            "name": "On"
-          },
-          {
-            "value": false,
-            "name": "Off"
-          }
-        ],
-        "customProperties": [
-          "migration.id",
-          "migration.kind",
-          "migration.source",
-          "migration.type",
-          "migration.version"
-        ],
-        "clientSideAvailability": {
-          "usingEnvironmentId": false,
-          "usingMobileKey": false
-        },
-        "temporary": true
-      },
-      "env": {
-        "ldEnv": "production",
-        "statsigEnv": "production",
-        "on": true,
-        "offVariation": 1,
-        "fallthrough": {
-          "variation": 0
-        },
-        "rules": [],
-        "targets": [],
-        "prerequisites": []
-      }
+      "decisions": [],
+      "dependencies": []
     },
     {
       "flag": "legacy-theme",
@@ -627,9 +576,7 @@
     {
       "segment": "legacy-fraud-blocklist",
       "fidelity": "manual",
-      "decisions": [
-        "blocking big_segment (membership)"
-      ],
+      "decisions": [],
       "desired": {
         "key": "legacy-fraud-blocklist",
         "ldEnv": "production",
@@ -654,9 +601,7 @@
     {
       "segment": "legacy-internal-users",
       "fidelity": "partial",
-      "decisions": [
-        "acknowledge partial_rollout_rebucket (rule “Half of acme.example”)"
-      ],
+      "decisions": [],
       "desired": {
         "key": "legacy-internal-users",
         "ldEnv": "production",
@@ -808,12 +753,10 @@
       "metric": "legacy-order-value",
       "fidelity": "partial",
       "notes": [
-        "partial: Owner growth@acme-legacy.example is not a LaunchDarkly member: no maintainer (kept in migration.owner). [flag settings]",
+        "partial: Maintainer growth@acme-legacy.example is not a member of the target account: no maintainer. Invite them (People step) and re-sync; they are assigned once they are a member. [flag settings]",
         "full: Event “order_placed” must be sent to the target project by the SDK (track()) for the metric to have data; events already recorded in the source project do not carry over. [event]"
       ],
-      "decisions": [
-        "choice maintainer_unknown (flag settings) → unassigned"
-      ],
+      "decisions": [],
       "dependencies": [],
       "desired": {
         "key": "legacy-order-value",
@@ -890,12 +833,9 @@
       "fidelity": "manual",
       "notes": [
         "manual: Warehouse-native: set up the data source “legacy-snowflake” in the target project before the run, with the same key. [data source]",
-        "partial: Owner growth@acme-legacy.example is not a LaunchDarkly member: no maintainer (kept in migration.owner). [flag settings]"
+        "partial: Maintainer growth@acme-legacy.example is not a member of the target account: no maintainer. Invite them (People step) and re-sync; they are assigned once they are a member. [flag settings]"
       ],
-      "decisions": [
-        "choice metric_data_source (data source) → same_key",
-        "choice maintainer_unknown (flag settings) → unassigned"
-      ],
+      "decisions": [],
       "dependencies": [],
       "desired": {
         "key": "legacy-wh-revenue",
@@ -928,12 +868,10 @@
       "metricGroup": "legacy-checkout-funnel",
       "fidelity": "partial",
       "notes": [
-        "partial: Owner growth@acme-legacy.example is not a LaunchDarkly member: no maintainer (kept in migration.owner). [flag settings]",
+        "partial: Maintainer growth@acme-legacy.example is not a member of the target account: no maintainer. Invite them (People step) and re-sync; they are assigned once they are a member. [flag settings]",
         "partial: LaunchDarkly requires a metric group maintainer: the member behind the API token is assigned. [metric group settings]"
       ],
-      "decisions": [
-        "choice maintainer_unknown (flag settings) → unassigned"
-      ],
+      "decisions": [],
       "dependencies": [
         "metric:legacy-checkout-completed",
         "metric:legacy-cta-click"
@@ -986,9 +924,7 @@
         "partial: 1 earlier iteration stays in the source project: LaunchDarkly has no way to create an experiment with history. [iterations]",
         "full: Created as a draft on the migrated flag: nothing is served until someone starts it in LaunchDarkly. Treatments map to the same variations by position; the target flag buckets contexts with its own salt."
       ],
-      "decisions": [
-        "choice experiment_concluded (legacy-checkout-redesign-test) → draft"
-      ],
+      "decisions": [],
       "dependencies": [
         "flag:legacy-checkout-redesign",
         "metric:legacy-checkout-completed",
@@ -1072,13 +1008,10 @@
         "partial: Running in the source project: the target gets the same design as a not-started draft; assignments and results so far stay in the source.",
         "full: Joins the copied holdout “legacy-q3-holdout” (created first in the same environment). [holdout]",
         "partial: Reserves 40% of layer “legacy-checkout-layer” in the target; the layer buckets contexts afresh, so the reserved population differs from the source's. [layer]",
-        "partial: Owner growth@acme-legacy.example is not a LaunchDarkly member: no maintainer (kept in migration.owner). [flag settings]",
+        "partial: Maintainer growth@acme-legacy.example is not a member of the target account: no maintainer. Invite them (People step) and re-sync; they are assigned once they are a member. [flag settings]",
         "full: Created as a draft on the migrated flag: nothing is served until someone starts it in LaunchDarkly. Treatments map to the same variations by position; the target flag buckets contexts with its own salt."
       ],
-      "decisions": [
-        "choice experiment_running (legacy-cta-copy-test) → prestage",
-        "choice maintainer_unknown (flag settings) → unassigned"
-      ],
+      "decisions": [],
       "dependencies": [
         "flag:legacy-cta-copy",
         "holdout:legacy-q3-holdout",
@@ -1182,13 +1115,10 @@
       "fidelity": "partial",
       "notes": [
         "partial: Running in the source project: the target gets the same design as a not-started draft; assignments and results so far stay in the source.",
-        "partial: Owner growth@acme-legacy.example is not a LaunchDarkly member: no maintainer (kept in migration.owner). [flag settings]",
+        "partial: Maintainer growth@acme-legacy.example is not a member of the target account: no maintainer. Invite them (People step) and re-sync; they are assigned once they are a member. [flag settings]",
         "full: Created as a draft on the migrated flag: nothing is served until someone starts it in LaunchDarkly. Treatments map to the same variations by position; the target flag buckets contexts with its own salt."
       ],
-      "decisions": [
-        "choice experiment_running (legacy-pricing-bandit) → prestage",
-        "choice maintainer_unknown (flag settings) → unassigned"
-      ],
+      "decisions": [],
       "dependencies": [
         "flag:legacy-pricing-tiers",
         "metric:legacy-pricing-pageview",
@@ -1286,13 +1216,10 @@
       "fidelity": "partial",
       "notes": [
         "partial: Running in the source project: created unstarted in the target, bucketing a new population.",
-        "partial: Owner growth@acme-legacy.example is not a LaunchDarkly member: no maintainer (kept in migration.owner). [flag settings]",
+        "partial: Maintainer growth@acme-legacy.example is not a member of the target account: no maintainer. Invite them (People step) and re-sync; they are assigned once they are a member. [flag settings]",
         "full: 1 experiment (legacy-cta-copy-test) joins it when copied. [experiments]"
       ],
-      "decisions": [
-        "acknowledge holdout_running (legacy-q3-holdout) → acknowledge",
-        "choice maintainer_unknown (flag settings) → unassigned"
-      ],
+      "decisions": [],
       "dependencies": [
         "metric:legacy-checkout-completed",
         "metric:legacy-order-value"

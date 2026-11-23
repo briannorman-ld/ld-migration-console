@@ -1,10 +1,11 @@
 import { useState } from 'react';
-import { ENTITY_KINDS, type EntityKind, type SourceDescriptor, type SourceKind } from '@sslm/canonical';
+import { ENTITY_KINDS, LD_DEFAULT_RESOURCES, LD_RESOURCE_KINDS, type EntityKind, type LdResourceKind, type SourceDescriptor, type SourceKind } from '@sslm/canonical';
 import { MAX_SPEC_BYTES, POSTHOG_REGIONS, PostHogClient, type PostHogRegionId } from '@sslm/adapters';
 import { LD_INSTANCES, LdClient, type LdInstanceId, type LdProject } from '@sslm/ld-client';
 import { STATSIG_CONSOLE_BASE_URL, StatsigConsoleClient } from '@sslm/statsig-client';
 import { appendLog, describeProgress, describeTransportEvent, SyncActivity, type SyncLogEntry } from '../components/SyncActivity.tsx';
 import { SearchSelect } from '../components/SearchSelect.tsx';
+import { LdScopePicker } from '../components/LdScopePicker.tsx';
 import { Button, Callout, Card, Input, Label, Select, Spinner } from '../components/ui.tsx';
 import { KIND_LABEL } from '../lib/kinds.ts';
 import { secrets } from '../lib/secrets.ts';
@@ -60,6 +61,8 @@ export function AddSource({ workspaceId, onDone }: { workspaceId: string; onDone
   const [phListError, setPhListError] = useState<string>();
   const [file, setFile] = useState<File>();
   const [kinds, setKinds] = useState<Set<EntityKind>>(() => new Set(ENTITY_KINDS));
+  // LaunchDarkly sources read every resource type (PLAN §20.6); the default leaves out the per-flag-per-environment reads.
+  const [ldKinds, setLdKinds] = useState<Set<LdResourceKind>>(() => new Set(LD_DEFAULT_RESOURCES));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [log, setLog] = useState<SyncLogEntry[]>([]);
@@ -162,7 +165,8 @@ export function AddSource({ workspaceId, onDone }: { workspaceId: string; onDone
           ...base,
           alias: deriveAlias(project.key, taken, 'ld'),
           label: `${project.name} (LaunchDarkly)`,
-          ld: { instance: ldInstance, projectKey: project.key },
+          // The scope is stored only when it differs from the default, like the StatSig crawl scope.
+          ld: { instance: ldInstance, projectKey: project.key, ...(ldKinds.size === LD_DEFAULT_RESOURCES.length && LD_DEFAULT_RESOURCES.every((k) => ldKinds.has(k)) ? {} : { resources: LD_RESOURCE_KINDS.filter((k) => ldKinds.has(k)) }) },
         };
         await store.addSource(workspaceId, source);
         secrets.set('ld_source', source.id, key.trim(), workspaceId);
@@ -215,7 +219,7 @@ export function AddSource({ workspaceId, onDone }: { workspaceId: string; onDone
   };
 
   const canAdd =
-    kind === 'console_api' ? !!key.trim() && kinds.size > 0 : kind === 'launchdarkly' ? !!key.trim() && !!ldProject : kind === 'posthog' ? !!key.trim() && !!phProject : !!file;
+    kind === 'console_api' ? !!key.trim() && kinds.size > 0 : kind === 'launchdarkly' ? !!key.trim() && !!ldProject && ldKinds.size > 0 : kind === 'posthog' ? !!key.trim() && !!phProject : !!file;
 
   return (
     <div className="max-w-2xl space-y-4">
@@ -439,10 +443,12 @@ export function AddSource({ workspaceId, onDone }: { workspaceId: string; onDone
               {ldListError && <p className="mt-1.5 text-xs text-error">{ldListError}</p>}
               <p className="mt-1.5 text-xs text-fg-muted">
                 A Reader token is enough. It may belong to a <b>different LaunchDarkly account or instance</b> than the target project; it is kept encrypted on this device and sent
-                only to that instance’s API. The source project is only ever read: flags, their per-environment targeting, segments and context kinds. Experiments and metrics
-                are not read (they end in the source and launch new in the target).
+                only to that instance’s API. The source project is only ever read. Flags, segments, metrics, experiments, holdouts and layers migrate (experiments as not-started
+                drafts: nothing moves mid-flight); every other kind is listed for the cut-over checklist. You can change the scope later from the source’s <i>Other resources</i>{' '}
+                view.
               </p>
             </div>
+            <LdScopePicker value={ldKinds} onChange={setLdKinds} idPrefix="src-ld-scope" />
           </>
         ) : kind === 'console_api' ? (
           <>

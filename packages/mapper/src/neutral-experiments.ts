@@ -3,7 +3,8 @@
  * experiments, holdouts and layers of an LD project attached as a source. Pure and deterministic
  * like the rest of the mapper. The vocabulary is the target's, so a copy is near-identity; what
  * cannot cross projects (results, exposures, iteration history, a running state, account ids)
- * becomes a decision or a note, never a silent drop (CLAUDE.md).
+ * becomes a note, never a silent drop (CLAUDE.md); an LD source is copied one to one and asks
+ * nothing (`exact`, PLAN §20.3), other neutral sources get the same points as decisions.
  *
  * Nothing is moved mid-flight (PLAN §11): a copied experiment is created with one iteration as a
  * draft and is started by a person in LaunchDarkly; a copied holdout is created, not started.
@@ -14,7 +15,7 @@ import { SKIP } from './decisions.ts';
 import { report, type MapArgs, type MapOutcome } from './gate.ts';
 import { neutralFlagByKey } from './lookup.ts';
 import { chooseMaintainer, type MaintainerAssignment } from './maintainer.ts';
-import { makeCtx, resolveSourceKind, sourceLabel, type Ctx } from './neutral.ts';
+import { exact, makeCtx, resolveSourceKind, sourceLabel, type Ctx } from './neutral.ts';
 import type { CapabilityState, DesiredExperiment, DesiredHoldout, DesiredLayer, DesiredMetric, DesiredMetricGroup, ExperimentRuleRef, MapperCapabilities } from './types.ts';
 
 export interface NeutralMetricMapResult extends MapOutcome {
@@ -75,7 +76,7 @@ function tagsFor(ctx: Ctx, tags: string[]): string[] {
 function requireCapability(ctx: Ctx, cap: keyof MapperCapabilities, what: string): void {
   const state = ctx.args.capabilities[cap] as CapabilityState | undefined;
   if (state !== 'unavailable' && state !== 'not_permitted') return;
-  const choice = ctx.decisions.choose(
+  const choice = exact(ctx) ? 'skip' : ctx.decisions.choose(
     {
       type: 'experimentation_unavailable',
       severity: 'blocking',
@@ -99,7 +100,7 @@ function maintainerFor(ctx: Ctx, m: NeutralMaintainer | undefined, location: str
     if (m.id) ctx.fidelity.push({ fidelity: 'full', message: `Maintainer not carried: ${sourceLabel(ctx)} gave only a member ID, which belongs to the source account.`, location });
     return {};
   }
-  const assignment = chooseMaintainer({ profile: ctx.args.profile, ...(ctx.args.directory ? { directory: ctx.args.directory } : {}), decisions: ctx.decisions, subject: ctx.subject, fidelity: ctx.fidelity }, { ...(m.email ? { owner: { id: m.id, email: m.email } } : {}), team: m.teamKey ?? null });
+  const assignment = chooseMaintainer({ profile: ctx.args.profile, ...(ctx.args.directory ? { directory: ctx.args.directory } : {}), decisions: ctx.decisions, subject: ctx.subject, fidelity: ctx.fidelity, exact: exact(ctx) }, { ...(m.email ? { owner: { id: m.id, email: m.email } } : {}), team: m.teamKey ?? null });
   if (assignment.maintainerId) ctx.decisions.note('maintainer', assignment.maintainerId);
   return assignment;
 }
@@ -135,7 +136,8 @@ export function mapNeutralMetric(args: MapArgs<NeutralMetric>): NeutralMetricMap
     const analysisUnits = unique(m.analysisUnits.map((u) => randomizationUnit(ctx, u)));
     let dataSource: DesiredMetric['dataSource'];
     if (m.dataSource) {
-      const choice = ctx.decisions.choose(
+      // An LD source references the same key; the data source itself (warehouse credentials) has to exist in the target.
+      const choice = exact(ctx) ? 'same_key' : ctx.decisions.choose(
         {
           type: 'metric_data_source',
           severity: 'choice',
@@ -244,6 +246,7 @@ function ruleRef(ctx: Ctx, f: NeutralIterationFlag, sourceEnv: string): Experime
   const i = rules.findIndex((r) => r.id === f.ruleId);
   const rule = rules[i];
   if (rule && !rule.disabled) return { kind: 'rule', index: rules.slice(0, i).filter((r) => !r.disabled).length, description: rule.description, sourceRuleId: f.ruleId };
+  if (exact(ctx)) throw new SkipItem(`its rule on flag “${f.flagKey}” is ${rule ? 'disabled' : 'gone'} in ${sourceLabel(ctx)} (${f.ruleDescription ? `“${f.ruleDescription}”` : f.ruleId}); copy it once the flag's targeting has the rule again`);
   const choice = ctx.decisions.choose(
     {
       type: 'experiment_rule_missing',
@@ -272,6 +275,7 @@ function dependOnFlags(ctx: Ctx, it: NeutralIteration, sourceEnv: string): void 
   for (const key of keys) {
     const flag = flags.get(key);
     if (!flag || flag.archived || !flag.environments.some((e) => e.env === sourceEnv)) {
+      if (exact(ctx)) throw new SkipItem(`flag “${key}” is ${!flag ? 'not in the source snapshot' : flag.archived ? `archived in ${sourceLabel(ctx)} (nothing archived is migrated)` : `absent from “${sourceEnv}”`}`);
       const choice = ctx.decisions.choose(
         {
           type: 'missing_reference',
@@ -296,7 +300,8 @@ function dependOnFlags(ctx: Ctx, it: NeutralIteration, sourceEnv: string): void 
 
 function lifecycle(ctx: Ctx, x: NeutralExperimentEnv, it: NeutralIteration): DesiredExperiment['sourceStatus'] {
   if (it.status === 'running') {
-    const choice = ctx.decisions.choose(
+    // An LD source copies the design as a draft (nothing moves mid-flight, PLAN §11); the source keeps running.
+    const choice = exact(ctx) ? 'prestage' : ctx.decisions.choose(
       {
         type: 'experiment_running',
         severity: 'choice',
@@ -319,7 +324,7 @@ function lifecycle(ctx: Ctx, x: NeutralExperimentEnv, it: NeutralIteration): Des
     return 'running';
   }
   if (it.status === 'stopped') {
-    const choice = ctx.decisions.choose(
+    const choice = exact(ctx) ? 'draft' : ctx.decisions.choose(
       {
         type: 'experiment_concluded',
         severity: 'choice',
@@ -449,7 +454,7 @@ export function mapNeutralHoldout(args: MapArgs<NeutralHoldout>): NeutralHoldout
   try {
     requireCapability(ctx, 'holdouts', 'holdouts');
     if (h.status === 'running' || h.status === 'enabled') {
-      const choice = ctx.decisions.choose(
+      const choice = exact(ctx) ? 'acknowledge' : ctx.decisions.choose(
         {
           type: 'holdout_running',
           severity: 'acknowledge',
