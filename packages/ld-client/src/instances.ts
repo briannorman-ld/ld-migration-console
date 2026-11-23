@@ -1,5 +1,5 @@
 /** LaunchDarkly instances the app can connect to (PLAN §3.1, §3.5). */
-export type LdInstanceId = 'us' | 'eu' | 'federal';
+export type LdInstanceId = 'us' | 'eu' | 'federal' | 'staging';
 
 export interface LdInstance {
   id: LdInstanceId;
@@ -33,6 +33,20 @@ export const LD_INSTANCES: Record<LdInstanceId, LdInstance> = {
       body: [
         'This tool is not FedRAMP-authorized. Confirm that connecting it to your Federal instance is permitted.',
         'Warehouse-native experimentation is unavailable on Federal.',
+      ],
+    },
+  },
+  // LaunchDarkly's own staging instance (added 2026-11-23): lets LaunchDarkly staff read a staging
+  // project as a source, or write into one. Same REST API and paths as production.
+  staging: {
+    id: 'staging',
+    label: 'LaunchDarkly staging (internal)',
+    origin: 'https://ld-stg.launchdarkly.com',
+    disclaimer: {
+      title: 'Staging instance',
+      body: [
+        "This is LaunchDarkly's internal staging instance, for LaunchDarkly staff only.",
+        'Projects there hold test data and may be reset at any time; a token for app.launchdarkly.com does not work here.',
       ],
     },
   },

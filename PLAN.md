@@ -86,7 +86,7 @@ User's browser
   ├─ Tokens: held in memory only (optionally a passphrase-encrypted copy in IndexedDB)
   └─ fetch() directly to:
        statsigapi.net (Console API, read-only)   api.statsigcdn.com (config spec, optional)
-       app.launchdarkly.com | app.eu.launchdarkly.com | app.launchdarkly.us (LD REST API)
+       app.launchdarkly.com | app.eu.launchdarkly.com | app.launchdarkly.us | ld-stg.launchdarkly.com (LD REST API)
   The user's own LD project also stores durable migration provenance (§3.3)
 ```
 
@@ -164,6 +164,7 @@ Two places, and nowhere else.
 - An acknowledgement modal and banner are still shown:
   - **EU:** "the static app is served from a US CDN; your configuration data is processed only in your browser and sent only to StatSig and your LD instance."
   - **Federal:** "this tool is not FedRAMP-authorized; confirm connecting it is permitted. Warehouse-native experimentation is unavailable on Federal."
+- **Staging (added 2026-11-23):** LaunchDarkly's own `ld-stg.launchdarkly.com`, for LaunchDarkly staff: "internal staging instance, for LaunchDarkly staff only; projects hold test data and may be reset; a production token does not work here." Same REST API; it is a fourth entry in `LD_INSTANCES`, usable as a source or as the target.
 - The acknowledgement is stored in the workspace.
 
 ### 3.6 What we give up without a server, and when one would be worth it
@@ -879,7 +880,7 @@ The canonical model (§4, `packages/canonical/src/model.ts`) is StatSig's: `COND
 
 ### 20.2 The LaunchDarkly source adapter (`packages/adapters/src/launchdarkly`)
 
-- **Input:** instance (US, EU, Federal), project key, an API token with read access to that project. The token lives in memory like the other tokens (`secrets` kind `ld_source`, keyed by source id). The source may be a different account or instance than the target; the CSP already allows the three LD API hosts.
+- **Input:** instance (US, EU, Federal, or LaunchDarkly's staging), project key, an API token with read access to that project. The token lives in memory like the other tokens (`secrets` kind `ld_source`, keyed by source id). The source may be a different account or instance than the target; the CSP allows every host in `LD_INSTANCES`.
 - **Reads (never writes):** `GET /projects/{p}`, `/projects/{p}/environments`, `/projects/{p}/context-kinds`, `/flags/{p}` (summaries, for the count) then `GET /flags/{p}/{key}` per flag (every environment's targeting in one response), and `GET /segments/{p}/{env}` per environment. Lenient Zod schemas from `packages/ld-client` (field names from `reference/launchdarkly/openapi.json`); mismatches become snapshot warnings.
 - **Experimentation reads (§20.5, added 2026-11-19):** `GET /metrics/{p}`, `/projects/{p}/metric-groups` (beta), `/projects/{p}/layers`, and per environment `…/experiments?expand=treatments,draftIteration,previousIterations,secondaryMetrics,analysisConfig&lifecycleState=active,archived` and `…/holdouts` plus one `GET …/holdouts/{key}` each (the listing carries no design). `GET /members/{id}` for every maintainer id those name, so the target can match them by email. Each of these is optional: a 403 (no Experimentation on the plan, or a read-only token without the scope) is recorded as a `fetch_skipped` warning and the collection stays empty; the flags still migrate.
 - **Not readable, and reported as such:** big-segment membership (LD only answers per-key membership), flag links, approval settings, metric data sources (they hold warehouse credentials), experiment results and exposures, member and team identities of another account beyond the email.

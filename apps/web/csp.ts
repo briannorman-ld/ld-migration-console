@@ -11,6 +11,7 @@ export const CONNECT_HOSTS = [
   'https://app.launchdarkly.com',
   'https://app.eu.launchdarkly.com',
   'https://app.launchdarkly.us',
+  'https://ld-stg.launchdarkly.com', // LaunchDarkly's own staging instance (ld-client instances.ts)
   // PostHog Cloud (PLAN §22.1): a PostHog project read as a source. Both regions answer CORS
   // themselves, so no relay. Self-hosted PostHog goes through the payload upload instead.
   'https://us.posthog.com',

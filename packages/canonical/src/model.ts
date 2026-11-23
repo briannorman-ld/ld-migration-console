@@ -40,7 +40,7 @@ export interface SourceDescriptor {
    * instance origin for the demo's in-browser mock only (same rule as `posthog.baseUrl`). The
    * token is never stored here.
    */
-  ld?: { instance: 'us' | 'eu' | 'federal'; projectKey: string; baseUrl?: string };
+  ld?: { instance: 'us' | 'eu' | 'federal' | 'staging'; projectKey: string; baseUrl?: string };
   /**
    * PostHog sources (PLAN §22.2): which Cloud region and project (`team_id`) to read. `baseUrl`
    * overrides the region origin for the demo's in-browser mock only: the app honours it on a demo

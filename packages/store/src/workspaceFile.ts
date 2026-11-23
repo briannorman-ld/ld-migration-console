@@ -342,7 +342,7 @@ function assertStamp(value: unknown, where: string, now: Date): void {
  */
 type LdInstanceId = NonNullable<WorkspaceRecord["ld"]>["instance"];
 type PostHogRegionId = NonNullable<SourceRecord["posthog"]>["region"];
-const LD_INSTANCE_IDS = ["us", "eu", "federal"] as const satisfies readonly LdInstanceId[];
+const LD_INSTANCE_IDS = ["us", "eu", "federal", "staging"] as const satisfies readonly LdInstanceId[];
 const POSTHOG_REGION_IDS = ["us", "eu"] as const satisfies readonly PostHogRegionId[];
 type _EveryLdInstanceListed = Exclude<LdInstanceId, (typeof LD_INSTANCE_IDS)[number]> extends never ? true : never;
 type _EveryPostHogRegionListed = Exclude<PostHogRegionId, (typeof POSTHOG_REGION_IDS)[number]> extends never ? true : never;

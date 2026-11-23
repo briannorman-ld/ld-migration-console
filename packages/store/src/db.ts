@@ -26,10 +26,10 @@ export interface WorkspaceRecord {
   updatedAt: string;
   isDemo: boolean;
   /** The single LD target (PLAN §3.6): instance + project. No token. */
-  ld?: { instance: "us" | "eu" | "federal"; projectKey?: string };
-  /** EU / Federal acknowledgement (PLAN §3.5), stored in the workspace. */
+  ld?: { instance: "us" | "eu" | "federal" | "staging"; projectKey?: string };
+  /** EU / Federal / staging acknowledgement (PLAN §3.5), stored in the workspace. */
   instanceAcknowledgement?: {
-    instance: "eu" | "federal";
+    instance: "eu" | "federal" | "staging";
     acknowledgedAt: string;
   };
   /** Snapshots kept per source after each sync (plus any a run used). Undefined = DEFAULT_SNAPSHOT_RETENTION. */

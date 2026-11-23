@@ -223,7 +223,7 @@ export function LdPanel({ workspaceId, workspace }: { workspaceId: string; works
             </Button>
             <Button
               onClick={async () => {
-                await store.updateWorkspace(workspaceId, { instanceAcknowledgement: { instance: pendingAck as 'eu' | 'federal', acknowledgedAt: new Date().toISOString() } });
+                await store.updateWorkspace(workspaceId, { instanceAcknowledgement: { instance: pendingAck as Exclude<LdInstanceId, 'us'>, acknowledgedAt: new Date().toISOString() } });
                 setPendingAck(undefined);
               }}
             >
