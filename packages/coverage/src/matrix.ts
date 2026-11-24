@@ -646,6 +646,17 @@ export const COVERAGE: CoverageEntry[] = [
     docs: { statsig: `${SS}/layers`, ld: `${LD}/home/experimentation/layers` },
   },
   {
+    id: 'experiments.kit',
+    area: 'experiments',
+    statsig: 'Experiments selected for migration (the Layers page’s migration kit)',
+    ld: 'Preview of everything the selected experiments need in LaunchDarkly: layer and its defaults flag, one JSON flag per experiment, the targeting gate (and the gates and segments it names) as segments, metrics, holdouts',
+    status: 'guided',
+    how: 'Tick experiments on the Layers page: the kit lists each dependency once across the selection with its state (to create, already in LD, running in StatSig, not in the snapshot, archived) and exports as Markdown for a runbook. Nothing is planned or written from it yet; experiments are not a selectable migration item.',
+    detail: 'Config-spec sources carry no experiment metrics, so the kit says so instead of inventing them. A running experiment’s own flag is held back while its dependencies are listed as migratable now.',
+    edgeCases: ['11.1', '11.5', '11.6', '11.7'],
+    docs: { statsig: `${SS}/experiments-plus`, ld: `${LD}/home/experimentation` },
+  },
+  {
     id: 'experiments.holdouts',
     area: 'experiments',
     statsig: 'Holdouts (global or attached)',

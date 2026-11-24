@@ -118,9 +118,16 @@ export interface LayerReportOptions {
   scope?: EntityKind[];
 }
 
+/** Why a gate an experiment names would be missing from this snapshot: the scope left gates out, the gate list was not read, or StatSig does not have it. */
+export function gateReadReason(snapshot: Pick<CanonicalSnapshot, 'warnings'>, scope?: EntityKind[]): MissingGateReason {
+  if (scope && !scope.includes('gate')) return 'out_of_scope';
+  if ((snapshot.warnings ?? []).some((w) => w.code === 'fetch_skipped' && w.path === '/gates')) return 'not_read';
+  return 'not_found';
+}
+
 export function layerReport(snapshot: CanonicalSnapshot, opts: LayerReportOptions = {}): LayerReport {
   const gates = new Map(snapshot.gates.map((g) => [g.id, g]));
-  const gateReads: MissingGateReason = opts.scope && !opts.scope.includes('gate') ? 'out_of_scope' : (snapshot.warnings ?? []).some((w) => w.code === 'fetch_skipped' && w.path === '/gates') ? 'not_read' : 'not_found';
+  const gateReads = gateReadReason(snapshot, opts.scope);
   const layers = snapshot.layers ?? [];
   const layerIds = new Set(layers.map((l) => l.id));
   const byLayer = new Map<string, LayerReportExperiment[]>();

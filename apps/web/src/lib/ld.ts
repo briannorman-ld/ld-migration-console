@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react';
 import type { CapabilityUpdate } from '@sslm/executor';
-import { migratedFromTag } from '@sslm/canonical';
+import { migratedFromTag, type LdPresence } from '@sslm/canonical';
 import { LdAuthError, LdClient, LdWriteError, probeCapabilities, type CapabilityMatrix, type LdAiConfig, type LdCallerIdentity, type LdExperiment, type LdFlag, type LdFlagSummary, type LdHoldout, type LdInstanceId, type LdLayer, type LdMember, type LdMetric, type LdMetricGroup, type LdProject, type LdSegment, type LdTeam } from '@sslm/ld-client';
 import { mergeByKey, needsNothing, type LdListNeeds } from './reconcile.ts';
 import { secrets } from './secrets.ts';
@@ -600,4 +600,19 @@ export function disconnectLd(workspaceId: string): void {
   sessions.delete(workspaceId);
   views.delete(workspaceId);
   listeners.forEach((l) => l());
+}
+
+/**
+ * The keys the LD project already has, per kind, for the Layers page's experiment migration kit
+ * (`experimentMigrationKit` in @sslm/canonical): archived flags do not count, and segments and
+ * holdouts are unioned across the environments that were read.
+ */
+export function ldPresence(s: Pick<LdSession, 'flags' | 'segments' | 'metrics' | 'layers' | 'holdouts'>): LdPresence {
+  return {
+    flags: (s.flags?.items ?? []).filter((f) => !f.archived).map((f) => f.key),
+    segments: Object.values(s.segments ?? {}).flatMap((list) => list.map((x) => x.key)),
+    metrics: (s.metrics ?? []).map((m) => m.key),
+    layers: (s.layers ?? []).map((l) => l.key),
+    holdouts: Object.values(s.holdouts ?? {}).flatMap((list) => list.flatMap((h) => (h.key ? [h.key] : []))),
+  };
 }

@@ -30,7 +30,7 @@ import {
 } from "../components/ui.tsx";
 import { describeScope, KIND_LABEL, refreshable, secretKindOf, SOURCE_BADGE, uploadable } from "../lib/kinds.ts";
 import { timeAgo } from "../lib/time.ts";
-import { ldConnecting, useLdSession } from "../lib/ld.ts";
+import { ldConnecting, ldPresence, useLdSession } from "../lib/ld.ts";
 import { secrets } from "../lib/secrets.ts";
 import {
   collectDecisions,
@@ -174,6 +174,8 @@ export function WorkspaceScreen({
   const [backupDismissedFor, setBackupDismissedFor] = useState<string>();
   const [exporting, setExporting] = useState(false);
   const ld = useLdSession(workspaceId);
+  // What the LD project already has, for the Layers page's experiment kit (recomputed only when the listing changes).
+  const ldKeys = useMemo(() => ldPresence(ld), [ld.flags, ld.segments, ld.metrics, ld.layers, ld.holdouts]);
   const autoSynced = useRef(new Set<string>());
   const [migrate, setMigrate] = useState<{
     selection: MigrationSelection;
@@ -1006,6 +1008,7 @@ export function WorkspaceScreen({
               <LayersReport
                 sources={visible}
                 snapshots={snapshots ?? {}}
+                ld={ldKeys}
                 onOpenCoverage={(focus) => setView({ kind: "coverage", focus })}
                 onIncludeGates={async (s) => {
                   // Gates reference segments, so a scope that gains gates gains segments too (model.ts).

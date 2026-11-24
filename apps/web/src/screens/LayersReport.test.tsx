@@ -83,7 +83,7 @@ describe('LayersReport', () => {
     expect(within(cta).getByText('Wait until it ends')).toBeTruthy();
     expect(within(cta).getByText('cta_text')).toBeTruthy();
     expect(within(cta).getByText('Complete purchase now')).toBeTruthy();
-    expect(within(within(exps).getByText('trust_badges').closest('tr')!).getByText('none', { selector: 'td:nth-child(5) *' })).toBeTruthy();
+    expect(within(within(exps).getByText('trust_badges').closest('tr')!).getByText('none', { selector: 'td:nth-child(6) *' })).toBeTruthy();
     const ctaRow = within(params).getByText('cta_text').closest('tr')!;
     const use = within(ctaRow).getByText('1 of 2 experiments (1 keeps the default)');
     expect(use.getAttribute('title')).toBe('cta_copy');
@@ -143,6 +143,68 @@ describe('LayersReport', () => {
     expect(csv.split('\n')[0]).toMatch(/^layer,layer_fate/);
     expect(csv).toContain('pricing_layer,Skip · nothing left to reserve');
     expect(csv).toContain(',search_v3,active,');
+  });
+
+  it('builds the migration kit from ticked experiments, deduplicated across a layer, and exports it', () => {
+    render(<LayersReport sources={[source]} snapshots={{ 's-web': snapshot() }} ld={{ flags: ['checkout_layer_defaults'], segments: ['us_only'] }} />);
+    expect(screen.queryByLabelText('Migration kit')).toBeNull();
+    fireEvent.click(screen.getByLabelText('Expand checkout_layer'));
+    fireEvent.click(screen.getByLabelText('Select cta_copy for the migration kit'));
+    const kit = screen.getByLabelText('Migration kit');
+    expect(within(kit).getByText('1 selected')).toBeTruthy();
+    fireEvent.click(screen.getByLabelText('Select trust_badges for the migration kit'));
+    expect(within(kit).getByText('2 selected')).toBeTruthy();
+    expect(screen.getByText('2 selected', { selector: 'span.ring-1' })).toBeTruthy();
+    // One layer and one defaults flag for both experiments; the defaults flag is already in LD.
+    const layers = within(kit).getByLabelText('Layers');
+    expect(within(layers).getAllByRole('listitem')).toHaveLength(1);
+    expect(within(layers).getByText('checkout_layer')).toBeTruthy();
+    expect(within(layers).getByText('to create')).toBeTruthy();
+    expect(within(layers).getByText('needed by cta_copy, trust_badges')).toBeTruthy();
+    const flags = within(kit).getByLabelText('Flags');
+    const defaults = within(flags).getByText('checkout_layer_defaults').closest('li')!;
+    expect(within(defaults).getByText('already in LD')).toBeTruthy();
+    const running = within(flags).getByText('cta_copy').closest('li')!;
+    expect(within(running).getByText('running in StatSig').getAttribute('title')).toContain('Everything else in the kit can go first');
+    expect(within(within(flags).getByText('trust_badges').closest('li')!).getByText('to create')).toBeTruthy();
+    // The test experiments name no metrics: the panel says so instead of inventing them.
+    expect(within(kit).getByText(/cta_copy names no metrics/)).toBeTruthy();
+    expect(within(kit).getByRole('heading', { name: 'Segments (0)' })).toBeTruthy();
+
+    fireEvent.click(within(kit).getByText('Export kit'));
+    expect(download).toHaveBeenCalledTimes(1);
+    const [name, md, type] = download.mock.calls[0] as [string, string, string];
+    expect(name).toBe('experiment-kit.md');
+    expect(type).toBe('text/markdown');
+    expect(md).toContain('# Experiment migration kit — web');
+    expect(md).toContain('2 experiments selected · 4 items to have in LaunchDarkly first (2 to create, 1 already in LD, 1 running in StatSig).');
+    expect(md).toContain('| `checkout_layer` | `checkout_layer` | LaunchDarkly layer (unit type userID) | to create | `cta_copy`, `trust_badges` |');
+    expect(md).toContain('| `checkout_layer_defaults` | `checkout_layer_defaults` | JSON flag · 2 layer defaults | already in LD |');
+
+    fireEvent.click(within(kit).getByText('Clear'));
+    expect(screen.queryByLabelText('Migration kit')).toBeNull();
+  });
+
+  it('offers no checkbox for archived or abandoned experiments, and the layer checkbox ticks every selectable one', () => {
+    render(<LayersReport sources={[source]} snapshots={{ 's-web': snapshot() }} />);
+    fireEvent.click(screen.getByLabelText(/archived \(2\)/));
+    fireEvent.click(screen.getByLabelText('Expand experiments not in a layer'));
+    expect(screen.queryByLabelText('Select old_banner for the migration kit')).toBeNull();
+    expect(screen.getByLabelText(/old_banner cannot be selected: Archived in StatSig/)).toBeTruthy();
+    fireEvent.click(screen.getByLabelText('Expand pricing_layer'));
+    expect(screen.queryByLabelText('Select bundle for the migration kit')).toBeNull();
+    expect(screen.getByLabelText(/bundle cannot be selected: Abandoned/)).toBeTruthy();
+    // anchor (concluded) can be selected: its flag serves the shipped group.
+    fireEvent.click(screen.getByLabelText('Select all experiments in pricing_layer for the migration kit'));
+    const kit = screen.getByLabelText('Migration kit');
+    expect(within(kit).getByText('1 selected')).toBeTruthy();
+    const flags = within(kit).getByLabelText('Flags');
+    expect(within(flags).getByText('JSON flag · 2 variations · serves the shipped group')).toBeTruthy();
+    expect(within(kit).getByRole('heading', { name: 'Layers (0)' })).toBeTruthy();
+    // A running experiment with a gate: the gate is listed as a segment to create.
+    fireEvent.click(screen.getByLabelText('Select search_v3 for the migration kit'));
+    expect(within(within(kit).getByLabelText('Segments')).getByText('us_only')).toBeTruthy();
+    expect(within(kit).getByText('2 selected')).toBeTruthy();
   });
 
   it('exports the report as Markdown, one section per layer', () => {

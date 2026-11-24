@@ -7,5 +7,6 @@ export * from './diff.ts';
 export * from './provenance.ts';
 export * from './neutral.ts';
 export * from './layers.ts';
+export * from './experimentKit.ts';
 export * from './own.ts';
 export * from './ldResources.ts';

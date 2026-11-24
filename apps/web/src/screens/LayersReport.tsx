@@ -4,6 +4,8 @@ import {
   describeOverride,
   describeParameterUse,
   EXPERIMENT_FATE_LABEL,
+  experimentKitMarkdown,
+  experimentMigrationKit,
   LAYER_FATE_LABEL,
   layerReport,
   layerReportCsv,
@@ -13,6 +15,7 @@ import {
   sortLayerRows,
   type CanonicalSnapshot,
   type ExperimentFate,
+  type LdPresence,
   type LayerFate,
   type LayerReport,
   type LayerReportExperiment,
@@ -21,6 +24,7 @@ import {
 } from '@sslm/canonical';
 import type { SourceRecord } from '@sslm/store';
 import { MappingExplainer } from '../components/MappingExplainer.tsx';
+import { ExperimentKitPanel } from './ExperimentKitPanel.tsx';
 import { PagerBar, usePager } from '../components/Pager.tsx';
 import { Value } from '../components/Targeting.tsx';
 import { Badge, Button, Callout, cx, Input, Select, type Tone } from '../components/ui.tsx';
@@ -33,6 +37,10 @@ import { download } from '../lib/migration.ts';
  * the migration can leave behind (implicit, or nothing left to keep exclusive) and the archived
  * items are counted apart. All verdicts come from `layerReport` in @sslm/canonical, which the
  * CSV export shares, so the file says what the screen says.
+ *
+ * Ticking experiments builds the migration kit (`experimentMigrationKit`): everything else that
+ * must exist in LD for them, deduplicated across the selection, shown in a panel and exported as
+ * Markdown. A read-only preview; experiments are not planned or written from here yet.
  */
 
 type Filter = 'all' | 'skippable' | 'create' | 'running' | 'implicit';
@@ -51,9 +59,12 @@ export function LayersReport({
   snapshots,
   onOpenCoverage,
   onIncludeGates,
+  ld,
 }: {
   sources: SourceRecord[];
   snapshots: Record<string, CanonicalSnapshot | undefined>;
+  /** Keys the workspace's LD project already has, so the kit can mark items as already in LD. */
+  ld?: LdPresence;
   /** Opens the "What migrates" page at a coverage row. */
   onOpenCoverage?: (focus: string) => void;
   /** Adds gates to a source's crawl scope and syncs it, for experiments whose targeting gate was never read. */
@@ -66,6 +77,8 @@ export function LayersReport({
   const [showArchived, setShowArchived] = useState(false);
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [allOpen, setAllOpen] = useState(false);
+  /** Ticked experiments, as `<sourceId>/<experimentId>`: the kit is computed per source. */
+  const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const reports = useMemo(() => sources.flatMap((s) => (snapshots[s.id] ? [{ s, report: layerReport(snapshots[s.id]!, s.resources ? { scope: s.resources } : {}) }] : [])), [sources, snapshots]);
   const totals = useMemo(() => {
@@ -106,6 +119,31 @@ export function LayersReport({
     return [...bySource.values()].flatMap((group) => sortLayerRows(group.map((r) => r.row), sort, dir).map((row) => group.find((r) => r.row === row)!));
   }, [layerRows, q, filter, showArchived, sort, dir]);
   const pager = usePager(visible);
+
+  const kits = useMemo(() => {
+    if (selected.size === 0) return [];
+    return reports.flatMap(({ s }) => {
+      const ids = [...selected].filter((k) => k.startsWith(`${s.id}/`)).map((k) => k.slice(s.id.length + 1));
+      if (ids.length === 0) return [];
+      return [{ s, kit: experimentMigrationKit(snapshots[s.id]!, ids, { ...(s.resources ? { scope: s.resources } : {}), ...(ld ? { ld } : {}) }) }];
+    });
+  }, [reports, selected, snapshots, ld]);
+  const toggleSelected = (sourceId: string, experimentId: string, on: boolean) =>
+    setSelected((prev) => {
+      const n = new Set(prev);
+      const k = `${sourceId}/${experimentId}`;
+      if (on) n.add(k);
+      else n.delete(k);
+      return n;
+    });
+  const clearSelected = (sourceId?: string) => setSelected((prev) => (sourceId ? new Set([...prev].filter((k) => !k.startsWith(`${sourceId}/`))) : new Set()));
+  const exportKit = () => {
+    const docs = kits.map(({ s, kit }) => {
+      const snap = snapshots[s.id]!;
+      return experimentKitMarkdown(kit, { source: s.alias, ...(snap.projectName ? { project: snap.projectName } : {}), takenAt: snap.takenAt });
+    });
+    download('experiment-kit.md', docs.join('\n---\n\n'), 'text/markdown');
+  };
 
   const unlayeredVisible = useMemo(() => {
     if (filter === 'skippable' || filter === 'create' || filter === 'implicit') return [];
@@ -199,6 +237,13 @@ export function LayersReport({
         </Button>
       </div>
       <MappingExplainer resource="layer" onOpenCoverage={onOpenCoverage} className="mb-3" />
+      {kits.length > 0 && (
+        <div className="mb-3 space-y-2">
+          {kits.map(({ s, kit }) => (
+            <ExperimentKitPanel key={s.id} kit={kit} source={sources.length > 1 ? s.alias : undefined} onClear={() => clearSelected(s.id)} onExport={exportKit} onOpenCoverage={onOpenCoverage} />
+          ))}
+        </div>
+      )}
       {reports
         .filter(({ report }) => report.missingGates)
         .map(({ s, report }) => {
@@ -238,10 +283,10 @@ export function LayersReport({
       {/* One panel per layer: with the experiment tables open, rows in a shared card ran into each other. */}
       <ul className="space-y-2 text-sm">
         {pager.slice.map((r) => (
-          <LayerRow key={keyOf(r)} r={r} multi={sources.length > 1} open={isOpen(r)} onToggle={() => toggleRow(r)} showArchived={showArchived} onOpenCoverage={onOpenCoverage} />
+          <LayerRow key={keyOf(r)} r={r} multi={sources.length > 1} open={isOpen(r)} onToggle={() => toggleRow(r)} showArchived={showArchived} onOpenCoverage={onOpenCoverage} selected={selected} onSelect={toggleSelected} />
         ))}
         {unlayeredVisible.map((r) => (
-          <LayerRow key={keyOf(r)} r={r} multi={sources.length > 1} open={isOpen(r)} onToggle={() => toggleRow(r)} showArchived={showArchived} onOpenCoverage={onOpenCoverage} />
+          <LayerRow key={keyOf(r)} r={r} multi={sources.length > 1} open={isOpen(r)} onToggle={() => toggleRow(r)} showArchived={showArchived} onOpenCoverage={onOpenCoverage} selected={selected} onSelect={toggleSelected} />
         ))}
         {visible.length === 0 && unlayeredVisible.length === 0 && (
           <li className="rounded-lg border border-line bg-surface px-3 py-3 text-xs text-fg-muted shadow-card">
@@ -266,10 +311,15 @@ function SortHeader({ k, label, sort, dir, onSort, defaultDir = 'desc', align, t
   );
 }
 
-function LayerRow({ r, multi, open, onToggle, showArchived, onOpenCoverage }: { r: Row; multi: boolean; open: boolean; onToggle: () => void; showArchived: boolean; onOpenCoverage?: (focus: string) => void }) {
+function LayerRow({ r, multi, open, onToggle, showArchived, onOpenCoverage, selected, onSelect }: { r: Row; multi: boolean; open: boolean; onToggle: () => void; showArchived: boolean; onOpenCoverage?: (focus: string) => void; selected: Set<string>; onSelect: (sourceId: string, experimentId: string, on: boolean) => void }) {
   const { row, s } = r;
   const l = row.layer;
   const experiments = showArchived ? row.experiments : row.experiments.filter((x) => !x.archived);
+  const selectable = experiments.filter((x) => !x.archived && x.fate !== 'never');
+  const selectedHere = selectable.filter((x) => selected.has(`${s.id}/${x.experiment.id}`)).length;
+  const toggleAllHere = (on: boolean) => {
+    for (const x of selectable) onSelect(s.id, x.experiment.id, on);
+  };
   const counts = [`${row.counts.live} live`, row.counts.ended ? `${row.counts.ended} ended` : '', row.counts.archived ? `${row.counts.archived} archived` : ''].filter(Boolean).join(' · ');
   return (
     <li className={cx('rounded-lg border bg-surface shadow-card', open ? 'border-line-strong' : 'border-line', l?.archived && 'opacity-70')}>
@@ -288,6 +338,7 @@ function LayerRow({ r, multi, open, onToggle, showArchived, onOpenCoverage }: { 
         <div className="text-right text-xs tabular-nums text-fg-muted">{l ? l.parameters.length : '–'}</div>
         <div className="flex flex-wrap items-center gap-2">
           {row.fate ? <Badge tone={LAYER_TONE[row.fate]} title={row.reason}>{LAYER_FATE_LABEL[row.fate]}</Badge> : <span className="text-xs text-fg-muted">per experiment</span>}
+          {selectedHere > 0 && <Badge tone="blue" title="Experiments in this layer ticked for the migration kit">{selectedHere} selected</Badge>}
           {row.unknownExperimentIds.length > 0 && (
             <Badge tone="amber" title={`Listed on the layer but not in this snapshot: ${row.unknownExperimentIds.join(', ')}`}>
               {row.unknownExperimentIds.length} not synced
@@ -351,6 +402,20 @@ function LayerRow({ r, multi, open, onToggle, showArchived, onOpenCoverage }: { 
               <table className="w-full text-left" aria-label={`Experiments in ${l?.id ?? 'no layer'}`}>
                 <thead className="text-fg-muted">
                   <tr>
+                    <th className="py-0.5 pr-2 font-normal">
+                      {selectable.length > 0 && (
+                        <input
+                          type="checkbox"
+                          aria-label={`Select all experiments in ${l?.id ?? 'no layer'} for the migration kit`}
+                          title="Tick every experiment here that can migrate; the kit lists what they need in LaunchDarkly"
+                          checked={selectedHere === selectable.length}
+                          ref={(el) => {
+                            if (el) el.indeterminate = selectedHere > 0 && selectedHere < selectable.length;
+                          }}
+                          onChange={(e) => toggleAllHere(e.target.checked)}
+                        />
+                      )}
+                    </th>
                     <th className="py-0.5 pr-3 font-normal">Experiment</th>
                     <th className="py-0.5 pr-3 font-normal">Status</th>
                     <th className="py-0.5 pr-3 text-right font-normal">Alloc</th>
@@ -362,7 +427,7 @@ function LayerRow({ r, multi, open, onToggle, showArchived, onOpenCoverage }: { 
                 </thead>
                 <tbody>
                   {experiments.map((x) => (
-                    <ExperimentRow key={x.experiment.uid} x={x} inLayer={!!l} />
+                    <ExperimentRow key={x.experiment.uid} x={x} inLayer={!!l} selected={selected.has(`${s.id}/${x.experiment.id}`)} onSelect={(on) => onSelect(s.id, x.experiment.id, on)} />
                   ))}
                 </tbody>
               </table>
@@ -374,12 +439,22 @@ function LayerRow({ r, multi, open, onToggle, showArchived, onOpenCoverage }: { 
   );
 }
 
-function ExperimentRow({ x, inLayer }: { x: LayerReportExperiment; inLayer: boolean }) {
+function ExperimentRow({ x, inLayer, selected, onSelect }: { x: LayerReportExperiment; inLayer: boolean; selected: boolean; onSelect: (on: boolean) => void }) {
   const e = x.experiment;
   const t = x.targeting;
   const overrides = x.parameters ?? [];
+  const selectable = !x.archived && x.fate !== 'never';
   return (
-    <tr className={cx('border-t border-line-soft align-top', x.archived && 'text-fg-muted')}>
+    <tr className={cx('border-t border-line-soft align-top', x.archived && 'text-fg-muted', selected && 'bg-info-bg/40')}>
+      <td className="py-1 pr-2">
+        {selectable ? (
+          <input type="checkbox" aria-label={`Select ${e.id} for the migration kit`} title="Add to the migration kit: what must exist in LaunchDarkly for this experiment" checked={selected} onChange={(ev) => onSelect(ev.target.checked)} />
+        ) : (
+          <span className="text-fg-muted" title={x.reason} aria-label={`${e.id} cannot be selected: ${x.reason}`}>
+            –
+          </span>
+        )}
+      </td>
       <td className="py-1 pr-3">
         <span className="font-mono">{e.id}</span>
         {x.missingLayerId && (
